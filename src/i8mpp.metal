@@ -150,11 +150,12 @@ kernel void i8_cnb(device uchar *scratch [[buffer(0)]],
 {
     constexpr int TW = 32, TH = 4, T = TW * TH;
     threadgroup int4 c32v[T * 32 / 4];
-    threadgroup uint a1v[T * 16 / 4];
-    threadgroup uint a2v[T * 32 / 4];
+    // The expansion consumes a1 before producing a2. cnb_core barriers
+    // separate their lifetimes; share the larger, 32-channel activation tile.
+    threadgroup uint activations[T * 32 / 4];
     threadgroup int32_t *c32 = (threadgroup int32_t *)c32v;
-    threadgroup int8_t *a1 = (threadgroup int8_t *)a1v;
-    threadgroup int8_t *a2 = (threadgroup int8_t *)a2v;
+    threadgroup int8_t *a1 = (threadgroup int8_t *)activations;
+    threadgroup int8_t *a2 = a1;
 
     cnb_core<TW, TH>(scratch, wgt, p, c32, a1, a2, tgid, tid);
     device const half *b2 = (device const half *)(wgt + p.b2);
@@ -193,13 +194,14 @@ kernel void i8_cnb_ct2d_tap4(device uchar *scratch [[buffer(0)]],
 {
     constexpr int TW = 32, TH = 4, T = TW * TH;
     threadgroup int4 c32v[T * 32 / 4];
-    threadgroup uint a1v[T * 16 / 4];
-    threadgroup uint a2v[T * 32 / 4];
-    threadgroup uint a3v[T * 16 / 4];
+    // The expansion consumes a1 before producing a2; the contraction
+    // consumes a2 before pass 13 produces a3. cnb_core barriers separate
+    // those lifetimes, so all activations share the largest (32-channel) tile.
+    threadgroup uint activations[T * 32 / 4];
     threadgroup int32_t *c32 = (threadgroup int32_t *)c32v;
-    threadgroup int8_t *a1 = (threadgroup int8_t *)a1v;
-    threadgroup int8_t *a2 = (threadgroup int8_t *)a2v;
-    threadgroup int8_t *a3 = (threadgroup int8_t *)a3v;
+    threadgroup int8_t *a1 = (threadgroup int8_t *)activations;
+    threadgroup int8_t *a2 = a1;
+    threadgroup int8_t *a3 = a1;
 
     cnb_core<TW, TH>(scratch, wgt, p, c32, a1, a2, tgid, tid);
     device const half *b2 = (device const half *)(wgt + p.b2);
@@ -496,10 +498,10 @@ static inline void ct2d_t(device uchar *scratch, device uchar *wgt, constant I8P
         threadgroup int4 c32v[(TW * TH) * 2 * NF / 4];                                               \
         threadgroup uint a1v[(TW * TH) * NF / 4];                                                    \
         threadgroup uint a2v[(TW * TH) * 2 * NF / 4];                                                \
-        threadgroup uint a3v[(TW * TH) * NF / 4];                                                    \
+        /* CT2D reuses a2 after fnb_core's final barrier. */                                         \
         ct2d_t<NF, NG, NOUT, TW, TH>(scratch, wgt, p, (threadgroup int32_t *)c32v,                   \
                                      (threadgroup int8_t *)a1v, (threadgroup int8_t *)a2v,           \
-                                     (threadgroup int8_t *)a3v, tgid, tid);                          \
+                                     (threadgroup int8_t *)a2v, tgid, tid);                          \
     }
 
 // Different entry points also reject stale manifests with the old [tap][K][N] weights.

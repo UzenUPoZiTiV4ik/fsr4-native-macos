@@ -1,0 +1,1447 @@
+{
+  "schema": "fsr411_ultraperformance_manifest_v1",
+  "provider_version": "4.1.1.2740",
+  "dll_sha256": "d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46",
+  "initializer": {
+    "model": "ultraperformance_int8",
+    "path": "initializers-ultraperformance.bin",
+    "dll_offset": 12732928,
+    "size": 131072,
+    "sha256": "3c42fc6eabfa9b5b1e489df0e9b2f58e3f9fa22048c584f6839bb27d32a0640e",
+    "binding": "t18"
+  },
+  "generator": "tools/fsr411/recover_ultraperformance.py",
+  "validation": "Pinned artifacts, table order, shapes and enumerated scalar IR deltas verified; no independent GPU output parity test.",
+  "dispatch": "Identical graph, tensor layout, stage order and dispatch geometry to common. Use z=1 dispatch for all neural passes.",
+  "neural_passes": [
+    {
+      "tier": 1080,
+      "pass": 1,
+      "source": "ultraperformance/reimpl411/reimpl_pass1.hlsl",
+      "common_source": "shaders/reimpl411/reimpl_pass1.hlsl",
+      "common_dxil_sha256": "38eaa0412dcd046b533c6740dfa8a4265336c2079edfc73f4fbf712d5da7dcd0",
+      "ultraperformance_dxil_sha256": "940ce08ee8a3e4e895d921c74329918c8292a1d1f5c13e4e69a2dbb59dbdc039",
+      "baked_weight_words": 832,
+      "baked_weight_sha256": "36593a332ec7a6e975ad9d6e55e504f3c3ad59dc8922acceeab70649750bfefd",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = fmul fast float %v, 6.400000e+01",
+          "to": "%v = fmul fast float %v, 3.200000e+01",
+          "count": 16
+        }
+      ]
+    },
+    {
+      "tier": 1080,
+      "pass": 2,
+      "source": "ultraperformance/reimpl411/reimpl_pass2.hlsl",
+      "common_source": "shaders/reimpl411/reimpl_pass2.hlsl",
+      "common_dxil_sha256": "38bcb476648879395f1829a8b1adfc9474832bffc5f699b30132dc6351e8a05c",
+      "ultraperformance_dxil_sha256": "809c56c933fa0d8943967a0d02ca9e32b010d5d99a6b6da4ee9b3591355bb291",
+      "baked_weight_words": 832,
+      "baked_weight_sha256": "3712bd7a36130fe5a8a579d5b7e1a7e302845628cfa7d4d82991324b798c4a48",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = fmul fast float %v, 0x3F30000000000000",
+          "to": "%v = fmul fast float %v, 0x3F40000000000000",
+          "count": 16
+        },
+        {
+          "from": "%v = fmul fast float %v, 1.562500e-02",
+          "to": "%v = fmul fast float %v, 3.125000e-02",
+          "count": 16
+        }
+      ]
+    },
+    {
+      "tier": 1080,
+      "pass": 3,
+      "source": "ultraperformance/reimpl411/reimpl_pass3.hlsl",
+      "common_source": "shaders/reimpl411/reimpl_pass3.hlsl",
+      "common_dxil_sha256": "f790b1105a76694849f031061e5eab7388ad492b1a34e71223a0f37554ab7ecd",
+      "ultraperformance_dxil_sha256": "00ae4e9c7b9534587685e905d36fb4e6c33279328ef41ac703876201b5058761",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = fmul fast float %v, 7.812500e-03",
+          "to": "%v = fmul fast float %v, %v",
+          "count": 16
+        },
+        {
+          "from": "%v = fmul fast float %v, 7.812500e-03",
+          "to": "%v = fmul fast float %v, 3.906250e-03",
+          "count": 16
+        }
+      ]
+    },
+    {
+      "tier": 1080,
+      "pass": 4,
+      "source": "ultraperformance/reimpl411/reimpl_pass4.hlsl",
+      "common_source": "shaders/reimpl411/reimpl_pass4.hlsl",
+      "common_dxil_sha256": "dafa1819bbf9c84d806948c1979836314ed2f109052d1e4142ed8c32269fa934",
+      "ultraperformance_dxil_sha256": "3072fe12b743dd5b063e6f492a1608dfda26e1f296804a5bfe21de9ad7c399fc",
+      "baked_weight_words": 1600,
+      "baked_weight_sha256": "9caba9894dfb66ba5b31cf608768dd7cb2e12e099736f3e5b5346761a1fa0892",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = add i32 %v, 127",
+          "to": "%v = add i32 %v, 63",
+          "count": 64
+        },
+        {
+          "from": "%v = add i32 %v, 63",
+          "to": "%v = add i32 %v, 127",
+          "count": 16
+        },
+        {
+          "from": "%v = ashr i32 %v, 7",
+          "to": "%v = ashr i32 %v, 8",
+          "count": 16
+        },
+        {
+          "from": "%v = ashr i32 %v, 8",
+          "to": "%v = ashr i32 %v, 7",
+          "count": 64
+        },
+        {
+          "from": "%v = fmul fast float %v, 1.562500e-02",
+          "to": "%v = fmul fast float %v, %v",
+          "count": 16
+        },
+        {
+          "from": "%v = fmul fast float %v, 1.562500e-02",
+          "to": "%v = fmul fast float %v, 3.125000e-02",
+          "count": 16
+        },
+        {
+          "from": "%v = lshr i32 %v, 7",
+          "to": "%v = lshr i32 %v, 8",
+          "count": 16
+        },
+        {
+          "from": "%v = lshr i32 %v, 8",
+          "to": "%v = lshr i32 %v, 7",
+          "count": 64
+        }
+      ]
+    },
+    {
+      "tier": 1080,
+      "pass": 5,
+      "source": "ultraperformance/reimpl411/reimpl_pass5.hlsl",
+      "common_source": "shaders/reimpl411/reimpl_pass5.hlsl",
+      "common_dxil_sha256": "d071612eb9273498d7f5a0b7f5599fa1ad8e83699a81b7795a14d783722e8350",
+      "ultraperformance_dxil_sha256": "4fa638956bb6955315d423921b09c789836d0216a10a1457fc57a54538466cf9",
+      "baked_weight_words": 1600,
+      "baked_weight_sha256": "6ee23902dad1ae7d33f23c1d3f0a593cecb75cf7d3bb588073c917fbab818f5c",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 1080,
+      "pass": 6,
+      "source": "shaders/reimpl411/reimpl_pass6.hlsl",
+      "common_source": "shaders/reimpl411/reimpl_pass6.hlsl",
+      "common_dxil_sha256": "3b6977a46a8cc9b21bc2b4ba735f350f820f59623b169e9ce8d53904deb0a7c5",
+      "ultraperformance_dxil_sha256": "3b6977a46a8cc9b21bc2b4ba735f350f820f59623b169e9ce8d53904deb0a7c5",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 1080,
+      "pass": 7,
+      "source": "shaders/reimpl411/reimpl_pass7.hlsl",
+      "common_source": "shaders/reimpl411/reimpl_pass7.hlsl",
+      "common_dxil_sha256": "9c56e2d6eeb7457dd88b8f1e19dfb46725cd1e65f32602ed93ef0515a138cd5b",
+      "ultraperformance_dxil_sha256": "9c56e2d6eeb7457dd88b8f1e19dfb46725cd1e65f32602ed93ef0515a138cd5b",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 1080,
+      "pass": 8,
+      "source": "shaders/reimpl411/reimpl_pass8.hlsl",
+      "common_source": "shaders/reimpl411/reimpl_pass8.hlsl",
+      "common_dxil_sha256": "fccef09cae8bbee870b99d06e9de58d5e6d51f9a031ec65235c4d27680f91639",
+      "ultraperformance_dxil_sha256": "fccef09cae8bbee870b99d06e9de58d5e6d51f9a031ec65235c4d27680f91639",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 1080,
+      "pass": 9,
+      "source": "shaders/reimpl411/reimpl_pass9.hlsl",
+      "common_source": "shaders/reimpl411/reimpl_pass9.hlsl",
+      "common_dxil_sha256": "8c27af0446e1a7be0779f3be4fb49984d5692680c90f72a5bedc7a2d96f1ed17",
+      "ultraperformance_dxil_sha256": "8c27af0446e1a7be0779f3be4fb49984d5692680c90f72a5bedc7a2d96f1ed17",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 1080,
+      "pass": 10,
+      "source": "ultraperformance/reimpl411/reimpl_pass10.hlsl",
+      "common_source": "shaders/reimpl411/reimpl_pass10.hlsl",
+      "common_dxil_sha256": "2af2aa7db70216c7bad4c959d804bcd49c9b4c71c198dd97a972b31901732788",
+      "ultraperformance_dxil_sha256": "6ecfe2063560b37967d1efe6583005ce89260583cdf9db884d2c0f153c40ae32",
+      "baked_weight_words": 1600,
+      "baked_weight_sha256": "6a0ece546ddc3e5022635833c5168d946d045841ba0e89a5fe6f06d1cc129fd5",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = add i32 %v, 127",
+          "to": "%v = add i32 %v, 63",
+          "count": 16
+        },
+        {
+          "from": "%v = add i32 %v, 63",
+          "to": "%v = add i32 %v, 127",
+          "count": 64
+        },
+        {
+          "from": "%v = ashr i32 %v, 7",
+          "to": "%v = ashr i32 %v, 8",
+          "count": 64
+        },
+        {
+          "from": "%v = ashr i32 %v, 8",
+          "to": "%v = ashr i32 %v, 7",
+          "count": 16
+        },
+        {
+          "from": "%v = fmul fast float %v, 0x3F40000000000000",
+          "to": "%v = fmul fast float %v, 0x3F30000000000000",
+          "count": 32
+        },
+        {
+          "from": "%v = lshr i32 %v, 7",
+          "to": "%v = lshr i32 %v, 8",
+          "count": 64
+        },
+        {
+          "from": "%v = lshr i32 %v, 8",
+          "to": "%v = lshr i32 %v, 7",
+          "count": 16
+        }
+      ]
+    },
+    {
+      "tier": 1080,
+      "pass": 11,
+      "source": "ultraperformance/reimpl411/reimpl_pass11.hlsl",
+      "common_source": "shaders/reimpl411/reimpl_pass11.hlsl",
+      "common_dxil_sha256": "0c3304e8e2d28893e33d6bb7d98216c05ac62925d53df6fdad2b6eebf50d681a",
+      "ultraperformance_dxil_sha256": "15d7a940e219888169111bebd44e2d59cda3ea5c22bd96e52874e6b894d117d6",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = fmul fast float %v, 0x3F30000000000000",
+          "to": "%v = fmul fast float %v, 0x3F20000000000000",
+          "count": 4
+        },
+        {
+          "from": "%v = fmul fast float %v, 8.000000e+00",
+          "to": "%v = fmul fast float %v, 1.600000e+01",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "tier": 1080,
+      "pass": 12,
+      "source": "ultraperformance/reimpl411/reimpl_pass12.hlsl",
+      "common_source": "shaders/reimpl411/reimpl_pass12.hlsl",
+      "common_dxil_sha256": "e40a640c3e127f495ab88105084f866aaaf7aee90c204d5645bd01306318da76",
+      "ultraperformance_dxil_sha256": "11a73fbbc3529d7303950f0fb918889bd671fde36fed264ceadbf1774f4b2e54",
+      "baked_weight_words": 832,
+      "baked_weight_sha256": "bb9e9c6233daf840f99829e7dae06ad42705c380ebf1afccce2c4ac2122de3c3",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = add i32 %v, 127",
+          "to": "%v = add i32 %v, 63",
+          "count": 32
+        },
+        {
+          "from": "%v = add i32 %v, 63",
+          "to": "%v = add i32 %v, 127",
+          "count": 16
+        },
+        {
+          "from": "%v = ashr i32 %v, 7",
+          "to": "%v = ashr i32 %v, 8",
+          "count": 16
+        },
+        {
+          "from": "%v = ashr i32 %v, 8",
+          "to": "%v = ashr i32 %v, 7",
+          "count": 32
+        },
+        {
+          "from": "%v = lshr i32 %v, 7",
+          "to": "%v = lshr i32 %v, 8",
+          "count": 16
+        },
+        {
+          "from": "%v = lshr i32 %v, 8",
+          "to": "%v = lshr i32 %v, 7",
+          "count": 32
+        }
+      ]
+    },
+    {
+      "tier": 2160,
+      "pass": 1,
+      "source": "ultraperformance/reimpl2160/reimpl_pass1_2160.hlsl",
+      "common_source": "shaders/reimpl2160/reimpl_pass1_2160.hlsl",
+      "common_dxil_sha256": "bb2d3f210a38e89d9de77fece4abb49d9ed30e0c7549b04e3747571926ae58bd",
+      "ultraperformance_dxil_sha256": "15734dbc20b8ee4e906c3f2f0ce41413d2ef7a0ec599efdeaf517009994a8162",
+      "baked_weight_words": 832,
+      "baked_weight_sha256": "36593a332ec7a6e975ad9d6e55e504f3c3ad59dc8922acceeab70649750bfefd",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = fmul fast float %v, 6.400000e+01",
+          "to": "%v = fmul fast float %v, 3.200000e+01",
+          "count": 16
+        }
+      ]
+    },
+    {
+      "tier": 2160,
+      "pass": 2,
+      "source": "ultraperformance/reimpl2160/reimpl_pass2_2160.hlsl",
+      "common_source": "shaders/reimpl2160/reimpl_pass2_2160.hlsl",
+      "common_dxil_sha256": "d3f4f98f637fa5bc82963ec57e26b99535d09e6718438ca7d9d1e4564e0ac47c",
+      "ultraperformance_dxil_sha256": "6c25882f35d45e7d5eabf1bd645f72709d7a6b2f12664cbb5349932fea940b60",
+      "baked_weight_words": 832,
+      "baked_weight_sha256": "3712bd7a36130fe5a8a579d5b7e1a7e302845628cfa7d4d82991324b798c4a48",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = fmul fast float %v, 0x3F30000000000000",
+          "to": "%v = fmul fast float %v, 0x3F40000000000000",
+          "count": 16
+        },
+        {
+          "from": "%v = fmul fast float %v, 1.562500e-02",
+          "to": "%v = fmul fast float %v, 3.125000e-02",
+          "count": 16
+        }
+      ]
+    },
+    {
+      "tier": 2160,
+      "pass": 3,
+      "source": "ultraperformance/reimpl2160/reimpl_pass3_2160.hlsl",
+      "common_source": "shaders/reimpl2160/reimpl_pass3_2160.hlsl",
+      "common_dxil_sha256": "8e09087b83065612befc39be3bc18988ba04f749c20f8879092c5d14b8e9680b",
+      "ultraperformance_dxil_sha256": "723b5a388db650c6f86e7fe13e8ac957b6ca65d52cc6e1a7c6367fdf29cd7cb4",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = fmul fast float %v, 7.812500e-03",
+          "to": "%v = fmul fast float %v, %v",
+          "count": 16
+        },
+        {
+          "from": "%v = fmul fast float %v, 7.812500e-03",
+          "to": "%v = fmul fast float %v, 3.906250e-03",
+          "count": 16
+        }
+      ]
+    },
+    {
+      "tier": 2160,
+      "pass": 4,
+      "source": "ultraperformance/reimpl2160/reimpl_pass4_2160.hlsl",
+      "common_source": "shaders/reimpl2160/reimpl_pass4_2160.hlsl",
+      "common_dxil_sha256": "62ff6f50660ee65c10534c1662114e9e7491f628840ab4f535690eb8ad915048",
+      "ultraperformance_dxil_sha256": "92a5843ce8d57dcaa314874c2f0006396375ff34eece14e07a60d54942b1eba4",
+      "baked_weight_words": 1600,
+      "baked_weight_sha256": "9caba9894dfb66ba5b31cf608768dd7cb2e12e099736f3e5b5346761a1fa0892",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = add i32 %v, 127",
+          "to": "%v = add i32 %v, 63",
+          "count": 64
+        },
+        {
+          "from": "%v = add i32 %v, 63",
+          "to": "%v = add i32 %v, 127",
+          "count": 16
+        },
+        {
+          "from": "%v = ashr i32 %v, 7",
+          "to": "%v = ashr i32 %v, 8",
+          "count": 16
+        },
+        {
+          "from": "%v = ashr i32 %v, 8",
+          "to": "%v = ashr i32 %v, 7",
+          "count": 64
+        },
+        {
+          "from": "%v = fmul fast float %v, 1.562500e-02",
+          "to": "%v = fmul fast float %v, %v",
+          "count": 16
+        },
+        {
+          "from": "%v = fmul fast float %v, 1.562500e-02",
+          "to": "%v = fmul fast float %v, 3.125000e-02",
+          "count": 16
+        },
+        {
+          "from": "%v = lshr i32 %v, 7",
+          "to": "%v = lshr i32 %v, 8",
+          "count": 16
+        },
+        {
+          "from": "%v = lshr i32 %v, 8",
+          "to": "%v = lshr i32 %v, 7",
+          "count": 64
+        }
+      ]
+    },
+    {
+      "tier": 2160,
+      "pass": 5,
+      "source": "ultraperformance/reimpl2160/reimpl_pass5_2160.hlsl",
+      "common_source": "shaders/reimpl2160/reimpl_pass5_2160.hlsl",
+      "common_dxil_sha256": "c6c9520d4e50745f36629d22e79d83aeb404d59aeb093f0e7a0fbd514f11afce",
+      "ultraperformance_dxil_sha256": "492c55c585c1dc6f04465cd4c639307149e6e2b2bbaea12caaf02e8965a70721",
+      "baked_weight_words": 1600,
+      "baked_weight_sha256": "6ee23902dad1ae7d33f23c1d3f0a593cecb75cf7d3bb588073c917fbab818f5c",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 2160,
+      "pass": 6,
+      "source": "shaders/reimpl2160/reimpl_pass6_2160.hlsl",
+      "common_source": "shaders/reimpl2160/reimpl_pass6_2160.hlsl",
+      "common_dxil_sha256": "1526f25ae524ace46ab3b45c64cf2d38212434b5b2c69586a26b83e8e2294542",
+      "ultraperformance_dxil_sha256": "1526f25ae524ace46ab3b45c64cf2d38212434b5b2c69586a26b83e8e2294542",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 2160,
+      "pass": 7,
+      "source": "shaders/reimpl2160/reimpl_pass7_2160.hlsl",
+      "common_source": "shaders/reimpl2160/reimpl_pass7_2160.hlsl",
+      "common_dxil_sha256": "eb1d8606de2879f1ef211a7920368b439f0e43a7528a7d7ccada5149bb6a90cd",
+      "ultraperformance_dxil_sha256": "eb1d8606de2879f1ef211a7920368b439f0e43a7528a7d7ccada5149bb6a90cd",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 2160,
+      "pass": 8,
+      "source": "shaders/reimpl2160/reimpl_pass8_2160.hlsl",
+      "common_source": "shaders/reimpl2160/reimpl_pass8_2160.hlsl",
+      "common_dxil_sha256": "331098ae093a02fac79fc5b2c29b5aea349f2eb485c6fa738bed050845211267",
+      "ultraperformance_dxil_sha256": "331098ae093a02fac79fc5b2c29b5aea349f2eb485c6fa738bed050845211267",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 2160,
+      "pass": 9,
+      "source": "shaders/reimpl2160/reimpl_pass9_2160.hlsl",
+      "common_source": "shaders/reimpl2160/reimpl_pass9_2160.hlsl",
+      "common_dxil_sha256": "824595cf71596381fea8205883ebbd659e5ab35e91e980ccddbead35bdab3c0a",
+      "ultraperformance_dxil_sha256": "824595cf71596381fea8205883ebbd659e5ab35e91e980ccddbead35bdab3c0a",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 2160,
+      "pass": 10,
+      "source": "ultraperformance/reimpl2160/reimpl_pass10_2160.hlsl",
+      "common_source": "shaders/reimpl2160/reimpl_pass10_2160.hlsl",
+      "common_dxil_sha256": "87c71ef38d429551d35fce45857120f6e82aef330ee0f4f2bd3b35cf793c7b77",
+      "ultraperformance_dxil_sha256": "59c555782dc4262fffec0d78da59763a7bd3c9319bef9e55c1bf84562fbe05ed",
+      "baked_weight_words": 1600,
+      "baked_weight_sha256": "6a0ece546ddc3e5022635833c5168d946d045841ba0e89a5fe6f06d1cc129fd5",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = add i32 %v, 127",
+          "to": "%v = add i32 %v, 63",
+          "count": 16
+        },
+        {
+          "from": "%v = add i32 %v, 63",
+          "to": "%v = add i32 %v, 127",
+          "count": 64
+        },
+        {
+          "from": "%v = ashr i32 %v, 7",
+          "to": "%v = ashr i32 %v, 8",
+          "count": 64
+        },
+        {
+          "from": "%v = ashr i32 %v, 8",
+          "to": "%v = ashr i32 %v, 7",
+          "count": 16
+        },
+        {
+          "from": "%v = fmul fast float %v, 0x3F40000000000000",
+          "to": "%v = fmul fast float %v, 0x3F30000000000000",
+          "count": 32
+        },
+        {
+          "from": "%v = lshr i32 %v, 7",
+          "to": "%v = lshr i32 %v, 8",
+          "count": 64
+        },
+        {
+          "from": "%v = lshr i32 %v, 8",
+          "to": "%v = lshr i32 %v, 7",
+          "count": 16
+        }
+      ]
+    },
+    {
+      "tier": 2160,
+      "pass": 11,
+      "source": "ultraperformance/reimpl2160/reimpl_pass11_2160.hlsl",
+      "common_source": "shaders/reimpl2160/reimpl_pass11_2160.hlsl",
+      "common_dxil_sha256": "b4b5db88ba09f3983c369f44f8532b67dfddac88c16e6ad2d14a17af29075201",
+      "ultraperformance_dxil_sha256": "aac3b7a1f7c95b59ca03e39cf2be12c4ee665fccf36b7eefbd6e60cda54c6756",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = fmul fast float %v, 0x3F30000000000000",
+          "to": "%v = fmul fast float %v, 0x3F20000000000000",
+          "count": 4
+        },
+        {
+          "from": "%v = fmul fast float %v, 8.000000e+00",
+          "to": "%v = fmul fast float %v, 1.600000e+01",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "tier": 2160,
+      "pass": 12,
+      "source": "ultraperformance/reimpl2160/reimpl_pass12_2160.hlsl",
+      "common_source": "shaders/reimpl2160/reimpl_pass12_2160.hlsl",
+      "common_dxil_sha256": "7dcb64562f01cc7ad112d6e05505ba7a9f2ff89026f2fb4d94582f65853d2b59",
+      "ultraperformance_dxil_sha256": "d75a1f36b98f93e382c13c9a6fc471a9672b1f6f9a86c13a2801b1b6e82cb877",
+      "baked_weight_words": 832,
+      "baked_weight_sha256": "bb9e9c6233daf840f99829e7dae06ad42705c380ebf1afccce2c4ac2122de3c3",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = add i32 %v, 127",
+          "to": "%v = add i32 %v, 63",
+          "count": 32
+        },
+        {
+          "from": "%v = add i32 %v, 63",
+          "to": "%v = add i32 %v, 127",
+          "count": 16
+        },
+        {
+          "from": "%v = ashr i32 %v, 7",
+          "to": "%v = ashr i32 %v, 8",
+          "count": 16
+        },
+        {
+          "from": "%v = ashr i32 %v, 8",
+          "to": "%v = ashr i32 %v, 7",
+          "count": 32
+        },
+        {
+          "from": "%v = lshr i32 %v, 7",
+          "to": "%v = lshr i32 %v, 8",
+          "count": 16
+        },
+        {
+          "from": "%v = lshr i32 %v, 8",
+          "to": "%v = lshr i32 %v, 7",
+          "count": 32
+        }
+      ]
+    },
+    {
+      "tier": 4320,
+      "pass": 1,
+      "source": "ultraperformance/reimpl4320/reimpl_pass1_4320.hlsl",
+      "common_source": "shaders/reimpl4320/reimpl_pass1_4320.hlsl",
+      "common_dxil_sha256": "6a8357fba82f99f5bbba7da351ab1e9f5fc1dc463e1420c84d36d4b3e6c1f1fb",
+      "ultraperformance_dxil_sha256": "491eefcb2c4d5fc5f1f80d79f0d08fc58f26d05b6dce4a731c617de70d2809ce",
+      "baked_weight_words": 832,
+      "baked_weight_sha256": "36593a332ec7a6e975ad9d6e55e504f3c3ad59dc8922acceeab70649750bfefd",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = fmul fast float %v, 6.400000e+01",
+          "to": "%v = fmul fast float %v, 3.200000e+01",
+          "count": 16
+        }
+      ]
+    },
+    {
+      "tier": 4320,
+      "pass": 2,
+      "source": "ultraperformance/reimpl4320/reimpl_pass2_4320.hlsl",
+      "common_source": "shaders/reimpl4320/reimpl_pass2_4320.hlsl",
+      "common_dxil_sha256": "d6f37e67b1491329b59d3113e8809d4ea9b7515ad5f6e9c070ed25178929fc02",
+      "ultraperformance_dxil_sha256": "00ab189c2240565758852386e30c26a7db43cf1ff14e660e80a4cf40a4aab381",
+      "baked_weight_words": 832,
+      "baked_weight_sha256": "3712bd7a36130fe5a8a579d5b7e1a7e302845628cfa7d4d82991324b798c4a48",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = fmul fast float %v, 0x3F30000000000000",
+          "to": "%v = fmul fast float %v, 0x3F40000000000000",
+          "count": 16
+        },
+        {
+          "from": "%v = fmul fast float %v, 1.562500e-02",
+          "to": "%v = fmul fast float %v, 3.125000e-02",
+          "count": 16
+        }
+      ]
+    },
+    {
+      "tier": 4320,
+      "pass": 3,
+      "source": "ultraperformance/reimpl4320/reimpl_pass3_4320.hlsl",
+      "common_source": "shaders/reimpl4320/reimpl_pass3_4320.hlsl",
+      "common_dxil_sha256": "766b86043aa110e88125d9e00a057f72a9a7aaff5406fe154ca94de972bacfde",
+      "ultraperformance_dxil_sha256": "d314d2b83a481bc36e66a48e07082f3d2cc9d36924b67b8ef8767c5379d1a102",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = fmul fast float %v, 7.812500e-03",
+          "to": "%v = fmul fast float %v, %v",
+          "count": 16
+        },
+        {
+          "from": "%v = fmul fast float %v, 7.812500e-03",
+          "to": "%v = fmul fast float %v, 3.906250e-03",
+          "count": 16
+        }
+      ]
+    },
+    {
+      "tier": 4320,
+      "pass": 4,
+      "source": "ultraperformance/reimpl4320/reimpl_pass4_4320.hlsl",
+      "common_source": "shaders/reimpl4320/reimpl_pass4_4320.hlsl",
+      "common_dxil_sha256": "d79a3e8bd750dad795e550551a8370a4760b9b23390d54ae1b9aceb500d5e982",
+      "ultraperformance_dxil_sha256": "7395662db066cbaa8a9eaf37d56a03a6c47bb931d81bad01d5f8b37663977b4c",
+      "baked_weight_words": 1600,
+      "baked_weight_sha256": "9caba9894dfb66ba5b31cf608768dd7cb2e12e099736f3e5b5346761a1fa0892",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = add i32 %v, 127",
+          "to": "%v = add i32 %v, 63",
+          "count": 64
+        },
+        {
+          "from": "%v = add i32 %v, 63",
+          "to": "%v = add i32 %v, 127",
+          "count": 16
+        },
+        {
+          "from": "%v = ashr i32 %v, 7",
+          "to": "%v = ashr i32 %v, 8",
+          "count": 16
+        },
+        {
+          "from": "%v = ashr i32 %v, 8",
+          "to": "%v = ashr i32 %v, 7",
+          "count": 64
+        },
+        {
+          "from": "%v = fmul fast float %v, 1.562500e-02",
+          "to": "%v = fmul fast float %v, %v",
+          "count": 16
+        },
+        {
+          "from": "%v = fmul fast float %v, 1.562500e-02",
+          "to": "%v = fmul fast float %v, 3.125000e-02",
+          "count": 16
+        },
+        {
+          "from": "%v = lshr i32 %v, 7",
+          "to": "%v = lshr i32 %v, 8",
+          "count": 16
+        },
+        {
+          "from": "%v = lshr i32 %v, 8",
+          "to": "%v = lshr i32 %v, 7",
+          "count": 64
+        }
+      ]
+    },
+    {
+      "tier": 4320,
+      "pass": 5,
+      "source": "ultraperformance/reimpl4320/reimpl_pass5_4320.hlsl",
+      "common_source": "shaders/reimpl4320/reimpl_pass5_4320.hlsl",
+      "common_dxil_sha256": "4365d4259e7453f6f9607a934ca2b22f0c63901a5d52124140e4088691aa4876",
+      "ultraperformance_dxil_sha256": "0dad0613fa8e386bf7721cdecbf8c23cb20684d12b96d90c08ef313210fd19ad",
+      "baked_weight_words": 1600,
+      "baked_weight_sha256": "6ee23902dad1ae7d33f23c1d3f0a593cecb75cf7d3bb588073c917fbab818f5c",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 4320,
+      "pass": 6,
+      "source": "shaders/reimpl4320/reimpl_pass6_4320.hlsl",
+      "common_source": "shaders/reimpl4320/reimpl_pass6_4320.hlsl",
+      "common_dxil_sha256": "664e566c4a7a0e24f44c640c255e1a785976e0450438cded96fe7e981e8695c5",
+      "ultraperformance_dxil_sha256": "664e566c4a7a0e24f44c640c255e1a785976e0450438cded96fe7e981e8695c5",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 4320,
+      "pass": 7,
+      "source": "shaders/reimpl4320/reimpl_pass7_4320.hlsl",
+      "common_source": "shaders/reimpl4320/reimpl_pass7_4320.hlsl",
+      "common_dxil_sha256": "4ca466622407dcc5606579ae5b999ccb0c3628999daf2e25d45208f7ebe5722c",
+      "ultraperformance_dxil_sha256": "4ca466622407dcc5606579ae5b999ccb0c3628999daf2e25d45208f7ebe5722c",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 4320,
+      "pass": 8,
+      "source": "shaders/reimpl4320/reimpl_pass8_4320.hlsl",
+      "common_source": "shaders/reimpl4320/reimpl_pass8_4320.hlsl",
+      "common_dxil_sha256": "2b286b6efb1bb88079cb063a01886fa3c2bcbbfac2553a500ce68f9a863b7369",
+      "ultraperformance_dxil_sha256": "2b286b6efb1bb88079cb063a01886fa3c2bcbbfac2553a500ce68f9a863b7369",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 4320,
+      "pass": 9,
+      "source": "shaders/reimpl4320/reimpl_pass9_4320.hlsl",
+      "common_source": "shaders/reimpl4320/reimpl_pass9_4320.hlsl",
+      "common_dxil_sha256": "f4099b61a13612f7a0523e5a70e0eb5396b466f355365b08fa6b46323c99bbaa",
+      "ultraperformance_dxil_sha256": "f4099b61a13612f7a0523e5a70e0eb5396b466f355365b08fa6b46323c99bbaa",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": []
+    },
+    {
+      "tier": 4320,
+      "pass": 10,
+      "source": "ultraperformance/reimpl4320/reimpl_pass10_4320.hlsl",
+      "common_source": "shaders/reimpl4320/reimpl_pass10_4320.hlsl",
+      "common_dxil_sha256": "b96b0036919ab88a91f0cea3706ed9a516e97ee582b434a1dc50af3441f13696",
+      "ultraperformance_dxil_sha256": "4831a20d52752c29736471485b25fdaf34e575cb55aae31246a00c5ed6715c04",
+      "baked_weight_words": 1600,
+      "baked_weight_sha256": "6a0ece546ddc3e5022635833c5168d946d045841ba0e89a5fe6f06d1cc129fd5",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = add i32 %v, 127",
+          "to": "%v = add i32 %v, 63",
+          "count": 16
+        },
+        {
+          "from": "%v = add i32 %v, 63",
+          "to": "%v = add i32 %v, 127",
+          "count": 64
+        },
+        {
+          "from": "%v = ashr i32 %v, 7",
+          "to": "%v = ashr i32 %v, 8",
+          "count": 64
+        },
+        {
+          "from": "%v = ashr i32 %v, 8",
+          "to": "%v = ashr i32 %v, 7",
+          "count": 16
+        },
+        {
+          "from": "%v = fmul fast float %v, 0x3F40000000000000",
+          "to": "%v = fmul fast float %v, 0x3F30000000000000",
+          "count": 32
+        },
+        {
+          "from": "%v = lshr i32 %v, 7",
+          "to": "%v = lshr i32 %v, 8",
+          "count": 64
+        },
+        {
+          "from": "%v = lshr i32 %v, 8",
+          "to": "%v = lshr i32 %v, 7",
+          "count": 16
+        }
+      ]
+    },
+    {
+      "tier": 4320,
+      "pass": 11,
+      "source": "ultraperformance/reimpl4320/reimpl_pass11_4320.hlsl",
+      "common_source": "shaders/reimpl4320/reimpl_pass11_4320.hlsl",
+      "common_dxil_sha256": "2a752da431ffc1f3675b66249a5a7ae4e4307b7c531a4968ce6f512e634ca53e",
+      "ultraperformance_dxil_sha256": "8a12568828447a047944436d991130efb9c959f34cb3b2e1bad6152a22276aaf",
+      "baked_weight_words": 0,
+      "baked_weight_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = fmul fast float %v, 0x3F30000000000000",
+          "to": "%v = fmul fast float %v, 0x3F20000000000000",
+          "count": 4
+        },
+        {
+          "from": "%v = fmul fast float %v, 8.000000e+00",
+          "to": "%v = fmul fast float %v, 1.600000e+01",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "tier": 4320,
+      "pass": 12,
+      "source": "ultraperformance/reimpl4320/reimpl_pass12_4320.hlsl",
+      "common_source": "shaders/reimpl4320/reimpl_pass12_4320.hlsl",
+      "common_dxil_sha256": "b2da443720bf7388da43f4de0a0f7da3a18012e8904a483f7fb77bee179c3841",
+      "ultraperformance_dxil_sha256": "9e70a34181f867de2c7310145b87382c459226d9347fb1fc5010d54a1ca16caa",
+      "baked_weight_words": 832,
+      "baked_weight_sha256": "bb9e9c6233daf840f99829e7dae06ad42705c380ebf1afccce2c4ac2122de3c3",
+      "scalar_instruction_deltas": [
+        {
+          "from": "%v = add i32 %v, 127",
+          "to": "%v = add i32 %v, 63",
+          "count": 32
+        },
+        {
+          "from": "%v = add i32 %v, 63",
+          "to": "%v = add i32 %v, 127",
+          "count": 16
+        },
+        {
+          "from": "%v = ashr i32 %v, 7",
+          "to": "%v = ashr i32 %v, 8",
+          "count": 16
+        },
+        {
+          "from": "%v = ashr i32 %v, 8",
+          "to": "%v = ashr i32 %v, 7",
+          "count": 32
+        },
+        {
+          "from": "%v = lshr i32 %v, 7",
+          "to": "%v = lshr i32 %v, 8",
+          "count": 16
+        },
+        {
+          "from": "%v = lshr i32 %v, 8",
+          "to": "%v = lshr i32 %v, 7",
+          "count": 32
+        }
+      ]
+    }
+  ],
+  "post_sources": [
+    {
+      "tier": 1080,
+      "source": "ultraperformance/reimpl411/post_rev_411.hlsl",
+      "common_source": "shaders/reimpl411/post_rev_411.hlsl",
+      "common_dxil_sha256": "f5c9eaf26bba29d7c743f565d8278e3f36f1613156e56dbfe09a5853687d90e8",
+      "ultraperformance_dxil_sha256": "d977f9b2b80836d0d292b2fd1a69e781e78b35f9d04100c6759ae9e17b4ef1d3"
+    },
+    {
+      "tier": 2160,
+      "source": "ultraperformance/reimpl2160/post_rev_411_2160.hlsl",
+      "common_source": "shaders/reimpl2160/post_rev_411_2160.hlsl",
+      "common_dxil_sha256": "41bf3c2d8c68ea0e0a18918220a948a7823d684f50066e6665564788a0e1c794",
+      "ultraperformance_dxil_sha256": "1eb218f7d091c5c834a4e7a668e05d42ad8bf106cbe1eee909a93c12609e4a79"
+    },
+    {
+      "tier": 4320,
+      "source": "ultraperformance/reimpl4320/post_rev_411_4320.hlsl",
+      "common_source": "shaders/reimpl4320/post_rev_411_4320.hlsl",
+      "common_dxil_sha256": "7cafcdb708fbfc85117da49f655fd5dcc9d3cbc1e2906553fae6a0aee1407506",
+      "ultraperformance_dxil_sha256": "b7cd499d9e13d5b58c25c1ef414c4eef04818c704a62d27ce6dbe51e5c9760a8"
+    }
+  ],
+  "post_pairs": [
+    {
+      "common_dxil_sha256": "078719ee6e176a7e612006ef54ddd9e4bac1828aca2972a489ab52dc1dddde88",
+      "ultraperformance_dxil_sha256": "0d403132cc1267c8d5716861264872ad4d226a23c20cd68ced8acfd033180e73"
+    },
+    {
+      "common_dxil_sha256": "098598fb3a341a2d9eca5ac5f707f58f2dd2e4dde871b5254c72c64bd210b15e",
+      "ultraperformance_dxil_sha256": "394c8a50f4e05ea7423c647495aaf0a77b687fcb8ffa51ee95806df0d7f7751d"
+    },
+    {
+      "common_dxil_sha256": "0c96870f6d4553cf4ef105779b60786266bbcac292c22b7b309c41cbc49d7164",
+      "ultraperformance_dxil_sha256": "e68a19fb80f42670d2f84769c13ca4a0f01c6a39269c90b092c7258eb2915c51"
+    },
+    {
+      "common_dxil_sha256": "117dfc34c13617fcec0292c428626423b6bfe8659d80435ecf1f5b1634281474",
+      "ultraperformance_dxil_sha256": "796beaa396d237f8b136db8c9dc08b7f717f72fe9679cca4f495239c8a80c3f9"
+    },
+    {
+      "common_dxil_sha256": "1c80af6b5a7a5ef75f66be44536caa6319c8f450f2387a3a44ff1ef855627b2e",
+      "ultraperformance_dxil_sha256": "16b3576502c1bfad0826eae7920e9b1d7d08f3ce6552f1710377adf60fa2c4c2"
+    },
+    {
+      "common_dxil_sha256": "22379f770962cad2536b2b3bd7b2792dc28d64455432d65c7a5084f6291e6e77",
+      "ultraperformance_dxil_sha256": "dd91d5c267cce99b0fd00708b69a7347fc666788c894bb42ca1dbec62adf5def"
+    },
+    {
+      "common_dxil_sha256": "2ba2fc77fc762a593cd2e8a5850a1e6ad86b9d32939666afeed20c0d015e58c2",
+      "ultraperformance_dxil_sha256": "c733678094bd5820bdfdfced6cf895a00207f7821db45d093a90e9e8d7b1f275"
+    },
+    {
+      "common_dxil_sha256": "2e03a88c58bc0b5bb44f7dde799ff622fe0de6bba83f87e711aef5d1cbf7305a",
+      "ultraperformance_dxil_sha256": "61596f221afe9fbb263d0c17be0e09219661fc87bee06063efa77c6c5ae1aa5e"
+    },
+    {
+      "common_dxil_sha256": "3f54d23f44a1ad9621f91adbf255065c1d24074264dcfdaeff53a594ece40112",
+      "ultraperformance_dxil_sha256": "5aed1a2eccc50dfcead136e170536b54f2efd2350088323b90ce900e40089a21"
+    },
+    {
+      "common_dxil_sha256": "41bf3c2d8c68ea0e0a18918220a948a7823d684f50066e6665564788a0e1c794",
+      "ultraperformance_dxil_sha256": "1eb218f7d091c5c834a4e7a668e05d42ad8bf106cbe1eee909a93c12609e4a79"
+    },
+    {
+      "common_dxil_sha256": "491c050420f168ea8fd2229e738d41d3727244e882d26b54b7efbe7a0bbc9c03",
+      "ultraperformance_dxil_sha256": "df172b9934a4a65b65210cb0b942a2fc428d2191fddbf77e83b1a03e646f49c2"
+    },
+    {
+      "common_dxil_sha256": "4f26923dae026eead911765bca0eb0577a22ec76901ff440c6a2926e6e936741",
+      "ultraperformance_dxil_sha256": "fcb6d61abd01727c4aa2e7982f2176ff2016642885bb9b45ebc11ae8da0bd44e"
+    },
+    {
+      "common_dxil_sha256": "4fc2b305bf7f2e2c560f8410c9eea1127d84e157e7069aada52f82546471c51a",
+      "ultraperformance_dxil_sha256": "2de9a0a1b8bb4e0bb423254ac403fedc6220e6f26a78957dca3081b8d2488954"
+    },
+    {
+      "common_dxil_sha256": "51e0207aa96f853c67589dc0dba0f8767eb1136425ec7dba69cf59805f314787",
+      "ultraperformance_dxil_sha256": "263464eaeec64558124b1b6675554dcc90b5609a6a81e0d99d93725a8748a0d8"
+    },
+    {
+      "common_dxil_sha256": "5592ee0ddcaf3922fdb511333cd97b1af8fc718e7be942b8b0a2bb35548213e7",
+      "ultraperformance_dxil_sha256": "a88159b01b43381fdb2e0298a706cdc65abaccfb236bcb58ff19f73fc9455bed"
+    },
+    {
+      "common_dxil_sha256": "5da26209cbda5245d4d8b9cd0db41a6143f589cf7b7a5fb5bfbdff97a9a0b588",
+      "ultraperformance_dxil_sha256": "56b424a86cb08556160b496ce6cf5a18eca6df206595ffd47c4f6f26271ccce0"
+    },
+    {
+      "common_dxil_sha256": "74ce08b852d69782312108342b88e9e589f1b780fe220ecbc2a9980635dccb43",
+      "ultraperformance_dxil_sha256": "0cc1f85462acb3168e3fde2d1d4544af9ac3175ac86087bdf3d8254e0b60208a"
+    },
+    {
+      "common_dxil_sha256": "7cafcdb708fbfc85117da49f655fd5dcc9d3cbc1e2906553fae6a0aee1407506",
+      "ultraperformance_dxil_sha256": "b7cd499d9e13d5b58c25c1ef414c4eef04818c704a62d27ce6dbe51e5c9760a8"
+    },
+    {
+      "common_dxil_sha256": "7dc9cdcda970ad9db54289f1978d706bae86d773d48ab1d44e54f071d74bb027",
+      "ultraperformance_dxil_sha256": "4d7f7905f437995adc3a2d63ae15d232d1d6e5131b6f08a42fb618dc4b85074a"
+    },
+    {
+      "common_dxil_sha256": "7e7bcca2e60fd99f4d948542fe9c655a2d902f9f8c2a6f694539b531667b944f",
+      "ultraperformance_dxil_sha256": "01bcb5c15d792c76e8882fb4b22d50272d4bdbd587647ad6b7454c74dd51cb93"
+    },
+    {
+      "common_dxil_sha256": "864049fb18a8f7ee884a0becebff49a1f71d4f65b9317e5925381e9e352fa26c",
+      "ultraperformance_dxil_sha256": "db8e042caddbaef6da6a61054677e74b9d80c6c0b58de49f1f7f3d038498fe20"
+    },
+    {
+      "common_dxil_sha256": "8f0e68cc6749addba8598d934329c4fc274f1a3a016773e2d9cb6e268d2250f8",
+      "ultraperformance_dxil_sha256": "ef640b71a311f0a1a1a56915afd531fa3c3c084b49fa427badbf500c755e5826"
+    },
+    {
+      "common_dxil_sha256": "94a07c5f68204cc4c4b49c8ddb045f54148d06875a93ed7cc32e002e14dd507a",
+      "ultraperformance_dxil_sha256": "e71604ab6fb9ff8147e27a269a64fc598f879db9c7b3780f9e761aa0396c8536"
+    },
+    {
+      "common_dxil_sha256": "95f0283a74a9c2ecd117cc42b7802e51560572b585b5433da8646e977f688a25",
+      "ultraperformance_dxil_sha256": "1c41fd00ceae5eb10f826b44013ff9eddf67824622aa1d2b393baee45670c97e"
+    },
+    {
+      "common_dxil_sha256": "97de070ce6f08afa7ec10ab313e0178b273d2bbd25acf7cd054f65d10542b821",
+      "ultraperformance_dxil_sha256": "456db469a5930793b042d7382c404dbeac52e2ca88d3bf77fe9f502cab1c7b4e"
+    },
+    {
+      "common_dxil_sha256": "985f13fcf76995e08422846268c50769fcbbc0103c2c43d5c08a0e82d2169094",
+      "ultraperformance_dxil_sha256": "884cba85765620aea8161a6f6a87cbe915b2905b2f2e80d45dc1b966c475c565"
+    },
+    {
+      "common_dxil_sha256": "98b8ba42f1c1193e886732d7c8e8a583c3dad5fa942900fc3f1bddccead8d202",
+      "ultraperformance_dxil_sha256": "125ecf2bec29510e3e1fddc978c6d1083b9bdbaacf68d413e1e7e7b7d21366df"
+    },
+    {
+      "common_dxil_sha256": "9f46d9e29b394a21e6328b9a3e75bf28640c5de9b0a80b6c5f3df2f0dd0ccc78",
+      "ultraperformance_dxil_sha256": "7770448884d5a01da717be9b08cdee06d9d4ff7c3d90208b10683db130314018"
+    },
+    {
+      "common_dxil_sha256": "abc957fa8b55558e2eb3dbf363a131d3b73372d9a76aaf477805518bbacf4540",
+      "ultraperformance_dxil_sha256": "2d8210bcd2c616d1ce733ceb60548a49478e004df8e1f1aced55490051d5ccf2"
+    },
+    {
+      "common_dxil_sha256": "aced6e961970d4246da4cbc381d27560aaf9333f15312da0bf8f5b8a89a0f3bd",
+      "ultraperformance_dxil_sha256": "a2b52d9ad9817ede3a296b7e3f56788f689e19bc24fde00770a7f9538e704aa3"
+    },
+    {
+      "common_dxil_sha256": "ae1e967849ebf9988e7ef7dee86c7e638262a85cdb4e04a9a16e86d211482b01",
+      "ultraperformance_dxil_sha256": "cb095ee50b6fd6c7200cca91de574f27b82812930720ce1fdd2e5247873fb5e5"
+    },
+    {
+      "common_dxil_sha256": "b4bb54d460b7351b1ef96604a0d074b75cea1e5bba598724f149008f1c41895d",
+      "ultraperformance_dxil_sha256": "2dc86399b83ab4121e20e29bb6888459053cb78ebe25c98a5bbdcdf15bd98500"
+    },
+    {
+      "common_dxil_sha256": "b9f10eb54c8b9b389d60fe5ac6e54760c2466ddd3e4cf41064711043afab3dc0",
+      "ultraperformance_dxil_sha256": "222ef526596be14869f6dd89cb48e8e847632f4eab613b53a7debbcd7f645ecd"
+    },
+    {
+      "common_dxil_sha256": "bceb4b25d35f15757a484574f79308aba7bbe527abe147d5a78885f8b1e0db45",
+      "ultraperformance_dxil_sha256": "a0fa97cbfc9321d7adb2de000a62039dff07c75fc654179945fd0d65344d816f"
+    },
+    {
+      "common_dxil_sha256": "c06693e2b93f5e7c63a8f4a19adfcf0ab103fd3b3e4e3866d631c5f54404519e",
+      "ultraperformance_dxil_sha256": "e12b5be7700fd625ec4a0be9fa0bca016ce8d3a76cce6ccadd18afb613242012"
+    },
+    {
+      "common_dxil_sha256": "c4a5672e71903df997a207b878b8273c72a61e810d0a7c9764e1d4fb1b377d4d",
+      "ultraperformance_dxil_sha256": "d49d4443faa78d011c4dbf5ad49a4a2b18c20aae74a0821a236018411385eef5"
+    },
+    {
+      "common_dxil_sha256": "c9ea72e8b3bcc64e807b179b7b203c6a8cfce598264b4e8c4f09992221cccbfe",
+      "ultraperformance_dxil_sha256": "d1b75c6b0fd2f347b8a32bf3c6123cde1bcc7ee8b794758c3974585bce135f9d"
+    },
+    {
+      "common_dxil_sha256": "cba76922ab4836bd5958c6070d8f000c033fe526e8a9a699ebbb3946c2e2cd20",
+      "ultraperformance_dxil_sha256": "8aa8dfecee1cb585486c59c53315e71ba7d7b2629040a4d7eb4a332ddba0c4a2"
+    },
+    {
+      "common_dxil_sha256": "d22c32ed0428eec8e7f2821d2eaa582a07a4152c35cc213812aba9c2866816fb",
+      "ultraperformance_dxil_sha256": "9d456633c422a2daef97618dec16bbb795f21f3416bc314bda3980000aa6918f"
+    },
+    {
+      "common_dxil_sha256": "e0cef1cc1c34c30d34379c9bee6521bf635a0202b8df0c4204e05998fad188c6",
+      "ultraperformance_dxil_sha256": "bd66982000620de88e7adb956da061064122961b292d561ebf7eb40bd8895654"
+    },
+    {
+      "common_dxil_sha256": "e1d1f1f0522e746e8fd7300daaaad1f3623b4d484a6083d2a2c96624f522bc2f",
+      "ultraperformance_dxil_sha256": "e740bd199a7d8c250da5f32573a59acd3e8d22dfce23f5d3e84b3efb0d604101"
+    },
+    {
+      "common_dxil_sha256": "eb40516877480d61b6d5a6e872dadccf6192822de38eec45b9c19b3cfc333d7b",
+      "ultraperformance_dxil_sha256": "f75ea40590b49c2abb0c57bd60754900dd9215e23ef324458933884bb67722ac"
+    },
+    {
+      "common_dxil_sha256": "f119c6ae64d1909f8147dc1551c2f01e772acb41b9a13a3220fcd21f7b6c12ce",
+      "ultraperformance_dxil_sha256": "07cee9d6d3349371caf9b8f9084e8d092b4586f0f2457d629d27cd7123743060"
+    },
+    {
+      "common_dxil_sha256": "f47865230d3bbee232729f7d377668b2099fcc44bec7c8daff91fb77a5bdc765",
+      "ultraperformance_dxil_sha256": "48f08cfd2652b05f9a60f6e806356f4511b24ef694ef4f6e770f3c00aaea270b"
+    },
+    {
+      "common_dxil_sha256": "f5c9eaf26bba29d7c743f565d8278e3f36f1613156e56dbfe09a5853687d90e8",
+      "ultraperformance_dxil_sha256": "d977f9b2b80836d0d292b2fd1a69e781e78b35f9d04100c6759ae9e17b4ef1d3"
+    },
+    {
+      "common_dxil_sha256": "f66b8132e766e1e86f187b6adc1fcb985e8c9ddb4101d2c87ec5a8ced12d192e",
+      "ultraperformance_dxil_sha256": "2be92aae13ec0a96b3fc85f50eac2355950c998d0fc4c10d71e1d4b0f35d5023"
+    },
+    {
+      "common_dxil_sha256": "f6fdb2e86cb8615c25ec09b24ef33ac626a81e80e13c07edaa496bb9528546c9",
+      "ultraperformance_dxil_sha256": "3f31e4d818592dd8a39d599c766f6c78987a616a23c3b106f2ed56d05e2baf19"
+    },
+    {
+      "common_dxil_sha256": "f9412dc5186550de76797e56c6ffa12eda43ac1e4dcd1cc9bc6b79e473d40ad4",
+      "ultraperformance_dxil_sha256": "c1f8c79f39dfb3b0ecb854b18b57a802e08bc04c6e8cd7175f8ec8e470fb8d19"
+    }
+  ],
+  "post_scalar_instruction_deltas": [
+    {
+      "from": "%v = add i32 %v, 127",
+      "to": "%v = add i32 %v, 63",
+      "count": 16
+    },
+    {
+      "from": "%v = add i32 %v, 63",
+      "to": "%v = add i32 %v, 127",
+      "count": 32
+    },
+    {
+      "from": "%v = ashr i32 %v, 7",
+      "to": "%v = ashr i32 %v, 8",
+      "count": 32
+    },
+    {
+      "from": "%v = ashr i32 %v, 8",
+      "to": "%v = ashr i32 %v, 7",
+      "count": 16
+    },
+    {
+      "from": "%v = lshr i32 %v, 7",
+      "to": "%v = lshr i32 %v, 8",
+      "count": 32
+    },
+    {
+      "from": "%v = lshr i32 %v, 8",
+      "to": "%v = lshr i32 %v, 7",
+      "count": 16
+    }
+  ],
+  "shared_pre_and_padding": [
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_pass0_post",
+      "shared_dxil_sha256": [
+        "197a866cfc8133da446b7e521ec375f244da2ed5173f4bed87455a8526795052",
+        "581a39d1f3cc1b16d640f1a613d535bcacd37fc15b8b7416806067d7cd123572",
+        "f3b9b2e3dc6eb22d593fa74ec77223cf828c85ba8910be2a2c5ddb5833d7bbed"
+      ]
+    },
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_pass10_post",
+      "shared_dxil_sha256": [
+        "1867d118bd73b95afa3f72a154bf49e7aefd6581d0342a5a97f660bb5d16b870",
+        "bc56b85dbc7102ce5300b355b7a17c49e85be4e7a9d703a867c6afd4f2dd3de1",
+        "c9389b86b5a579bd030674e476ba31eb90cc24efe472f4226ee4045731ebb03a"
+      ]
+    },
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_pass11_post",
+      "shared_dxil_sha256": [
+        "6289d3c3d62bee3b89a1d586385c376ec725f9b24047147aa7e852753b9892fd",
+        "62d9101a5bf39c80aa92fe9fb7f077a4a92de5f8f3fd79e972eac41d8f48be8d",
+        "f7840ba4452eff232dc12f1b2db0a50ba7284977d9ced33681001e6b68758c6a"
+      ]
+    },
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_pass12_post",
+      "shared_dxil_sha256": [
+        "4069be19ce32359347627c7f662c2896f1369661d04b5ee940c0771109d0f95f",
+        "e67cad8f3ee98fb1e67c59b84c24fa5526e52c9c3f4ccb6f7eaf8e8ea24f1df5",
+        "f3ba28866c556a5251ee0a701cf4e0a7fe8ad7f57ff3dd3ce214b4431a662313"
+      ]
+    },
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_pass1_post",
+      "shared_dxil_sha256": [
+        "25e5d651fc968bd8b8f2ab6209754b9d1868cf645268b231ea2953a3d426d1b9",
+        "60f083502120221a79dee320ff7d47ce5c2b1f92063ee276d2ea67ff325ea96d",
+        "d78fcd55aaaff63dd41d2a7f25b470492c70849889c814dd41e449c17fe29e21"
+      ]
+    },
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_pass2_post",
+      "shared_dxil_sha256": [
+        "0ec96420578c0d25a840ce400e15c2dbd74cdc92dde620f6d01aa6eed463e9a2",
+        "4272bd8b3df3d1c18312960b7aedecd33b3e2515230c6f3c1c8fbf32f95fb28c",
+        "48bf1e1332ffeccbbc07199146a0c30f0ee60c16c809d4a1b746f9fd5898aeba"
+      ]
+    },
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_pass3_post",
+      "shared_dxil_sha256": [
+        "2fb9a90ab5124e4cd61608dd2a805012abd0927b9f78627dc3d312c97cf1227a",
+        "3ee64e482df458931277518a56bc86d0053738df9f44caf9406e4884cc210f8f",
+        "d8128a406af508b970176158c7a53716843be8cd0be0067f2d4c73e7e94a4bf0"
+      ]
+    },
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_pass4_post",
+      "shared_dxil_sha256": [
+        "07ab7707e18b6d93f37b751ab115943fd0a8831bb3f7c41e295ff426cadacd30",
+        "7dcd7f18ad7d201922c4d899aa71d3aac5cb4fbdcd1a20bea1bc227768137016",
+        "cd3590056f5590f93bbb97fc9b26b12f3c492c1498485384b05b0c0a4f5902f4"
+      ]
+    },
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_pass5_post",
+      "shared_dxil_sha256": [
+        "b1e56e0e12cb6bd934ad2a80da08726ec1d579c987f8d48b60466f8e0f4a8741",
+        "b81fd53d8bb52f9fbd3b7d81c486ab04cac46cd3abd12ffd1ba7d0a9849ebd2e",
+        "ec0f3dadaacf795997d7b45392bdb0fd23263bcb953815228b6ac1f9326ed600"
+      ]
+    },
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_pass6_post",
+      "shared_dxil_sha256": [
+        "10d9f1b5d1fd5c988e84334468ff230b6b7947b0b85d226e10bd16f66a4fa019",
+        "1c87a4e00d877d4330f4b8a37e9d9104c1df9bee86593042b321b05f25ed1c06",
+        "ee26dc24894a0fbed5f8da67c73e725606798894f79008137e78372df4c221f8"
+      ]
+    },
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_pass7_post",
+      "shared_dxil_sha256": [
+        "6a6136237fc555602f9a87b146b8f118994c7c15a4a0e7d71aae78860fec64ea",
+        "8055e7867a785d5b69a0502e9d35fe0b19bbbc4ef63576cff4074421ded31020",
+        "ae10f776b475f3b0253d7ca14e143d1252d7293105554cbaa9c275010f28917c"
+      ]
+    },
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_pass8_post",
+      "shared_dxil_sha256": [
+        "22194f2fa691cb48decb2a049e404cc872ef58db0279c2131476592e363c791f",
+        "e37704e450a3c00b7a146ea8cfe9e37a49e51f95f9921c99f3f7ad23be60f108",
+        "fe627731553537f3535009f2c26d2cd6e5db2940b48f06e3b4c631ca0b4890bd"
+      ]
+    },
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_pass9_post",
+      "shared_dxil_sha256": [
+        "1ca50bfd7366f8df6f287b9477f5069a46e985778615eeced718f1c10c8a2c93",
+        "7fd1e33b53175a465d72385bc54994495517b958a142168726bb95cf4df8f3ee",
+        "ad0747a992a59df4d038e266be80174c8b147f16f913b4ed1328d189c7a02477"
+      ]
+    },
+    {
+      "entry": "fsr4_model_v07_fp8_no_scale_prepass",
+      "shared_dxil_sha256": [
+        "01c70132dcba3dcbc27cfc8609df8edb000cbe1a8c2924fa53371dc74769552b",
+        "01d3823794afb51fa603839a459199393b7b23c1941efa60402d56610c4257c9",
+        "0c635c96380c99f99bd16863c84445b853d6889d634b32400c604bf59f1bf4e0",
+        "0c6c4166a99ae4223a562945d6b0756ab317ab3c5f9f4333f67bc1cf5ad74aef",
+        "0e88a56540171c1bade58247eb119afb3859032a4b9dbe93ef11bbf7d2e85c89",
+        "0ec26d08e8af38de7ded86d1e1a4c0952d40cc497afd460ce3e63d8af624dd28",
+        "0f0fa732887e3d85c6f1e659bd701292ce71d6ecc71ef29031d2d9c1d0e8dd26",
+        "0fec68a960ae3a5784aa15d023e0c3551a077f32bacdc6769e76cbe473243fe8",
+        "1254039f7602da525927089ee9b152ed10eeebf8f1e4677d654075ed3a03402b",
+        "1442f1f3e71b9e297a2d52e92eb5160038b288b0ce21182c7b66f3cbb98febc8",
+        "172b8b5504a2d3fe311ac62a6d04d28c87427901a9b091b4580288666fceb10d",
+        "185fdb9a274010a489f341da1d0ea1cdcdaff20b6134aedb222014dcdd93296e",
+        "20f21c9e116e833badd1d97f95a0925ef8e3c5804f2e2e997893dd63badbaa58",
+        "2a3836249e81098a751166fa9733ae1bb6425d4c97f3691f9e77f912bebf8c19",
+        "317a063e1e04f0a8f27667dd7fefe247537d245fb18671ccf9cc9d50299d942d",
+        "37547df39f9246168fc145a5ab8d1368b91e5b4caab186e0e1855a4cbaf4d252",
+        "3c4dc19c460b60f49b60cd50b1772cbdd987af1c77594f4314f6875597d5415c",
+        "3d0e679fb44c6c74695a062dc05b9b9c2289ee3c612c07e83f14ed3449498d8b",
+        "41f5ba720ee1c60f136a6d39ba8e692d9f80b73de740ad7c702f6180abd6dc74",
+        "42b75776ae3e9f2b6ffe9e3694a123fdad96d0d01819bbdd81246ce9007ff908",
+        "44c3053280138c45708d99154f06bcdaee57bb11ef2344229243a3b67f5292b4",
+        "4cfb958c0b4a9f30eb52eb73107db3666869d5e2383c4154358afa2d5dc62048",
+        "4d1ef7ca1bf8eb656ca805416bf55032b1a6b7bb85dee622d0619d0d1c13eb19",
+        "4d8f4712ff5d557c92955e3022cda5a60fea1593873972286f065dddab623781",
+        "4e4c3b405a612f08639d036e05abfccfe9a746cd1a199b929c76afbd8ddfdb6e",
+        "4f7585a8a24a80a124e0cfaf83128a0ca9ac38f5392e001e36b16340773465c8",
+        "4fa59680cbe583539c5df3d45ea5f7b33549f9349c2fa3e8ab81b2dca46d98b7",
+        "518faecbf48488d4fdcaa42697b5b984d2895b105520ccf962d534649a778bdd",
+        "51f4c053359fabac4b03a5eb6dbd3c0be03728dbd79b361e3266f8fb1faad986",
+        "59d01170ddb8c9139e203a8aa5d98b2f4749ab14b365aced1a17af599acf0305",
+        "5aa737d74169197f8c4340b9a2f7946ac98820c543438f5fd6e8738fc72e6fa6",
+        "5dd931ebe113543dc35be19a7b0458730f1bb97027fa64d1a40bbd4f5b6d31df",
+        "61b3563bdc25f37ecfc17ea6ecda7c95393436b5f0beb54e0b0d2cf796ea2ccf",
+        "6229d2f0ad6decb9d811969eae7ca550aeaf1bcec1b0adf447d745bb863cacc4",
+        "62b6d90fb866ce19bd53e2209241e13d59c8c41b0ce189ff8b2df4e3a2f2a811",
+        "63af7205afa9bf172b40fe56340670c4104cce19769d2b1ff903592f5e0c62fe",
+        "648db9707a0ba67062aa05d01a531264c53e2582726266f1437274ea85e560ce",
+        "64b53263e8b8450584b745cfe241309bfff8ea19de5256fb24bcad06da31f1ff",
+        "65a3e0934ba00b1f7cd7a2c00973cb77ba5e7a9d57d92674d2adf6e5b07ad1d2",
+        "6b785f98a2263f73631a08a31eec63bc59dfd01033fcd3c28cdd2567eb498ec1",
+        "6be72154ee2b456902210453a1ca98ebdf2c030cac3586fcb884d59b86847816",
+        "6eb7ec80179cf1f726259a6f2d0c11ad2f542819e0eb727ac352e0b6f2f39676",
+        "71d1cceace56dbd0d0c5a606eeb15dc52057f14daeee78327f03c639aaa8acd6",
+        "752550299a4d40c81f03a2304c65e8b1d0089aedce8cea9a87fcdfe2ce556486",
+        "78196050596bc785880161af9f1ecf6c9813bea6af9263bf95bc0c2987562901",
+        "788685c566bc8f96b86148fb67b2e4d6b4ddd9a47c0871a4dd91cfbb5b8e7f4e",
+        "7a82be223720008f33a9ae1cc27bcb30a04ea6d18667c368702d911283eaa7eb",
+        "7d2b0dc9f8506b1ceded94d7f8c17169718e4157320ba44bf806dd97379cb982",
+        "80e4e02024c7f569a441620f3d1d45a9c07e9dfca4ede296709c9eabc5ac3406",
+        "86d2217ffce9c23af91574b956317a4800e9005b05d2d8d447aee9665109f7cf",
+        "90b885d93cbf024ba4f02046fea6e8d4a8add9f0aac7f79bb42838c8b5e9ce08",
+        "949c197cd45599c0b9e930237fbe0254e6d6e52d6534939714ae46c423e15817",
+        "9aad8733c44f83ecc68d221e720cbbc95f9354635133d0a127b1c6f7e63fb012",
+        "9b587f696050842664973fe4796ea9f9461a9846ce456705aa1bf0ecbaf2fe0b",
+        "9bee275da48f0239f1d1f41fc56228e7277e25e98455b2da9a7b4ddc7aacea95",
+        "9d0982f5edb5c5dd0468b1d8bf16fe1fb363706d0b6b1e470ad275705669ba99",
+        "a0cd3f6df54f83322f4939f47b512a1db723f25f165a93eb2ed02d28b30f9300",
+        "a37f0667e5e8c79e6da60caeb70c6fd7f355f4e0fe8474f78567e4df261d8aa2",
+        "a43a1c83e948b12ebfd93e3305474dc9fa67774daed823ddbb7f3be681566a85",
+        "a52ab86aa172ff50f22eeae9fe93816c2ad248262cbf243409b7583ea247ec11",
+        "a7c9739a056ee485d419c397be8faae2b602b2a6a2bed66472dd310672234d63",
+        "a82e712db2adc4322de9bf2cf342d17c62eb9ce9167252d82ea32d7329e93d83",
+        "a9c6f143a1302914eacb49bdea9702bf2df8e819bca904ad70db71cf33020f2e",
+        "b5caa196d3d7ca4b5ee245668c149248ed87cfa0fb36acc9affd80b6732dc7ea",
+        "c0906dfdeb86fbee3b0d3c0668f9bc1ce236a7860ac192f40405e399dea820dd",
+        "c15c7bddd277af0e3f039209daade26b8fdaa137046eb07f2159263f9ed3d3c1",
+        "c1e3fbaaa7ddf019a68d2cc64c9866af0a70a41567b9130b241ad6692985b4d2",
+        "c4d9a82c8edd71bee91fe2a33d3eb7b02ff55fcb4b2f4c15df6b56d81b7a80bb",
+        "c726959cb0b10fff91a9926a8e933fdfd38e8c3391a8ef966e55abdb1666eeef",
+        "c7374b2a3b0fd0a875437a4f0b2545881c151d2ed405788a3cccb394d9f59d80",
+        "ccc079a49bf0b746a7faa87d5cd67d6c8dc660ff9d9a71e553cfaca44131908b",
+        "ce17d596fe01a15a635a3c7f32448684c49af31c94e5ff013421f9b410977d14",
+        "cfc2b2890b08eb578b2cae960e238694b6ceceee25890951352accc36eec60aa",
+        "d12f63fd80977381dbb578e28d160b3c427758190ef4612e793d8f61793dcbfb",
+        "d76f57b646f12751da72885c291a36d62fadf82eda0904195803269858fd69c4",
+        "d8ae2b5dfa8635f00e95cd955ad9d1644dba5a83425df108bc54f997b7ce7eb3",
+        "d99ff43bb22b409cb8f303db8fb1da70e97632b4c576f2e6b4cd23f9007857f4",
+        "df016a5a5fa5bd4650cc2aab151b690f3d6bb090d4a4719186880b1335d81020",
+        "e3a52bf0fd1f70cc14a32c87f52c3cb992884e776b90f6ff5ad761ac371a3b40",
+        "e825b65927b437650d587440882aaff4ef615827d65cb349da17fb5ea3b52105",
+        "ed71f5978eeb186584dd39021d1f100b3bcc299e7adbcdb5e32c943b76ff547f",
+        "eecbdb745f249abdf34cbb8b16cb711dd3f7fe1a1adb96c69afa61e626cf5869",
+        "eedb3b74afdf35ff000e55053017135821d566c9bb9557d9e8334c604dcdc0b0",
+        "f1c381e7bf9495e2d6a7053cc29ff3e7bcb45474f48c2e5aa332bb1a7eab4b2b",
+        "f262e04254a2aa45f49284f488f1c8f84f25a304982850ba424b2a81c5d4caeb",
+        "fb8679e18892129c34401127bb860c66af2765dac60b8359cc790a65f18aae5a",
+        "fccc2b884675f7257dfdb6eb4dfe19d9b667f8580317a29210a2bac4e41d74a7",
+        "fd8ae2a7849d06ff076b432bc9d92b149499a577c3b081f1b46483fb0f5220c2",
+        "fda59e27dbaeb9a610671f96c7057b57dadc781736baa41681c5aada35d3d883",
+        "feec3389b37fdfe7a6c60d42698522c7db4c4abf7e0999593c247ab4121202c9"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "path": "ultraperformance/reimpl2160/post_rev_411_2160.hlsl",
+      "size": 8975,
+      "sha256": "24538a74358f21b4aeadcc36513731a95bebea6121f5583ff060a7a5f30d1846"
+    },
+    {
+      "path": "ultraperformance/reimpl2160/reimpl_pass10_2160.hlsl",
+      "size": 27078,
+      "sha256": "137d7ec92c5c73b07a332a0552dd3820bd6893e4d123f2f5bea170beabb66da7"
+    },
+    {
+      "path": "ultraperformance/reimpl2160/reimpl_pass11_2160.hlsl",
+      "size": 9699,
+      "sha256": "0d3f267e4fbead763b058396ce1b5d6119fe5aeb85bcb60cd720601c4daf9862"
+    },
+    {
+      "path": "ultraperformance/reimpl2160/reimpl_pass12_2160.hlsl",
+      "size": 20201,
+      "sha256": "128d81e1a69f176a7356d40ec57f46852183508397257a15ab776f47c4d9787a"
+    },
+    {
+      "path": "ultraperformance/reimpl2160/reimpl_pass1_2160.hlsl",
+      "size": 20202,
+      "sha256": "006bf7b34e39cef984719a9aa1d728edca045f9afaa0808dc640a28c1bfe2205"
+    },
+    {
+      "path": "ultraperformance/reimpl2160/reimpl_pass2_2160.hlsl",
+      "size": 20203,
+      "sha256": "4d05a327c4c9cea32e55e769a30efd4633d18c8e736d06299521d4ced2b6824c"
+    },
+    {
+      "path": "ultraperformance/reimpl2160/reimpl_pass3_2160.hlsl",
+      "size": 2875,
+      "sha256": "2c58d369776875f46c8376beb91e63cb5dca7f8b72da72e842020792c55565b8"
+    },
+    {
+      "path": "ultraperformance/reimpl2160/reimpl_pass4_2160.hlsl",
+      "size": 27292,
+      "sha256": "1216fc29916983bdc0e27427ff6ebf773d3ec6f44f3e4710420a555a74e97493"
+    },
+    {
+      "path": "ultraperformance/reimpl2160/reimpl_pass5_2160.hlsl",
+      "size": 27275,
+      "sha256": "be2342033ce2f14e5cf3e3c4b5525bed7f8e65e01f91c5ba7ee9fad4fc0e4359"
+    },
+    {
+      "path": "ultraperformance/reimpl411/post_rev_411.hlsl",
+      "size": 8954,
+      "sha256": "0230b63c44fbfb2a333ab9ff82cce175ed512e151d0cc19fe6d1bc206d8e27fd"
+    },
+    {
+      "path": "ultraperformance/reimpl411/post_rev_411_tables.hlsli",
+      "size": 12674,
+      "sha256": "a51f8afbbbf46337f813032b5f700f3a6f686b64559fcb46794960d1a1b0476f"
+    },
+    {
+      "path": "ultraperformance/reimpl411/reimpl_pass1.hlsl",
+      "size": 20188,
+      "sha256": "55e6e9132d0fecfea578976898a0e5de5961766a6ce4176c6c63985a01add288"
+    },
+    {
+      "path": "ultraperformance/reimpl411/reimpl_pass10.hlsl",
+      "size": 27059,
+      "sha256": "6bc62e0dcd57c207180e579a9628168fd9b26175085fb03ab7b34c879fca6a7d"
+    },
+    {
+      "path": "ultraperformance/reimpl411/reimpl_pass11.hlsl",
+      "size": 9683,
+      "sha256": "a64065e6f84f4814ac953b8d11a6fa467d5670707caac57b6b79f1d0e4368554"
+    },
+    {
+      "path": "ultraperformance/reimpl411/reimpl_pass12.hlsl",
+      "size": 20188,
+      "sha256": "d0018220fc9444fd2a9df6adb5fafd7a27d0976928c313a74fa244cacbc7a557"
+    },
+    {
+      "path": "ultraperformance/reimpl411/reimpl_pass2.hlsl",
+      "size": 20188,
+      "sha256": "9cd0fd35cbfe6897f1ad4adb0efff15fab2503830d5424e4ef086f7115863d75"
+    },
+    {
+      "path": "ultraperformance/reimpl411/reimpl_pass3.hlsl",
+      "size": 2862,
+      "sha256": "05fcf0c25b2bdb4d1fdb20b7f148fbc2a884e00377a6661681e374a53c8c63ed"
+    },
+    {
+      "path": "ultraperformance/reimpl411/reimpl_pass4.hlsl",
+      "size": 27272,
+      "sha256": "0a43ddf849a7de90c9c2de86c5349fca34329d59b8073ae19a47980dc0b12514"
+    },
+    {
+      "path": "ultraperformance/reimpl411/reimpl_pass5.hlsl",
+      "size": 27256,
+      "sha256": "9fb98fc1d3c644ee2463edbecfa6d3d60f536e225d9f0ac73cbb92115bf645ab"
+    },
+    {
+      "path": "ultraperformance/reimpl4320/post_rev_411_4320.hlsl",
+      "size": 8975,
+      "sha256": "9d78789035cae2f1d9c67f61f6689a9d58b609b09d4f4439e4586f079ec83541"
+    },
+    {
+      "path": "ultraperformance/reimpl4320/reimpl_pass10_4320.hlsl",
+      "size": 27100,
+      "sha256": "320fc1e89d5c9bd62f0bd8be63f9a6b1f3800f8ffea6eebb5518f972d972f3b7"
+    },
+    {
+      "path": "ultraperformance/reimpl4320/reimpl_pass11_4320.hlsl",
+      "size": 9705,
+      "sha256": "714f59213c208de34f30742eca81518046cb61da82dc5fe521514fd987dbe353"
+    },
+    {
+      "path": "ultraperformance/reimpl4320/reimpl_pass12_4320.hlsl",
+      "size": 20203,
+      "sha256": "1b188e871ecd02781762a3ac90e54182c614315c6ca8bd9b32b4bf7e291716ab"
+    },
+    {
+      "path": "ultraperformance/reimpl4320/reimpl_pass1_4320.hlsl",
+      "size": 20203,
+      "sha256": "41eba29252d7e87cddddd8cdd79b113bd108096c68bd944956bee98a8552fb36"
+    },
+    {
+      "path": "ultraperformance/reimpl4320/reimpl_pass2_4320.hlsl",
+      "size": 20205,
+      "sha256": "9863deb5649b41eee8393374a772072096a9edc4e04bf8afee641d0bbd84850b"
+    },
+    {
+      "path": "ultraperformance/reimpl4320/reimpl_pass3_4320.hlsl",
+      "size": 2881,
+      "sha256": "87dc36924afd8cab2dea6b4a61d225d2dcebcd1cc877a523e84b5e9cf310a71e"
+    },
+    {
+      "path": "ultraperformance/reimpl4320/reimpl_pass4_4320.hlsl",
+      "size": 27243,
+      "sha256": "1e5292c965ae3b9d1a5e48a2276adc73563e4fc59db3088212ac48a925d092d6"
+    },
+    {
+      "path": "ultraperformance/reimpl4320/reimpl_pass5_4320.hlsl",
+      "size": 27217,
+      "sha256": "97249cb6bd6c55b56bbe849637b24f7c5a5d619729c8b784f4fc713c45e1474f"
+    }
+  ]
+}

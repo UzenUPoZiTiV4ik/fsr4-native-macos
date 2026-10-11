@@ -1,0 +1,22 @@
+[
+  {
+    "frame": 0,
+    "finite": true,
+    "rgb_mae": 0.0018851705826818943,
+    "rgb_rmse": 0.003343445248901844,
+    "rgb_max_abs": 0.18505859375,
+    "p99_abs": 0.0126953125,
+    "exact_value_max": 1.044921875,
+    "optimized_exact_byte_equal": true
+  },
+  {
+    "frame": 1,
+    "finite": true,
+    "rgb_mae": 0.02254820615053177,
+    "rgb_rmse": 0.046133000403642654,
+    "rgb_max_abs": 0.9608078002929688,
+    "p99_abs": 0.13037109375,
+    "exact_value_max": 1.0263671875,
+    "optimized_exact_byte_equal": true
+  }
+]

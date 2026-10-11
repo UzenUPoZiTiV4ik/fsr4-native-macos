@@ -101,8 +101,7 @@ struct View {
     uint32_t uw = 0, uh = 0;
     id<MTLTexture> recurrent, history, reproj;
     bool zeroTargets = false;
-    float prevJitter[2] = {0, 0};
-    float prevPre = 0;
+    Fsr4InputHistory inputHistory = {};
     bool first = true;
     std::string sessionKey;      // shader variant the last encode ran; a change re-creates the model
     uint64_t encodes = 0;
@@ -261,8 +260,10 @@ struct Settings {
     bool loaded = false;
     float sharpness = 0.4f;
     bool rcas = true;
+    int profile = 1; // 0 Exact, 1 Lossy, 2 Exact-fast, 3 FSR 4.0.2 model
     std::string path;
     time_t mtime = 0;
+    long mtimeNs = 0;
     double lastCheck = 0;
 };
 static Settings g_set;
@@ -271,6 +272,18 @@ static void settings_read_file_locked();
 static Fsr4LiveStatus g_status;
 static std::mutex g_status_mu;
 
+// Profile names in panel.conf / FSR4_PROFILE; digits are the older form.
+static int profile_from_name(const char *name) {
+    if (!strcmp(name, "exact") || !strcmp(name, "0")) return 0;
+    if (!strcmp(name, "lossy") || !strcmp(name, "1")) return 1;
+    if (!strcmp(name, "exact-fast") || !strcmp(name, "2")) return 2;
+    if (!strcmp(name, "fsr4") || !strcmp(name, "3")) return 3;
+    return -1;
+}
+static const char *profile_label(int profile) {
+    return profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4" : "exact";
+}
+
 static void settings_load_locked() {
     if (g_set.loaded) return;
     g_set.loaded = true;
@@ -278,6 +291,11 @@ static void settings_load_locked() {
     if (const char *e = getenv("FSR4_RCAS")) if (e[0] == '0') g_set.rcas = false;
     if (!(g_set.sharpness > 0.f)) { g_set.sharpness = 0.f; g_set.rcas = false; }
     if (g_set.sharpness > 1.f) g_set.sharpness = 1.f;
+    if (const char *e = getenv("FSR4_PROFILE")) {
+        const int profile = profile_from_name(e);
+        if (profile >= 0) g_set.profile = profile;
+        else if (*e) flog("FSR4_PROFILE must be exact, exact-fast, lossy or fsr4; using lossy");
+    }
     const char *sp = getenv("FSR4_SETTINGS");
     if (sp && !strcmp(sp, "none")) return;
     if (sp && sp[0]) g_set.path = sp;
@@ -290,31 +308,58 @@ static void settings_read_file_locked() {
     if (g_set.path.empty()) return;
     struct stat st;
     if (stat(g_set.path.c_str(), &st) != 0) return;
-    if (st.st_mtime == g_set.mtime) return;
-    g_set.mtime = st.st_mtime;
+    if (st.st_mtime == g_set.mtime && st.st_mtimespec.tv_nsec == g_set.mtimeNs) return;
     FILE *f = fopen(g_set.path.c_str(), "r");
     if (!f) return;
     char line[128];
     while (fgets(line, sizeof line, f)) {
         float v;
         int iv;
-        if (sscanf(line, "sharpness=%f", &v) == 1) g_set.sharpness = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
+        char profile[16];
+        if (sscanf(line, "sharpness=%f", &v) == 1 && std::isfinite(v)) g_set.sharpness = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
         else if (sscanf(line, "rcas=%d", &iv) == 1) g_set.rcas = iv != 0;
+        else if (sscanf(line, "profile=%15s", profile) == 1) {
+            const int value = profile_from_name(profile);
+            if (value >= 0) g_set.profile = value;
+        }
     }
+    const bool ok = !ferror(f);
     fclose(f);
+    if (ok) { g_set.mtime = st.st_mtime; g_set.mtimeNs = st.st_mtimespec.tv_nsec; }
+}
+
+static void settings_refresh_locked() {
+    settings_load_locked();
+    const double t = now_ms();
+    if (t - g_set.lastCheck > 500.0) { g_set.lastCheck = t; settings_read_file_locked(); }
+}
+
+static void settings_write_file_locked() {
+    if (g_set.path.empty()) return;
+    const std::string temporary = g_set.path + ".tmp." + std::to_string(getpid());
+    FILE *f = fopen(temporary.c_str(), "w");
+    if (!f) { flog("cannot write panel settings"); return; }
+    bool ok = fprintf(f, "sharpness=%.3f\nrcas=%d\nprofile=%s\n", g_set.sharpness,
+                      g_set.rcas ? 1 : 0, profile_label(g_set.profile)) > 0;
+    if (fclose(f) != 0) ok = false;
+    if (!ok || rename(temporary.c_str(), g_set.path.c_str()) != 0) {
+        unlink(temporary.c_str()); flog("cannot save panel settings"); return;
+    }
+    struct stat st;
+    if (stat(g_set.path.c_str(), &st) == 0) {
+        g_set.mtime = st.st_mtime; g_set.mtimeNs = st.st_mtimespec.tv_nsec;
+    }
 }
 
 static float sharpness_setting() {
     std::lock_guard<std::mutex> lk(g_set_mu);
-    settings_load_locked();
-    const double t = now_ms();
-    if (t - g_set.lastCheck > 500.0) { g_set.lastCheck = t; settings_read_file_locked(); }
+    settings_refresh_locked();
     return g_set.rcas ? g_set.sharpness : 0.f;
 }
 
 extern "C" void fsr4_live_get_sharpness(float *sharpness, int *rcas) {
     std::lock_guard<std::mutex> lk(g_set_mu);
-    settings_load_locked();
+    settings_refresh_locked();
     if (sharpness) *sharpness = g_set.sharpness;
     if (rcas) *rcas = g_set.rcas ? 1 : 0;
 }
@@ -322,21 +367,55 @@ extern "C" void fsr4_live_get_sharpness(float *sharpness, int *rcas) {
 extern "C" void fsr4_live_set_sharpness(float sharpness, int rcas) {
     std::lock_guard<std::mutex> lk(g_set_mu);
     settings_load_locked();
+    settings_read_file_locked();
+    if (!std::isfinite(sharpness)) return;
     g_set.sharpness = sharpness < 0.f ? 0.f : sharpness > 1.f ? 1.f : sharpness;
     g_set.rcas = rcas != 0;
-    if (g_set.path.empty()) return;
-    FILE *f = fopen(g_set.path.c_str(), "w");
-    if (!f) return;
-    fprintf(f, "sharpness=%.3f\nrcas=%d\n", g_set.sharpness, g_set.rcas ? 1 : 0);
-    fclose(f);
-    struct stat st;
-    if (stat(g_set.path.c_str(), &st) == 0) g_set.mtime = st.st_mtime;
+    settings_write_file_locked();
+}
+
+extern "C" void fsr4_live_get_profile(int *profile) {
+    std::lock_guard<std::mutex> lk(g_set_mu);
+    settings_refresh_locked();
+    if (profile) *profile = g_set.profile;
+}
+
+// FSR4_VERSION=4.0.2 forces the old model. Otherwise (4.1.1 or unset) the
+// panel's "fsr4" profile selects it, and every other profile selects 4.1.1.
+extern "C" const char *fsr4_live_model_version(void) {
+    const char *version = getenv("FSR4_VERSION");
+    if (version && *version && strcmp(version, "4.1.1")) return version;
+    int profile = 1;
+    fsr4_live_get_profile(&profile);
+    return profile == 3 ? "4.0.2" : "4.1.1";
+}
+
+extern "C" void fsr4_live_set_profile(int profile) {
+    if (profile < 0 || profile > 3) return;
+    std::lock_guard<std::mutex> lk(g_set_mu);
+    settings_load_locked();
+    settings_read_file_locked();
+    g_set.profile = profile;
+    settings_write_file_locked();
 }
 
 extern "C" void fsr4_live_get_status(Fsr4LiveStatus *out) {
     if (!out) return;
     std::lock_guard<std::mutex> lk(g_status_mu);
     *out = g_status;
+}
+
+extern "C" void fsr4_live_set_status(const Fsr4LiveStatus *status) {
+    if (!status) return;
+    {
+        std::lock_guard<std::mutex> lk(g_status_mu);
+        g_status = *status;
+        g_status.reason[sizeof(g_status.reason) - 1] = 0;
+        g_status.preset[sizeof(g_status.preset) - 1] = 0;
+        g_status.model[sizeof(g_status.model) - 1] = 0;
+        g_status.variant[sizeof(g_status.variant) - 1] = 0;
+    }
+    fsr4_panel_publish();
 }
 
 extern "C" void fsr4_live_set_inactive(const char *reason) {
@@ -931,11 +1010,11 @@ static bool copy_output(Shared &sh, id enc, bool mtl4, id<MTLTexture> src, id<MT
     return true;
 }
 
-int fsr4_encode_live_frame(const Fsr4LiveFrame *f) {
+static int encode_legacy_frame(const Fsr4LiveFrame *f, const Fsr4InputGeometry &geometry,
+                               int inputContentProperties) {
     if (!f || !f->device || !f->commandBuffer || !f->color || !f->depth || !f->motion || !f->output)
-        return fail_reason("нет текстур от скейлера");
-    if (!f->rw || !f->rh || !f->uw || !f->uh) return fail_reason("нулевой размер");
-    fsr4_panel_request();
+        return fail_reason("no textures from the scaler");
+    if (!f->rw || !f->rh || !f->uw || !f->uh) return fail_reason("zero size");
     // Provider: upscaleWidth/Height = AlignUp(upscaleSize, 8); the internal
     // textures, constants and dispatch sizes use the aligned size, the app's
     // output texture keeps its own size (writes past its edge are dropped).
@@ -954,10 +1033,26 @@ int fsr4_encode_live_frame(const Fsr4LiveFrame *f) {
     const uint64_t n = sh.encodes;
     View &v = *ensure_view(sh, f->owner);
     v.encodes++;
+    struct InputHistoryGuard {
+        View &view;
+        Shared &shared;
+        bool committed = false;
+        ~InputHistoryGuard() {
+            if (!committed) {
+                fsr4_input_invalidate(&view.inputHistory);
+                view.first = true;
+                if (view.lastOut && shared.lastRealOut == view.lastOut) shared.lastRealOut = nil;
+            }
+        }
+    } inputHistoryGuard{v, sh};
 
-    // A motion texture smaller than the content region is not a motion field
-    // (D3DMetal binds a 4x4 RGBA8 placeholder for an unbound resource).
-    const bool stub = mv.width < rw || mv.height < rh;
+    // D3DMetal's known unbound-resource placeholder. A valid output-res MV
+    // field may be smaller than render content when downscaling; dimensions
+    // alone must not classify it as a placeholder or infer its convention.
+    const uint32_t expectedMvW = f->outputResMV > 0 ? f->uw : rw;
+    const uint32_t expectedMvH = f->outputResMV > 0 ? f->uh : rh;
+    const bool stub = mv.width == 4 && mv.height == 4 && mv.pixelFormat == MTLPixelFormatRGBA8Unorm
+                   && (mv.width < expectedMvW || mv.height < expectedMvH);
     StubPolicy policy = stub_policy();
 
     const bool trace = n <= 60 || (n % 600) == 0;
@@ -975,7 +1070,7 @@ int fsr4_encode_live_frame(const Fsr4LiveFrame *f) {
               f->preExposure, f->reset, f->depthReversed, f->jitteredMV, f->outputResMV, f->autoExposure,
               f->mvOffX, f->mvOffY);
 
-    if (stub && policy == STUB_METALFX) return fail_reason("заглушка motion, отдано MetalFX");
+    if (stub && policy == STUB_METALFX) return fail_reason("stub motion, handed to MetalFX");
 
     // Variant flags: descriptor first, environment overrides.
     int lowRes = f->outputResMV > 0 ? 0 : 1;
@@ -989,6 +1084,23 @@ int fsr4_encode_live_frame(const Fsr4LiveFrame *f) {
         if (!strcmp(e, "srgb")) cs = 2;
         else if (!strcmp(e, "pq")) cs = 3;
     }
+    Fsr4InputDesc input = fsr4_live_input_desc(f, &geometry, inputContentProperties);
+    if (const char *e = getenv("FSR4_LOW_RES_MV")) if (e[0]) input.outputResMV = !lowRes;
+    if (const char *e = getenv("FSR4_JITTERED_MV")) if (e[0]) input.jitteredMV = jittered;
+    if (const char *e = getenv("FSR4_AUTOEXPOSURE")) if (e[0]) input.autoExposure = ae;
+    Fsr4InputPrepared prepared = {};
+    // A placeholder encode can copy the previous real result without reading
+    // its invalid motion field. Every actual network execution must satisfy
+    // the full input contract, even under the historic stub run/reset modes.
+    if (stub && policy == STUB_SKIP) {
+        if (!fsr4_input_region_fits(geometry.output, f->uw, f->uh)
+            || fsr4_input_surface_needs_copy(geometry.output, f->uw, f->uh))
+            return fail_reason("legacy stub output region requires FSR 4.1.1");
+    } else {
+        const auto inputStatus = fsr4_input_prepare(&input, &v.inputHistory, 0, &prepared);
+        if (!fsr4_input_status_ok(inputStatus)) return fail_reason(fsr4_input_status_reason(inputStatus));
+        if (prepared.copyMask) return fail_reason("input region copies require FSR 4.1.1");
+    }
     const char *preset = preset_for(rw, uw);
     int resIdx = 0;
     const char *resStr = "1080";
@@ -1001,13 +1113,13 @@ int fsr4_encode_live_frame(const Fsr4LiveFrame *f) {
     id enc = [cb computeCommandEncoder];
     if (!enc) {
         if (!g_fail_logged++) flog("command buffer already encoding");
-        return fail_reason("command buffer занят");
+        return fail_reason("command buffer busy");
     }
     const bool mtl4 = ![enc respondsToSelector:@selector(setBuffer:offset:atIndex:)];
     if (mtl4 && ![enc respondsToSelector:@selector(setArgumentTable:)]) {
         [enc endEncoding];
         flog("encoder is not Metal or Metal 4, MetalFX fallback");
-        return fail_reason("неизвестный тип энкодера");
+        return fail_reason("unknown encoder type");
     }
     const bool qbar = mtl4 && env_int("FSR4_QBARRIER", 1) != 0
                       && [enc respondsToSelector:@selector(barrierAfterQueueStages:beforeStages:visibilityOptions:)];
@@ -1036,74 +1148,66 @@ int fsr4_encode_live_frame(const Fsr4LiveFrame *f) {
         if (!onceStub++)
             flogf("stub motion %lux%lu %s: skipped FSR4, %s", (unsigned long)mv.width, (unsigned long)mv.height,
                   fmt_name(mv.pixelFormat), copied ? "copied last real output" : "left output untouched");
-        return 1;
+        return copied ? 1 : fail_reason("stub motion has no compatible previous output");
     }
 
     Session *sp = ensure_session(dev, preset, resIdx, resStr, f->depthReversed ? 1 : 0, lowRes, jittered, cs, ae);
     if (!sp || !ensure_scratch(sh, resIdx) || !fit_targets(sh, v, uw, uh)) {
         [enc endEncoding];
-        return fail_reason(!sp ? "шейдеры не собрались (см. hook.log)" : "не выделилась память");
+        return fail_reason(!sp ? "shaders failed to build (see hook.log)" : "memory allocation failed");
     }
     Session &s = *sp;
     const float sharpness = sharpness_setting();
     const bool rcas = sharpness > 0.f;
     if (!s.kernels.count("fsr4_pre") || !s.kernels.count("fsr4_post") || (ae && !s.kernels.count("fsr4_spd"))
         || (rcas && !s.kernels.count("fsr4_rcas"))) {
-        [enc endEncoding]; return fail_reason("в metallib нет нужных ядер");
+        [enc endEncoding]; return fail_reason("metallib is missing kernels");
     }
     if (rcas && (sh.rcasW != uw || sh.rcasH != uh || !sh.rcasTemp)) {
         sh.rcasTemp = make_tex(dev, MTLPixelFormatRGBA16Float, uw, uh);
         sh.rcasW = uw; sh.rcasH = uh;
-        if (!sh.rcasTemp) { [enc endEncoding]; return fail_reason("не выделилась RCAS-текстура"); }
+        if (!sh.rcasTemp) { [enc endEncoding]; return fail_reason("RCAS texture allocation failed"); }
     }
     for (int i = 1; i <= 13 && !s.i8; i++) {
         if (i == 13) break;
         char kn[64];
         snprintf(kn, sizeof kn, "fsr4_model_v07_f16_pass%d", i);
-        if (!s.kernels.count(kn)) { [enc endEncoding]; return fail_reason("нет fp16-прохода модели"); }
+        if (!s.kernels.count(kn)) { [enc endEncoding]; return fail_reason("missing fp16 model pass"); }
     }
     if (s.i8) {
         for (int i = 1; i <= 13; i++)
-            if (!s.i8mpp.has(i)) { [enc endEncoding]; flogf("i8mpp: pass %d missing", i); return fail_reason("нет i8mpp-прохода"); }
+            if (!s.i8mpp.has(i)) { [enc endEncoding]; flogf("i8mpp: pass %d missing", i); return fail_reason("missing i8mpp pass"); }
         s.i8mpp.set_region(uw, uh);
     }
 
-    const float pe = f->preExposure > 0.f ? f->preExposure : 1.f;
-    id<MTLTexture> expTex = exp ? exp : sh.exposureOne;
     // Provider: reset is forced on the dispatch that (re)creates the model —
     // the first frame of a context and every preset/colourspace change.
     const bool modelChanged = v.first || v.sessionKey != s.key;
     const bool forceReset = (stub && policy == STUB_RESET) || modelChanged;
-    v.sessionKey = s.key;
+    const auto inputStatus = fsr4_input_prepare(&input, &v.inputHistory, forceReset, &prepared);
+    if (!fsr4_input_status_ok(inputStatus)) {
+        [enc endEncoding]; return fail_reason(fsr4_input_status_reason(inputStatus));
+    }
+    const float pe = prepared.preExposure;
+    id<MTLTexture> expTex = prepared.exposureMode == FSR4_INPUT_EXPOSURE_TEXTURE ? exp : sh.exposureOne;
 
     OptCB oc = {};
     oc.inv_size[0] = 1.f / uw; oc.inv_size[1] = 1.f / uh;
     oc.scale[0] = (float)uw / rw; oc.scale[1] = (float)uh / rh;
     oc.inv_scale[0] = 1.f / oc.scale[0]; oc.inv_scale[1] = 1.f / oc.scale[1];
     oc.tex_size[0] = (float)uw; oc.tex_size[1] = (float)uh;
-    oc.max_renderSize[0] = (float)rw; oc.max_renderSize[1] = (float)rh;
+    oc.max_renderSize[0] = (float)prepared.maxInputWidth; oc.max_renderSize[1] = (float)prepared.maxInputHeight;
     oc.width = uw; oc.height = uh;
     oc.width_lr = rw; oc.height_lr = rh;
-    oc.jitter[0] = f->jitterX; oc.jitter[1] = f->jitterY;
-    // Provider: mv_scale = motionVectorScale / mvSize, mvSize = render size for
-    // low-res motion vectors. MetalFX's scale already turns the texture into
-    // pixels with the FSR/DLSS sign (vector points to the previous position).
-    const uint32_t mvW = s.lowResMv ? rw : uw;
-    const uint32_t mvH = s.lowResMv ? rh : uh;
-    oc.mv_scale[0] = f->mvScaleX / mvW;
-    oc.mv_scale[1] = f->mvScaleY / mvH;
-    if (s.jittered) {
-        oc.fMotionVectorJitterCancellation[0] = (v.prevJitter[0] - f->jitterX) / mvW;
-        oc.fMotionVectorJitterCancellation[1] = (v.prevJitter[1] - f->jitterY) / mvH;
-    }
-    v.prevJitter[0] = f->jitterX; v.prevJitter[1] = f->jitterY;
-    oc.reset = (f->reset || forceReset) ? 1u : 0u;
+    oc.jitter[0] = prepared.jitter[0]; oc.jitter[1] = prepared.jitter[1];
+    oc.mv_scale[0] = prepared.mvScale[0]; oc.mv_scale[1] = prepared.mvScale[1];
+    oc.fMotionVectorJitterCancellation[0] = prepared.jitterCancellation[0];
+    oc.fMotionVectorJitterCancellation[1] = prepared.jitterCancellation[1];
+    oc.reset = prepared.reset;
     oc.rcas_enabled = rcas ? 1u : 0u;
     oc.rcas_sharpness = sharpness;
-    oc.previous_preExposure = v.first ? 0.f : v.prevPre;
+    oc.previous_preExposure = prepared.previousPreExposure;
     oc.preExposure = pe;
-    v.prevPre = pe;
-    v.first = false;
 
     SpdCB sc = {};
     uint32_t spdGroups[2] = {0, 0};
@@ -1173,10 +1277,10 @@ int fsr4_encode_live_frame(const Fsr4LiveFrame *f) {
 
     @try {
     if (depthTex) {
-        if (!sh.depthPso) { [enc endEncoding]; return fail_reason("нет ядра копии глубины"); }
+        if (!sh.depthPso) { [enc endEncoding]; return fail_reason("missing depth copy kernel"); }
         if (mtl4) {
             if (!helper_m4(sh, enc, "depth", sh.depthPso, dep, sh.depthCopy, nil, nil, nil,
-                           MTLSizeMake(rw, rh, 1), MTLSizeMake(8, 8, 1))) { [enc endEncoding]; return fail_reason("копия глубины не закодировалась"); }
+                           MTLSizeMake(rw, rh, 1), MTLSizeMake(8, 8, 1))) { [enc endEncoding]; return fail_reason("depth copy failed to encode"); }
         } else {
             helper_classic(enc, sh.depthPso, dep, sh.depthCopy, nil, nil, nil,
                            MTLSizeMake(rw, rh, 1), MTLSizeMake(8, 8, 1));
@@ -1236,7 +1340,7 @@ int fsr4_encode_live_frame(const Fsr4LiveFrame *f) {
         if (!ok) {
             [enc endEncoding];
             flogf("dispatch failed: %s", p.n);
-            return fail_reason("dispatch не удался");
+            return fail_reason("dispatch failed");
         }
     }
 
@@ -1286,8 +1390,12 @@ int fsr4_encode_live_frame(const Fsr4LiveFrame *f) {
     } @catch (NSException *e) {
         flogf("encode exception: %s", e.reason.UTF8String);
         if ([enc respondsToSelector:@selector(endEncoding)]) [enc endEncoding];
-        return fail_reason("исключение при кодировании (см. hook.log)");
+        return fail_reason("exception while encoding (see hook.log)");
     }
+    fsr4_input_commit(&v.inputHistory, &prepared);
+    inputHistoryGuard.committed = true;
+    v.sessionKey = s.key;
+    v.first = false;
     v.lastOut = out;
     if (!stub) {
         sh.lastRealOut = out;
@@ -1320,6 +1428,113 @@ int fsr4_encode_live_frame(const Fsr4LiveFrame *f) {
               oc.mv_scale[0], oc.mv_scale[1], oc.reset, sharpness, rcas ? " (RCAS)" : " (RCAS off)",
               qbar ? 1 : 0, stub ? " (stub motion, ran anyway)" : "");
     return 1;
+}
+
+// Optional while linking a legacy-only dylib. An explicit 4.1.1 request must
+// never silently execute the old model under the new version's name.
+extern "C" int fsr411_encode_live_frame(const Fsr4LiveFrameV2 *) __attribute__((weak_import));
+extern "C" void fsr411_invalidate_owner(void *, void *) __attribute__((weak_import));
+extern "C" void fsr411_release_owner(void *, void *) __attribute__((weak_import));
+
+static void invalidate_legacy_input(const Fsr4LiveFrame *frame) {
+    if (!frame) return;
+    std::lock_guard<std::mutex> lock(g_mu);
+    if (!g_sh || (__bridge void *)g_sh->dev != frame->device) return;
+    const auto it = g_sh->views.find(frame->owner);
+    if (it == g_sh->views.end()) return;
+    View &view = *it->second;
+    fsr4_input_invalidate(&view.inputHistory);
+    view.first = true;
+    if (view.lastOut && g_sh->lastRealOut == view.lastOut) g_sh->lastRealOut = nil;
+}
+
+void fsr4_invalidate_live_owner(void *device, void *owner) {
+    Fsr4LiveFrame frame = {};
+    frame.device = device; frame.owner = owner;
+    invalidate_legacy_input(&frame);
+    if (fsr411_invalidate_owner) fsr411_invalidate_owner(device, owner);
+}
+
+void fsr4_release_live_owner(void *device, void *owner) {
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        if (g_sh && (__bridge void *)g_sh->dev == device) {
+            const auto it = g_sh->views.find(owner);
+            if (it != g_sh->views.end()) {
+                if (it->second->lastOut && g_sh->lastRealOut == it->second->lastOut)
+                    g_sh->lastRealOut = nil;
+                delete it->second;
+                g_sh->views.erase(it);
+            }
+        }
+    }
+    if (fsr411_release_owner) fsr411_release_owner(device, owner);
+}
+
+static int fail_input_frame(const Fsr4LiveFrame *frame, const char *reason) {
+    if (frame) fsr4_invalidate_live_owner(frame->device, frame->owner);
+    return fail_reason(reason);
+}
+
+static bool surface_matches_texture(Fsr4InputSurface surface, id<MTLTexture> texture, id<MTLDevice> device) {
+    return texture && texture.device == device && texture.width == surface.width && texture.height == surface.height;
+}
+
+int fsr4_encode_live_frame_v2(const Fsr4LiveFrameV2 *v2) {
+    if (!fsr4_live_frame_v2_valid(v2)) return fail_reason("unsupported live frame ABI or truncated frame");
+    const Fsr4LiveFrame *f = &v2->frame;
+    if (!f->device || !f->commandBuffer || !f->color || !f->depth || !f->motion || !f->output)
+        return fail_input_frame(f, "missing scaler textures or command buffer");
+    // Both model versions share the panel; request it before routing to either encoder.
+    fsr4_panel_request();
+    id<MTLDevice> dev = (__bridge id<MTLDevice>)f->device;
+    if (!surface_matches_texture(v2->geometry.color, (__bridge id<MTLTexture>)f->color, dev)
+        || !surface_matches_texture(v2->geometry.depth, (__bridge id<MTLTexture>)f->depth, dev)
+        || !surface_matches_texture(v2->geometry.motion, (__bridge id<MTLTexture>)f->motion, dev)
+        || !surface_matches_texture(v2->geometry.output, (__bridge id<MTLTexture>)f->output, dev))
+        return fail_input_frame(f, "input geometry/device disagrees with actual textures");
+    if (f->exposure && [(__bridge id<MTLTexture>)f->exposure device] != dev)
+        return fail_input_frame(f, "exposure texture belongs to a different device");
+    const char *version = fsr4_live_model_version();
+    if (!strcmp(version, "4.1.1")) {
+        invalidate_legacy_input(f);
+        if (!fsr411_encode_live_frame) return fail_reason("FSR 4.1.1 encoder is not linked");
+        Fsr4LiveStatus before = {};
+        fsr4_live_get_status(&before);
+        if (fsr411_encode_live_frame(v2)) return 1;
+        Fsr4LiveStatus after = {};
+        fsr4_live_get_status(&after);
+        // Preserve the new bridge's precise reason and avoid counting the
+        // same rejected encode twice. Still fail explicitly if it published
+        // no failure status of its own.
+        if (!after.active && after.reason[0] && after.encodes != before.encodes) return 0;
+        return fail_reason("FSR 4.1.1 rejected frame (see hook.log)");
+    }
+    if (strcmp(version, "4.0.2")) return fail_input_frame(f, "FSR4_VERSION must be 4.0.2 or 4.1.1");
+    // Switching models drops the other model's session and history.
+    if (fsr411_invalidate_owner) fsr411_invalidate_owner(f->device, f->owner);
+    return encode_legacy_frame(f, v2->geometry, v2->inputContentProperties);
+}
+
+int fsr4_encode_live_frame(const Fsr4LiveFrame *frame) {
+    if (!frame || !frame->color || !frame->depth || !frame->motion || !frame->output)
+        return fail_input_frame(frame, "missing legacy frame textures");
+    Fsr4LiveFrameV2 v2 = {};
+    v2.structSize = sizeof(v2); v2.abiVersion = FSR4_LIVE_FRAME_ABI_V2;
+    v2.frame = *frame;
+    v2.inputContentProperties = -1;
+    const auto capture = [](void *texture, uint32_t x, uint32_t y, Fsr4InputSurface &surface) {
+        id<MTLTexture> tx = (__bridge id<MTLTexture>)texture;
+        if (tx.width > UINT32_MAX || tx.height > UINT32_MAX) return false;
+        surface = {(uint32_t)tx.width, (uint32_t)tx.height, x, y};
+        return true;
+    };
+    if (!capture(frame->color, 0, 0, v2.geometry.color)
+        || !capture(frame->depth, 0, 0, v2.geometry.depth)
+        || !capture(frame->motion, frame->mvOffX, frame->mvOffY, v2.geometry.motion)
+        || !capture(frame->output, 0, 0, v2.geometry.output))
+        return fail_input_frame(frame, "legacy texture size exceeds input ABI");
+    return fsr4_encode_live_frame_v2(&v2);
 }
 
 int fsr4_encode_live(void *device, void *commandBuffer,

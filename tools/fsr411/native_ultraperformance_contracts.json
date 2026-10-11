@@ -1,0 +1,502 @@
+{
+  "schema": "fsr411_ultraperformance_native_contracts_v1",
+  "provider_version": "4.1.1.2740",
+  "initializer": "third_party/fsr411/initializers-ultraperformance.bin",
+  "initializer_sha256": "3c42fc6eabfa9b5b1e489df0e9b2f58e3f9fa22048c584f6839bb27d32a0640e",
+  "evidence": "third_party/fsr411/ultraperformance_manifest.json",
+  "tiers": [
+    1080,
+    2160,
+    4320
+  ],
+  "float_fields": [
+    "residual_scale",
+    "accumulator_scale",
+    "output_scale"
+  ],
+  "float_rule": "roundEven((residual * residual_scale + acc * accumulator_scale) * output_scale), then int16 wrap only when q[3] & 2, then signed-int8 clamp.",
+  "q_fields": [
+    "accumulator_left_shift",
+    "residual_left_shift",
+    "right_shift",
+    "flags"
+  ],
+  "q_rule": "roundEven(((acc << q[0]) + (residual << q[1])) / 2^q[2]), then int16 wrap when flags & 2, then signed-int8 clamp. Downsample stages have residual=0. Flags & 1 means ReLU before requant.",
+  "scope": "Applies with z dispatch count 1. Numeric table independently transcribed from verified original DXIL pairs. GPU equivalence still requires validation.",
+  "parsing_notes": [
+    "CNB1/2/12 retain common expression structure; read the overlay arrays and float scales.",
+    "DS3 now has ((q == 0) ? 7.8125e-03f : 3.90625e-03f); a single-scale regular expression must not accept or flatten it.",
+    "FNB4 residual scale now depends on qq; output scale still 64 for channels0..15 and32 for16..31.",
+    "FNB10 requant shifts swap and tail accumulator scale is2^-12.",
+    "CT11 intermediate output multiplier is16; final CT accumulator scale is2^-13.",
+    "POST uses direct float-to-i32 followed by signed clamp, without int16 wrap. Only POST requant shifts and baked weights/seeds differ between models.",
+    "PRE, padding and passes6..9 reuse common code but must bind the Ultra Performance initializer.",
+    "All HLSL include overlays must preserve unchanged common helpers; the overlay contains only changed files."
+  ],
+  "stages": [
+    {
+      "pass": 1,
+      "kind": "cnb",
+      "requant": [
+        7,
+        8
+      ],
+      "tails": [
+        {
+          "channels": [
+            0,
+            16
+          ],
+          "float": [
+            0.015625,
+            0.000244140625,
+            32
+          ],
+          "q": [
+            0,
+            6,
+            7,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "pass": 2,
+      "kind": "cnb",
+      "requant": [
+        8,
+        7
+      ],
+      "tails": [
+        {
+          "channels": [
+            0,
+            16
+          ],
+          "float": [
+            0.03125,
+            0.00048828125,
+            32
+          ],
+          "q": [
+            0,
+            6,
+            6,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "pass": 3,
+      "kind": "ds",
+      "requant": [],
+      "tails": [
+        {
+          "channels": [
+            0,
+            16
+          ],
+          "float": [
+            0,
+            0.0078125,
+            1
+          ],
+          "q": [
+            0,
+            0,
+            7,
+            2
+          ]
+        },
+        {
+          "channels": [
+            16,
+            32
+          ],
+          "float": [
+            0,
+            0.00390625,
+            1
+          ],
+          "q": [
+            0,
+            0,
+            8,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "pass": 4,
+      "kind": "fnb",
+      "requant": [
+        8,
+        7
+      ],
+      "tails": [
+        {
+          "channels": [
+            0,
+            16
+          ],
+          "float": [
+            0.015625,
+            0.00006103515625,
+            64
+          ],
+          "q": [
+            0,
+            8,
+            8,
+            2
+          ]
+        },
+        {
+          "channels": [
+            16,
+            32
+          ],
+          "float": [
+            0.03125,
+            0.00006103515625,
+            32
+          ],
+          "q": [
+            0,
+            9,
+            9,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "pass": 5,
+      "kind": "fnb",
+      "requant": [
+        8,
+        8
+      ],
+      "tails": [
+        {
+          "channels": [
+            0,
+            16
+          ],
+          "float": [
+            0.015625,
+            0.0001220703125,
+            32
+          ],
+          "q": [
+            0,
+            7,
+            8,
+            2
+          ]
+        },
+        {
+          "channels": [
+            16,
+            32
+          ],
+          "float": [
+            0.03125,
+            0.0001220703125,
+            32
+          ],
+          "q": [
+            0,
+            8,
+            8,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "pass": 6,
+      "kind": "ds",
+      "requant": [],
+      "tails": [
+        {
+          "channels": [
+            0,
+            64
+          ],
+          "float": [
+            0,
+            0.00390625,
+            1
+          ],
+          "q": [
+            0,
+            0,
+            8,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "pass": 7,
+      "kind": "fnb",
+      "requant": [
+        7,
+        7
+      ],
+      "tails": [
+        {
+          "channels": [
+            0,
+            32
+          ],
+          "float": [
+            0.03125,
+            0.000244140625,
+            32
+          ],
+          "q": [
+            0,
+            7,
+            7,
+            2
+          ]
+        },
+        {
+          "channels": [
+            32,
+            64
+          ],
+          "float": [
+            0.03125,
+            0.000244140625,
+            16
+          ],
+          "q": [
+            0,
+            7,
+            8,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "pass": 8,
+      "kind": "fnb",
+      "requant": [
+        9,
+        6
+      ],
+      "tails": [
+        {
+          "channels": [
+            0,
+            32
+          ],
+          "float": [
+            0.03125,
+            0.000244140625,
+            16
+          ],
+          "q": [
+            0,
+            7,
+            8,
+            2
+          ]
+        },
+        {
+          "channels": [
+            32,
+            64
+          ],
+          "float": [
+            0.0625,
+            0.000244140625,
+            16
+          ],
+          "q": [
+            0,
+            8,
+            8,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "pass": 9,
+      "kind": "ct",
+      "requant": [
+        8,
+        7
+      ],
+      "tails": [
+        {
+          "channels": [
+            0,
+            64
+          ],
+          "float": [
+            0.0625,
+            0.00048828125,
+            16
+          ],
+          "q": [
+            0,
+            7,
+            7,
+            2
+          ]
+        }
+      ],
+      "ct_tail": {
+        "channels": [
+          0,
+          32
+        ],
+        "float": [
+          0.03125,
+          0.0001220703125,
+          16
+        ],
+        "q": [
+          0,
+          8,
+          9,
+          2
+        ]
+      }
+    },
+    {
+      "pass": 10,
+      "kind": "fnb",
+      "requant": [
+        7,
+        8
+      ],
+      "tails": [
+        {
+          "channels": [
+            0,
+            32
+          ],
+          "float": [
+            0.0625,
+            0.000244140625,
+            16
+          ],
+          "q": [
+            0,
+            8,
+            8,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "pass": 11,
+      "kind": "ct",
+      "requant": [
+        8,
+        8
+      ],
+      "tails": [
+        {
+          "channels": [
+            0,
+            32
+          ],
+          "float": [
+            0.0625,
+            0.000244140625,
+            16
+          ],
+          "q": [
+            0,
+            8,
+            8,
+            2
+          ]
+        }
+      ],
+      "ct_tail": {
+        "channels": [
+          0,
+          16
+        ],
+        "float": [
+          0.03125,
+          0.0001220703125,
+          32
+        ],
+        "q": [
+          0,
+          8,
+          8,
+          2
+        ]
+      }
+    },
+    {
+      "pass": 12,
+      "kind": "cnb",
+      "requant": [
+        8,
+        7
+      ],
+      "tails": [
+        {
+          "channels": [
+            0,
+            16
+          ],
+          "float": [
+            0.03125,
+            0.00048828125,
+            16
+          ],
+          "q": [
+            0,
+            6,
+            7,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "pass": "post",
+      "kind": "post_cnb",
+      "requant": [
+        7,
+        8
+      ],
+      "tails": [
+        {
+          "channels": [
+            0,
+            16
+          ],
+          "float": [
+            0.0625,
+            0.0009765625,
+            16
+          ],
+          "q": [
+            0,
+            6,
+            6,
+            0
+          ]
+        }
+      ]
+    }
+  ]
+}

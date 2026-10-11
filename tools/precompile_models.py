@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Precompile the live shader variants for this Mac, or a chosen backend."""
+"""Precompile legacy FSR 4.0.2 shaders for this Mac or a chosen backend."""
 import argparse
 import json
 import subprocess
@@ -45,10 +45,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     info = {}
     if args.model == "auto":
-        # Query the same native policy as the CLI/live encoder, including
+        # Query the legacy policy explicitly, including
         # hardware and OS checks. Do not infer capabilities from CPU names.
         info = json.loads(subprocess.check_output(
-            [str(ROOT / "tools/bin/fsr4mac"), "--backend-info"], text=True))
+            [str(ROOT / "tools/bin/fsr4mac"), "--fsr-version", "4.0.2", "--backend-info"], text=True))
         print(f"{info['device']}: {info['backend']} ({info['reason']})", flush=True)
     for model in selected_models(args.model, info):
         for preset in args.presets:

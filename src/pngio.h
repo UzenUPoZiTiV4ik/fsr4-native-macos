@@ -49,6 +49,6 @@ inline bool png_write(const char* path, const uint8_t* rgba, int w, int h) {
     FILE* f = fopen(path, "wb");
     if (!f) return false;
     bool ok = fwrite(png.data(), 1, png.size(), f) == png.size();
-    fclose(f);
+    if (fclose(f) != 0) ok = false;
     return ok;
 }

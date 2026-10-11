@@ -1,5 +1,10 @@
 # FSR4 вместо DLSS в CrossOver
 
+Текущий вариант по умолчанию — **FSR 4.1.1 / Lossy**. В панели можно
+переключать **Exact / Lossy**; новая настройка сбрасывает историю на следующем
+кадре. Краткие команды: [GUIDE.md](GUIDE.md). Преобразование входов:
+[FSR411_INPUT_CONTRACT.md](FSR411_INPUT_CONTRACT.md).
+
 Сборка CLI и шейдеры описаны в [README.md](../README.md) и [STATE.md](STATE.md), пошаговая установка и откат — в [GUIDE.md](GUIDE.md). Здесь только то, как FSR4 встаёт на место DLSS внутри CrossOver Preview, и какие файлы при этом меняются.
 
 DLSS в CrossOver Preview — это не отдельный `nvngx.so`. D3DMetal (GPTK, каталог `lib/apple_gptk`) сам реализует NGX и для временного апскейла вызывает MetalFX. Хук подменяет только `encodeToCommandBuffer:` у временного скейлера. Пространственный скейл, генерация кадров и денойз остаются на MetalFX. Путь DXMT не используется.
@@ -49,6 +54,8 @@ dist/crossover/backups/Игры.cxbottle.conf
 | `FSR4_HOOK_LOG` | `dist/crossover/hook.log` |
 | `FSR4_ROOT` | корень этого репозитория |
 | `FSR4_REPLACE` | `1` |
+| `FSR4_VERSION` | `4.1.1` по умолчанию |
+| `FSR4_PROFILE` | `lossy` по умолчанию, `exact-fast`, `exact` или `fsr4` (модель 4.0.2, четвёртый режим панели) |
 
 Они должны остаться внутри `[EnvironmentVariables]`. Установщик дописывает их в конец файла; в бутылке «Игры» эта секция как раз последняя.
 
@@ -57,13 +64,15 @@ dist/crossover/backups/Игры.cxbottle.conf
 Команды:
 
 ```bash
-python3 tools/crossover/crossover_fsr4.py install
+python3 tools/crossover/crossover_fsr4.py install --panel --profile lossy
 python3 tools/crossover/crossover_fsr4.py install --bottle "/path/to/cxbottle.conf"
 python3 tools/crossover/crossover_fsr4.py install --no-bottle   # только dist/, конфиг бутылки не писать
 python3 tools/crossover/crossover_fsr4.py restore
 ```
 
-`restore` удаляет из конфига четыре ключа выше и строку `;; fsr4-mac`. Копия в `dist/` остаётся на диске. Следующий запуск бутылки снова берёт D3DMetal из CrossOver.app.
+`restore` удаляет управляемые ключи установщика, включая версию/профиль и
+панель, и строку `;; fsr4-mac`. Копия в `dist/` остаётся на диске. Следующий
+запуск бутылки снова берёт D3DMetal из CrossOver.app.
 
 Пока CrossOver запущен, в память уже загружен старый dylib. После `install` или `restore` процесс нужно закрыть полностью, не только окно игры.
 
@@ -86,30 +95,32 @@ python3 tools/crossover/crossover_fsr4.py restore
 
 ## Живой энкодер
 
-`src/fsr4_live.mm` использует тот же пайплайн, что CLI, в command buffer игры.
-По умолчанию `FSR4_MODEL=auto`: M1–M4 получают обычные FP16 compute-шейдеры,
-а совместимые M5 (включая Pro/Max/Ultra) — INT8 через GPU tensor operations.
-Выбор основан на Metal family и лимитах устройства, а не названии CPU.
-`FSR4_MODEL=f16` принудительно выбирает FP16; запрос `i8mpp` сохраняет
-проверку возможностей и запасной FP16. При отказе native INT8 повторяется
-тот же кадр в FP16, а повторные попытки компиляции отключаются для устройства.
-Подробности: [HARDWARE.md](HARDWARE.md).
+`src/fsr4_live.mm` направляет версию 4.1.1 в `src/fsr411_live.mm`; тот
+использует общий с CLI `fsr411::Runtime` в command buffer игры. По умолчанию
+`FSR4_MODEL=auto`: M5 / family 10 выбирает native INT8 tensor operations,
+другие Apple GPU — scalar INT8 той же модели. Для проверки есть явные
+`i8mpp`, `scalar`, `reference`. При отказе FSR хук вызывает исходный MetalFX
+encode и инвалидирует историю FSR. Подробности: [HARDWARE.md](HARDWARE.md).
 
-`python3 tools/precompile_models.py` готовит шейдеры выбранного режима;
-`--model all` собирает оба. После правок host-кода или `hook/` пересоберите
-библиотеку: `python3 tools/crossover/crossover_fsr4.py install --no-bottle`.
-Установщик сам считает эталон для выбранного режима в
-`dist/crossover/reference-<режим>/`, поэтому кадр от M5 INT8 не подставляется
-в тест FP16 на M1. При первом открытии варианта энкодер проверяет хеш его
-исходников через `compile_variant.py`; последующие кадры используют готовую
-сессию. Исходный CrossOver.app не меняется.
+После правок host-кода или `hook/` пересоберите библиотеку:
+`python3 tools/crossover/crossover_fsr4.py install --no-bottle --profile lossy`.
+Установщик создаёт smoke-reference с совпадающими версией, backend и профилем.
+Это локальная проверка подключения хука; старый Windows-эталон 4.0 к ней не
+относится. `compile_fsr411.py` собирает варианты по содержимому исходников,
+а последующие кадры используют готовую сессию. `tools/precompile_models.py`
+продолжает готовить старую 4.0.2; для неё требуется явный
+`FSR4_VERSION=4.0.2` / `--fsr-version 4.0.2`.
 
 
 Флаги варианта: `depthReversed` и флаги дескриптора со скейлера (см. выше), цветовое пространство линейное (`FSR4_COLORSPACE=srgb` или `pq`). У DLSS/MetalFX нет ручки резкости, поэтому RCAS в игровом пути включён с резкостью FSR **0.4** по умолчанию (`FSR4_SHARPNESS=<0..1>`; `0` или `FSR4_RCAS=0` выключает). Константы RCAS те же, что в провайдере (`FsrRcasCon(-2*sharpness+2)`, preExposure); post при этом пишет в промежуточную RGBA16F-текстуру и не делает обратный mu-law — его делает RCAS.
 
 Игра на D3DMetal отдаёт MTL4 command buffer. У него нет `setBuffer:offset:atIndex:`; привязки идут через `MTL4ArgumentTable`. Классический command buffer (так устроен `live_test`) идёт обычным compute encoder.
 
-При создании сессии и при смене размера выхода scratch, history, reprojection и recurrent обнуляются на GPU в том же command buffer, перед `pre` (`fillBuffer` на Metal 4, compute-clear на обычном encoder). Поток encode это не ждёт.
+Новые scratch/текстуры очищаются на GPU в command buffer перед PRE. Смена
+профиля, модели, размера выхода или соглашений входа сбрасывает временную
+историю. Изменение только входного разрешения сохраняет её. В работе
+используются отдельные слоты констант и удержание ресурсов до завершения
+кадра; библиотека не коммитит command buffer игры.
 
 Пресет считается по отношению выход/вход по оси X, как в провайдере. Ярус выхода: ширина или высота `>1080` → 2160, `>2160` → 4320. Перекрыть пресет можно `FSR4_PRESET`.
 

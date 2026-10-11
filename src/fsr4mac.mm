@@ -708,15 +708,37 @@ static void bench_tensorops() {
     }
 }
 
+int fsr411_main(int argc, char **argv);
+
 int main(int argc, char** argv) {
+    // Select the model before parsing legacy backend options. A version
+    // request can never silently run a different network under its name.
+    const char *versionEnv = getenv("FSR4_VERSION");
+    std::string version = versionEnv && *versionEnv ? versionEnv : "4.1.1";
+    std::vector<char *> versionArgs = {argv[0]};
+    bool versionSeen = false;
+    for (int i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "--fsr-version")) {
+            if (versionSeen || ++i >= argc) {
+                fprintf(stderr, "--fsr-version requires one version: 4.0.2 or 4.1.1\n"); return 2;
+            }
+            version = argv[i]; versionSeen = true;
+        } else versionArgs.push_back(argv[i]);
+    }
+    argc = (int)versionArgs.size(); versionArgs.push_back(nullptr); argv = versionArgs.data();
+    if (version != "4.0.2" && version != "4.1.1") {
+        fprintf(stderr, "--fsr-version / FSR4_VERSION must be 4.0.2 or 4.1.1\n"); return 2;
+    }
+    // Hardware probes are independent of the selected model version.
     if (argc >= 2 && !strcmp(argv[1], "--caps")) { print_caps(); return 0; }
+    if (argc >= 2 && !strcmp(argv[1], "--bench-tensorops")) { bench_tensorops(); return 0; }
+    if (version == "4.1.1") return fsr411_main(argc, argv);
     if (argc >= 2 && !strcmp(argv[1], "--backend-info"))
         return print_backend_info(argc > 2 ? argv[2] : "auto") ? 0 : 1;
-    if (argc >= 2 && !strcmp(argv[1], "--bench-tensorops")) { bench_tensorops(); return 0; }
     if (argc < 3) {
-        fprintf(stderr, "usage: fsr4mac <testcase_dir> <out_dir> [--auto|--int8|--fp16|--i8mpp] [--mpp] [--dump-passes] [--bench N] [--reps R] [--sync barrier|encoder|none] [--builddir dir]\n"
+        fprintf(stderr, "usage: fsr4mac --fsr-version 4.0.2 <testcase_dir> <out_dir> [--auto|--int8|--fp16|--i8mpp] [--mpp] [--dump-passes] [--bench N] [--reps R] [--sync barrier|encoder|none] [--builddir dir]\n"
                         "       fsr4mac --caps\n"
-                        "       fsr4mac --backend-info [auto|f16|int8|i8mpp]\n"
+                        "       fsr4mac --fsr-version 4.0.2 --backend-info [auto|f16|int8|i8mpp]\n"
                         "       fsr4mac --bench-tensorops\n");
         return 1;
     }

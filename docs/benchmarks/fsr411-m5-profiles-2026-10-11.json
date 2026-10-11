@@ -1,0 +1,154 @@
+{
+ "date": "2026-10-11",
+ "device": "Apple M5",
+ "os": "macOS 27.0.1",
+ "fixture": "build/perf411/input_game: 864x560 -> 1712x1112, 8 frames, RCAS 0.504, AE on",
+ "protocol": "5 interleaved rounds x 15 measured sequences, one warmup each, full command buffer, no stage counters",
+ "profiles": {
+  "power": "Battery 72%, Low Power Mode off",
+  "variants": {
+   "fast_exact": "Exact with fast PRE/POST math (now exact-fast)",
+   "strict_exact": "Exact with IEEE PRE/POST math (now exact)",
+   "lossy": "Lossy"
+  },
+  "summary_median_of_round_means_ms": {
+   "fast_exact": {
+    "profile": "exact",
+    "rounds": 5,
+    "mean_ms": 4.715722222438974,
+    "round_mean_range_ms": [
+     4.574344791277933,
+     4.745363193675682
+    ],
+    "reset_mean_ms": 5.3301500011002645,
+    "full_mean_ms": 4.630514285582605
+   },
+   "strict_exact": {
+    "profile": "exact",
+    "rounds": 5,
+    "mean_ms": 5.348894096823642,
+    "round_mean_range_ms": [
+     5.274194444185317,
+     5.401595832760601
+    ],
+    "reset_mean_ms": 5.9093416658773394,
+    "full_mean_ms": 5.284086110519378
+   },
+   "lossy": {
+    "profile": "lossy",
+    "rounds": 5,
+    "mean_ms": 3.3565843740992327,
+    "round_mean_range_ms": [
+     3.33200000047024,
+     3.682029166642072
+    ],
+    "reset_mean_ms": 5.381258332636207,
+    "full_mean_ms": 4.534209258013612,
+    "reuse_mean_ms": 2.012200696481159,
+    "steady_equal_mean_ms": 3.270405904388301
+   }
+  }
+ },
+ "rcas_reads_history_rejected": {
+  "power": "Battery 62%, Low Power Mode off",
+  "change": "POST skips the rcasTemp store when RCAS is on; RCAS reads history with the same [0, 64000] clamp",
+  "result": "96/96 capture frames byte-identical; all-frame delta median 0.011-0.045 ms (round ranges overlap); stage profile Exact non-reset: POST 0.891 -> 0.877 ms, RCAS 0.166 -> 0.191 ms",
+  "summary_median_of_round_means_ms": {
+   "base_exact": {
+    "profile": "exact",
+    "rounds": 5,
+    "mean_ms": 5.330035069224929,
+    "round_mean_range_ms": [
+     5.008632639025261,
+     6.455794792297335
+    ],
+    "reset_mean_ms": 5.729549998068251,
+    "full_mean_ms": 5.267007539459017
+   },
+   "new_exact": {
+    "profile": "exact",
+    "rounds": 5,
+    "mean_ms": 5.121430207994611,
+    "round_mean_range_ms": [
+     5.049222221956977,
+     5.676481945192791
+    ],
+    "reset_mean_ms": 5.57740000076592,
+    "full_mean_ms": 5.084784920299647
+   },
+   "base_exact-fast": {
+    "profile": "exact-fast",
+    "rounds": 5,
+    "mean_ms": 4.51324756880543,
+    "round_mean_range_ms": [
+     4.454531944187086,
+     5.1936097223612405
+    ],
+    "reset_mean_ms": 5.0766972223451985,
+    "full_mean_ms": 4.433433729545435
+   },
+   "new_exact-fast": {
+    "profile": "exact-fast",
+    "rounds": 5,
+    "mean_ms": 4.476472222086159,
+    "round_mean_range_ms": [
+     4.280069791154044,
+     4.740125695025199
+    ],
+    "reset_mean_ms": 5.118963889738855,
+    "full_mean_ms": 4.384687698135774
+   },
+   "base_lossy": {
+    "profile": "lossy",
+    "rounds": 5,
+    "mean_ms": 3.218399999726292,
+    "round_mean_range_ms": [
+     3.122816667503988,
+     3.3267166663184375
+    ],
+    "reset_mean_ms": 4.9818555601329235,
+    "full_mean_ms": 4.448635185124456,
+    "reuse_mean_ms": 1.8333861102291849,
+    "steady_equal_mean_ms": 3.1517596062460345
+   },
+   "new_lossy": {
+    "profile": "lossy",
+    "rounds": 5,
+    "mean_ms": 3.1983437491968894,
+    "round_mean_range_ms": [
+     3.0017336813519555,
+     3.2934177077549975
+    ],
+    "reset_mean_ms": 5.162413887834798,
+    "full_mean_ms": 4.353840741613466,
+    "reuse_mean_ms": 1.8381965271449492,
+    "steady_equal_mean_ms": 3.0960186343792073
+   }
+  }
+ },
+ "quality_four_game_captures_32_frames": {
+  "exact_vs_ef1fa1b": "32/32 byte-identical",
+  "exact_fast_vs_previous_exact": "32/32 byte-identical",
+  "lossy_vs_previous_lossy": "32/32 byte-identical",
+  "exact_fast_vs_exact_display_srgb8": {
+   "disp_px_changed": 0.06135542974790728,
+   "disp_px_ge4": 0.00010495765186915888,
+   "disp_psnr_min": 60.38512665832861,
+   "de_mean": 0.03132588230752779,
+   "de_gt1": 0.000836115570160694,
+   "de_gt2": 3.0121565714717945e-05,
+   "de_max": 19.923343591997718,
+   "ssim_min": 0.999614915179482
+  },
+  "exact_vs_lossy_display_srgb8": {
+   "disp_px_changed": 0.17489542974265448,
+   "disp_px_ge4": 0.0035595483163702686,
+   "disp_psnr_min": 46.6370698658648,
+   "de_mean": 0.09227982147425041,
+   "de_gt1": 0.00472906940218853,
+   "de_gt2": 0.0011355912349559605,
+   "de_max": 98.23810607665743,
+   "ssim_min": 0.9957858996093716
+  }
+ }
+}

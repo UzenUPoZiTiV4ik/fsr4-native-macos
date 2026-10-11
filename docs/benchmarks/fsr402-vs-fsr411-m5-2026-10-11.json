@@ -1,0 +1,168 @@
+{
+ "date": "2026-10-11",
+ "device": "Apple M5",
+ "low_power_mode": false,
+ "input": "build/perf411/input_game: recorded 864x560 -> 1712x1112, 8 frames, RCAS 0.504, AE on",
+ "protocol": "5 interleaved rounds x 15 sequences; median of round means; full command buffer. FSR 4.0.2: --i8mpp --bench 15 --reps 1, FUSED_FRAME_barrier; 4.1.1: run.json gpu_mean_ms",
+ "fsr402_vs_411_ms": {
+  "fsr402": {
+   "median": 4.4656,
+   "range": [
+    4.4284,
+    4.5575
+   ]
+  },
+  "port_exact": {
+   "median": 7.339795834802014,
+   "range": [
+    7.282714235770982,
+    7.491120486035167
+   ]
+  },
+  "port_lossy": {
+   "median": 5.161680207917622,
+   "range": [
+    5.14134895929601,
+    5.5711420126802595
+   ]
+  },
+  "now_exact": {
+   "median": 5.007982291620768,
+   "range": [
+    4.970079166863191,
+    5.152182639722014
+   ]
+  },
+  "now_fast": {
+   "median": 4.304195834993152,
+   "range": [
+    4.200918403754865,
+    4.3919638883380685
+   ]
+  },
+  "now_lossy": {
+   "median": 3.000752083850481,
+   "range": [
+    2.9764881937201912,
+    3.047585760941729
+   ]
+  }
+ },
+ "pre_post_math_ab_ms": {
+  "ordered_exact-fast": {
+   "mean": 4.548349305938852,
+   "range": [
+    4.4466281244240236,
+    4.563975694569915
+   ],
+   "full": 4.4673984130245765,
+   "reused": null
+  },
+  "ordered_lossy": {
+   "mean": 3.2411916661658324,
+   "range": [
+    3.175689583683076,
+    3.2742739579892564
+   ],
+   "full": 4.38559629708632,
+   "reused": 1.8727555548442372
+  },
+  "postonly_exact-fast": {
+   "mean": 4.519651388909551,
+   "range": [
+    4.49381666573269,
+    4.598134722861384
+   ],
+   "full": 4.427843650808514,
+   "reused": null
+  },
+  "postonly_lossy": {
+   "mean": 3.1872732636353853,
+   "range": [
+    3.1725118055571024,
+    3.2461788187598963
+   ],
+   "full": 4.370456482865848,
+   "reused": 1.848014583811164
+  },
+  "relaxed_exact-fast": {
+   "mean": 4.399993749999946,
+   "range": [
+    4.376206944531684,
+    4.4339038192750495
+   ],
+   "full": 4.2976666670126304,
+   "reused": null
+  },
+  "relaxed_lossy": {
+   "mean": 3.1228621532742786,
+   "range": [
+    3.1089361113117775,
+    3.1826753471250413
+   ],
+   "full": 4.2489509272854775,
+   "reused": 1.7996618060957796
+  }
+ },
+ "pre_post_math_quality_four_captures": {
+  "exact-fast/ordered": {
+   "frames": 32,
+   "nonfinite_values": 0,
+   "vs_exact_psnr_min": 66.88491934670347,
+   "vs_exact_psnr_mean": 82.81746694465811,
+   "vs_ordered_identical_frames": 32,
+   "vs_ordered_psnr_min": null,
+   "vs_ordered_max_abs": 0.0
+  },
+  "exact-fast/relaxed": {
+   "frames": 32,
+   "nonfinite_values": 0,
+   "vs_exact_psnr_min": 64.55857743983327,
+   "vs_exact_psnr_mean": 79.20677820935313,
+   "vs_ordered_identical_frames": 0,
+   "vs_ordered_psnr_min": 64.11180723540365,
+   "vs_ordered_max_abs": 0.8482666015625
+  },
+  "exact-fast/fast": {
+   "frames": 32,
+   "nonfinite_values": 0,
+   "vs_exact_psnr_min": 64.55857743983327,
+   "vs_exact_psnr_mean": 79.20677820935313,
+   "vs_ordered_identical_frames": 0,
+   "vs_ordered_psnr_min": 64.11180723540365,
+   "vs_ordered_max_abs": 0.8482666015625
+  },
+  "lossy/ordered": {
+   "frames": 32,
+   "nonfinite_values": 0,
+   "vs_exact_psnr_min": 48.724931741801456,
+   "vs_exact_psnr_mean": 66.228342814423,
+   "vs_ordered_identical_frames": 32,
+   "vs_ordered_psnr_min": null,
+   "vs_ordered_max_abs": 0.0
+  },
+  "lossy/relaxed": {
+   "frames": 32,
+   "nonfinite_values": 0,
+   "vs_exact_psnr_min": 48.71157790504215,
+   "vs_exact_psnr_mean": 66.22929005850044,
+   "vs_ordered_identical_frames": 0,
+   "vs_ordered_psnr_min": 63.03519743406592,
+   "vs_ordered_max_abs": 2.3505859375
+  },
+  "lossy/fast": {
+   "frames": 32,
+   "nonfinite_values": 0,
+   "vs_exact_psnr_min": 48.71157790504215,
+   "vs_exact_psnr_mean": 66.22929005850044,
+   "vs_ordered_identical_frames": 0,
+   "vs_ordered_psnr_min": 63.03519743406592,
+   "vs_ordered_max_abs": 2.3505859375
+  }
+ },
+ "notes": [
+  "first_port = ef1fa1b (build/perf411/bin/fsr4mac-baseline)",
+  "ordered = previous Exact Fast/Lossy flags; relaxed = -fmetal-math-mode=relaxed -fmetal-math-fp32-functions=fast; postonly = relaxed POST, ordered PRE"
+ ],
+ "binary_sha256": "7e9471e1e6d8560a19d90de9a89e0ab272332062c50ed608d827b2f9b8c71946"
+}

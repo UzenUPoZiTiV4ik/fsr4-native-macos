@@ -1,0 +1,301 @@
+// SPDX-License-Identifier: MIT
+// Reimplemented FSR 4.1.1 kernel: semantics reconstructed from the AMD 4.1.1
+// provider (Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll,
+// SHA-256 d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46,
+// MIT-licensed per FidelityFX-SDK docs/license.md) and validated byte-exact
+// against the AMD container. See README.md and docs/evidence411/.
+// Copyright (C) 2025 Advanced Micro Devices, Inc. (upstream implementation)
+// Copyright (C) 2026 int3rrobang (reimplementation)
+
+// 2160-class variant of reimpl_pass4.hlsl (mechanical 2x-spatial transform, no other changes).
+// 1080 reference container: analysis/extracted/4.1.1-official/0027_0014cb60_dafa1819bbf9c84d.dxbc (1080, guards 479/269, stride 7712, R 8342464/10440128, W 12537792/14635456)
+// 2160 AMD container (ground truth): analysis/extracted/4.1.1-official/0183_00593780_62ff6f50660ee65c.dxbc (2160, guards 959/539, stride 15392, R 33273664/41616128, W 49958592/58301056)
+// Verified transform (full-DXIL diff, identical line counts, immediates-only deltas):
+//   guards x2, inRange x2, full-res stride 15392->30752, half-res stride 7712->15392,
+//   plane spacing 2097664->8342464, bases relocated per container (see 2160 line above).
+// Weights / biases / requant / tail / loop structure: byte-identical to the 1080 file.
+// ============================================================================
+// 4.1.1 logical pass 4 reimplementation (our_reimplementation) - Global 5105
+// FasterNetBlock numFeatures=32 (4.0.2 reference
+// ml2code_runtime/operators/int8_NHWC/Fused/FasterNetBlock.hlsli, MLSR_PASS_4),
+// no_scale integer requant variant. Decoded from container
+// dafa1819bbf9c84d... (fsr4_model_v07_fp8_no_scale_pass4) and validated
+// byte-exact vs the AMD GPU execution (sha 78d5d842...) by
+// bench/tools/pass4_sim.py before this HLSL was authored.
+//
+// stage0: partial 3x3 conv on channels 0-15 (16 ch in/out), taps outside the
+//         logical tensor (plane rows 1..540, cols 1..960) skipped
+// stage1: pw 32->64 + ReLU (src = conv_result[0..3] + P1 passthrough pixel)
+// stage2: pw 64->32
+// tail:   out = s8clamp(i16wrap(round_ne((s8(resid)*2^-6 + s8(acc)*2^-14)*scale)))
+//         scale 64 for plane 0, 32 for plane 1 (DXIL select, tz=0)
+// biases: t18@13056 i32[16], @15232 i32[64], @17536 i32[32]
+// weights: DXIL literal tiles (pass4_weights.json, phi-init validated)
+// output: dual 16-ch half-res planes at 12537792 / 14635456, pixel (ty+1,tx+1)
+// ============================================================================
+ByteAddressBuffer t18_initializer : register(t18);
+RWByteAddressBuffer ScratchBuffer : register(u11);
+
+cbuffer MLSR_Optimized_Constants : register(b0)
+{
+    uint4 ml2c_cb[17];
+}
+
+static const uint W0[36][16] = {
+    { 0x00f2f905u, 0x0ef804ecu, 0x0c020300u, 0xf20d00ebu, 0x08f50307u, 0x020be0efu, 0x050ef101u, 0x0b040508u, 0x02f60505u, 0x0000f6fbu, 0x021500f1u, 0xf50efaf7u, 0x0917fa05u, 0xf6051407u, 0x02fc06fdu, 0x09f60e13u }, // block 0 (dxil label 96)
+    { 0xec020419u, 0x00edf3f7u, 0x0f0af41cu, 0x2105fa06u, 0xe4e2ffeau, 0xefe7ded9u, 0xfd070017u, 0xf106f5d3u, 0xf202fb06u, 0x0221f5ebu, 0x09f00206u, 0xee17ec0eu, 0x170511f0u, 0x01ec29f8u, 0xff0bff0bu, 0x14fffe0bu }, // block 1 (dxil label 131)
+    { 0xfbfd01e1u, 0x06fc08fbu, 0xf904ee0cu, 0x0208f9f6u, 0xfbf9fb00u, 0x03f7fce9u, 0xfef408fdu, 0xf7ff0407u, 0xebfb0af2u, 0x0403f7ffu, 0x04f3ef04u, 0xfd08f5fcu, 0xfcfc02efu, 0x00fe04f9u, 0xff05f911u, 0x0404f601u }, // block 2 (dxil label 163)
+    { 0xf4f5060du, 0x121fe3e8u, 0x04f2fa07u, 0xf6130907u, 0xe0f2ee04u, 0x01ea0ceau, 0x00f5ff19u, 0xf811f2eeu, 0x17ee0715u, 0xf104feecu, 0xf815fb06u, 0x050dd9dbu, 0x181efde6u, 0x03f71e1au, 0xe1ea10deu, 0x04f21c11u }, // block 3 (dxil label 195)
+    { 0x2e11d8bfu, 0xd4f82621u, 0xe1f839f2u, 0x3f14aa1eu, 0x140cef9eu, 0xf64ee14au, 0x1a2a2a0eu, 0xf6f3e928u, 0x02eb382eu, 0xecc40d43u, 0xf2f1f525u, 0x15311ae8u, 0x0fcae644u, 0xf7f7fb07u, 0x1206fb07u, 0x11df33fdu }, // block 4 (dxil label 227)
+    { 0x18000711u, 0x14010b25u, 0x0d13dc13u, 0xea0cf6f3u, 0xf4f6f50eu, 0xf2f70bdbu, 0xee06030fu, 0x1aed070eu, 0xdf0201d3u, 0x060b2b04u, 0x0decf312u, 0xeffbfd22u, 0x000214f6u, 0x180efdfbu, 0x29faf02eu, 0xf210f20bu }, // block 5 (dxil label 259)
+    { 0xfa00f9ffu, 0x0ae705fcu, 0xfcfcff04u, 0x09f20efeu, 0x0a01ff01u, 0x01040102u, 0x0100f508u, 0xf411faf8u, 0x0702f603u, 0x0305f30cu, 0xf5f0fae7u, 0xfd0f01f5u, 0x000904f8u, 0xf80c0a00u, 0xeefa06f4u, 0x00f1030cu }, // block 6 (dxil label 291)
+    { 0x0afafc0bu, 0x0f09e3ebu, 0x02010ff0u, 0xf3eb04feu, 0x08ff040cu, 0xf80b1607u, 0xdc11fbd7u, 0x06ea0f02u, 0x07fd1016u, 0xf8f602f2u, 0xfb0b0fddu, 0x16e20106u, 0x12ed08fdu, 0xf7edfd02u, 0xd90810deu, 0xff1603efu }, // block 7 (dxil label 323)
+    { 0x03050003u, 0x06f30a13u, 0x0512f5edu, 0xfcef11feu, 0xebf90003u, 0x0ef1fdfdu, 0xfaedfaefu, 0xf4f80f03u, 0xedfc0501u, 0x07f3ffffu, 0x13fdfffbu, 0xee08fff9u, 0x030409fdu, 0xf9071206u, 0x0404010du, 0xf607f80du }, // block 8 (dxil label 355)
+    { 0x00f60d01u, 0x000ae6fau, 0x0b27f525u, 0x1209f915u, 0x03fe0a01u, 0xff0ffe05u, 0x0d2ce602u, 0x16e61228u, 0x00f7fd02u, 0x01fcfa00u, 0x0305fe05u, 0x030000f7u, 0x00fbfa05u, 0x0d02f2f3u, 0x070ffd0au, 0x00000609u }, // block 9 (dxil label 470)
+    { 0xcedf17c4u, 0x1a1e0dfbu, 0x1808b63bu, 0xde151afcu, 0x0f01f7f4u, 0x00082306u, 0x1bedf10eu, 0xfe06fffau, 0x1207f315u, 0xf80ef9f1u, 0xf8e707e6u, 0xfc27eeeeu, 0xe6080406u, 0x0e1007fdu, 0x06f2da17u, 0xfa16f1ebu }, // block 10 (dxil label 502)
+    { 0xfffa0213u, 0x030ef2fcu, 0x0ef909f7u, 0x06f70f09u, 0xfef9f50au, 0x08010515u, 0x09fbf2f8u, 0xf9020708u, 0x00ff07f5u, 0x000307fau, 0x0703f612u, 0xfdfd0201u, 0xf901f7fcu, 0x08f6ee0fu, 0xfc00fae8u, 0xfdfa05f6u }, // block 11 (dxil label 534)
+    { 0xe8f810fau, 0x19eaedf4u, 0x3403e22fu, 0x01d9fe14u, 0x1f0711eau, 0x02f7fff6u, 0x1c0ef602u, 0x15ce13f0u, 0x0be4fd10u, 0xf602f9e8u, 0xfe18f513u, 0x0b1a01f5u, 0xf20ef8fbu, 0xfe08fe17u, 0x05e1f20cu, 0xd70efaddu }, // block 12 (dxil label 566)
+    { 0xe822e513u, 0xe1aa1b16u, 0x3de80c00u, 0xdd11ead7u, 0x130f0f06u, 0x16ef0cccu, 0xd7e527cau, 0x0b33e8d3u, 0x0e1f00fdu, 0xfded2e15u, 0xa4f656d9u, 0x032014eau, 0x4d0ce9ecu, 0xf4200306u, 0xfbfb7efdu, 0xe0be0ff6u }, // block 13 (dxil label 598)
+    { 0x1904fa39u, 0xf308ea04u, 0xe9041ae3u, 0x1b10fa03u, 0x03fff909u, 0xfaea0d1eu, 0xdd0eebfeu, 0x0d0805f2u, 0x0f070ffeu, 0x0c010d0bu, 0x0607f00cu, 0xf10add01u, 0x05150620u, 0x0219f311u, 0x0408e613u, 0x02000a02u }, // block 14 (dxil label 630)
+    { 0x0bfbfefeu, 0xf30607fau, 0xf5fc11f6u, 0xfa06fbf2u, 0xf10bfa01u, 0xfa000318u, 0x06fdf0e1u, 0xfdea1315u, 0xf50304f5u, 0x03eafffdu, 0x0a090403u, 0x03dd0a14u, 0x00fffc0au, 0x0703f904u, 0x0300fa04u, 0x000cfbf6u }, // block 15 (dxil label 662)
+    { 0x14fdec35u, 0xf03b0220u, 0xb3e412acu, 0x002e1af4u, 0xf50510eeu, 0x11e00413u, 0x0b19f3f3u, 0x0dd30d13u, 0xf0040ae0u, 0x020312fdu, 0x1a00f936u, 0xf2f2051du, 0x0105f213u, 0x01fbfd03u, 0xfa14e705u, 0x10fe08ebu }, // block 16 (dxil label 694)
+    { 0xfd030903u, 0x04ff04feu, 0xfafe07fdu, 0x00f00105u, 0x0b04f6fau, 0xf0fa0700u, 0x0409fd14u, 0xf20ef6f5u, 0xf1fe0300u, 0x0cf40103u, 0xfffffbf9u, 0xfbf705ffu, 0x0006fcfbu, 0x02fcfa00u, 0x0f03fb07u, 0xff04fffau }, // block 17 (dxil label 726)
+    { 0xfc03fff5u, 0xfdf2fd06u, 0x01fb0dfdu, 0xfaf4faf2u, 0x02fefc0bu, 0x00fc140eu, 0x02f706f1u, 0xebf004fbu, 0x060ef8fbu, 0xfffd0506u, 0xfc0508e7u, 0x02eb1011u, 0xf2e80209u, 0xfb06f2fau, 0x0414fb1du, 0x0c1cfefcu }, // block 18 (dxil label 821)
+    { 0xddf406f0u, 0x03e501f2u, 0xf613feffu, 0x19ed071cu, 0x00f50a0eu, 0x03ff0c02u, 0x040e10fau, 0x00eafe12u, 0x110301feu, 0xeffc1df9u, 0xf5fff7fau, 0xf510fafdu, 0xfa0008eeu, 0xeb050d21u, 0xf304e506u, 0xfbf817f0u }, // block 19 (dxil label 853)
+    { 0xf60609f6u, 0xfc07fcf5u, 0xfe03f705u, 0x01fa07fbu, 0xf5f311eau, 0x08040603u, 0x080cf219u, 0x04eb0c07u, 0x0903fcf7u, 0x00e5f309u, 0xfc0012f1u, 0x09edfcffu, 0xf0fefc04u, 0xed04fcf7u, 0xfc010dfau, 0x00fdf700u }, // block 20 (dxil label 885)
+    { 0xf3fa0705u, 0x11f3ede9u, 0x1018f6fcu, 0x16da1028u, 0xfeeef820u, 0xfa0e141eu, 0xe0e00adeu, 0xf51f07ebu, 0xf90611efu, 0x1204fffau, 0x11ece913u, 0xe0fd1300u, 0xe40bf9ffu, 0xf0f8f90fu, 0x1604080fu, 0x06f2092eu }, // block 21 (dxil label 917)
+    { 0x33f9bd0eu, 0x0bfc0cf2u, 0xe3bf20ddu, 0xd8150c01u, 0xf0131410u, 0x00e6efffu, 0xf11a1be6u, 0xdcecee39u, 0x08084c02u, 0xe7e91522u, 0x05fd0fc9u, 0xeb0df6f5u, 0x560319f3u, 0x1735e9c4u, 0xecf9ebe3u, 0xeb0101eau }, // block 22 (dxil label 949)
+    { 0x1803fbe2u, 0xebf9f1e6u, 0x150e1614u, 0xf808e4f3u, 0x05fd20f7u, 0x0b05f6f0u, 0x3309f637u, 0xf3f7f5fdu, 0x31f1ef3du, 0xe906e8f2u, 0xcf0505f3u, 0x14300beau, 0xf7e3f829u, 0xfd110606u, 0xf2020112u, 0x022aff09u }, // block 23 (dxil label 981)
+    { 0xf5f9fb03u, 0x06fafcf8u, 0x110eff05u, 0x05f4fa0cu, 0x03f1ff00u, 0x020300f8u, 0x00f6010au, 0x0701fdfbu, 0xf7fc00edu, 0x0af7eff7u, 0x0c070005u, 0x0cf3fb10u, 0xfd030302u, 0xefef050bu, 0xfd0b070bu, 0xfffaf8f9u }, // block 24 (dxil label 1013)
+    { 0xe4f2f6edu, 0xfa160de9u, 0x02f8fd04u, 0xee30ebf9u, 0x10e1de20u, 0xf104eff3u, 0xeefcfe01u, 0x132f05ebu, 0x03ed1fe0u, 0x0710fac8u, 0x08ffe625u, 0xda19e9f5u, 0x15fd1807u, 0xee07ee07u, 0x140e0415u, 0xf9f1fdf7u }, // block 25 (dxil label 1045)
+    { 0xf8fd00feu, 0xff06f602u, 0xfc00f605u, 0x0dfa0004u, 0x03f203feu, 0xff03fce7u, 0x100a0419u, 0x05000000u, 0xf9fc03f3u, 0x03f5f5f4u, 0x0d050713u, 0xfc04fc03u, 0xf6f30308u, 0xfafa060du, 0x07fc08f2u, 0xf4fb07f3u }, // block 26 (dxil label 1077)
+    { 0x09fefc05u, 0xf90c0409u, 0xff0403f6u, 0xf00ff9fau, 0xfd0011fbu, 0x02ff0102u, 0xff08ec01u, 0x0e07030au, 0xff020bf2u, 0xf7fd0605u, 0xfcff0706u, 0xeefffa06u, 0xfd050afbu, 0xfcfafe07u, 0xf9f70bf9u, 0xfefafd10u }, // block 27 (dxil label 1172)
+    { 0x06e4f31cu, 0x110a06ffu, 0xebf823e4u, 0xf2f80cedu, 0xf40118e8u, 0x07fa0d0au, 0x0afd02e7u, 0xf9f5fd10u, 0xfa011100u, 0x0b0808fau, 0x07f2fa00u, 0xf8fb0019u, 0x0500fd09u, 0xfc0aea1fu, 0x02fde9f4u, 0xea051b0au }, // block 28 (dxil label 1204)
+    { 0x0e06fc12u, 0xfc0afc00u, 0xfefb04fcu, 0x06f7fc05u, 0x07fcff0du, 0x080706f7u, 0x09fc0505u, 0x0b11fc06u, 0x0f00f906u, 0xfcfdfc02u, 0xf8f80ef6u, 0xfdfc03fdu, 0xfbf808edu, 0x09f7fd01u, 0x0702030au, 0xf90aff04u }, // block 29 (dxil label 1236)
+    { 0x12ff1d15u, 0x051801fau, 0x0811fb16u, 0x14fdf802u, 0xf50708f9u, 0x12f7fef6u, 0x120b01fau, 0x16e8fe26u, 0x09ed1104u, 0xfeff070du, 0x0f10ed10u, 0xf5ed010au, 0x06fef001u, 0xf3fd031fu, 0xf1e7ffe1u, 0xd411fbf1u }, // block 30 (dxil label 1268)
+    { 0xffd4dd17u, 0xfc07181cu, 0xfcf5e8ecu, 0x0d1d1902u, 0x3537f104u, 0xdb1db9dfu, 0xf730ea22u, 0xd7d62deeu, 0xf8f0f3e1u, 0x390137f2u, 0x36d9152du, 0x01f5f303u, 0x31169a2au, 0xf406c5cbu, 0xdee9fac3u, 0x371c14efu }, // block 31 (dxil label 1300)
+    { 0xfdf9fc35u, 0xfe1bef04u, 0xeaf625d7u, 0x32fa2317u, 0x15f3f603u, 0x08100c00u, 0xdef504cdu, 0x0520fbeeu, 0x1efced14u, 0xea00ff15u, 0xdffa14cau, 0x0a0715fbu, 0xe9fd13d4u, 0x0efc00fau, 0x24f5ea2du, 0xe202fa13u }, // block 32 (dxil label 1332)
+    { 0xf70201f7u, 0x00ff0602u, 0x09fffa0bu, 0xfef0fc0au, 0x07f30505u, 0x0bf7f60cu, 0x0c0bfff3u, 0x09f90e02u, 0x03fe05ffu, 0xfe01fb00u, 0x01fa0408u, 0x0801fb05u, 0x09fe0df3u, 0x02fdf3fcu, 0x0802061fu, 0xfe17f1f9u }, // block 33 (dxil label 1364)
+    { 0xf0082fe5u, 0x1f1efee9u, 0x4103f72bu, 0xfcf0e707u, 0x19eb13efu, 0x02f0ebdeu, 0x0f0f0a06u, 0xf906e7edu, 0x00f3ed0au, 0xe9e00e08u, 0xf7fef70bu, 0x17100df4u, 0x11080100u, 0xf7fcf00du, 0x0efde50au, 0xecfbfe06u }, // block 34 (dxil label 1396)
+    { 0xf80807f9u, 0x01fe130bu, 0x13fff9feu, 0xf1e40e09u, 0x0bf308ffu, 0x0dff06ffu, 0x0aff0bfau, 0xfd06f6fdu, 0x06fc010bu, 0xf503f7f3u, 0xfa00fd0bu, 0x020f0303u, 0x07f80befu, 0x0402f9e3u, 0x14010321u, 0xf20ceff9u }, // block 35 (dxil label 1428)
+};
+
+static const uint W1[32][16] = {
+    { 0xeaeb3dcau, 0x150af207u, 0x05fe31f8u, 0xf3d3ecf3u, 0x22dded27u, 0x4a66ec27u, 0xd306d31au, 0x15e625f7u, 0xeaede0fau, 0x5af1d428u, 0xf50d17deu, 0x29e60405u, 0x1820f417u, 0xf72cf005u, 0x1c27f6dfu, 0xe020c7c7u }, // block 0 (dxil label 1836)
+    { 0x7f062106u, 0x3e6afff1u, 0x48b6df17u, 0xcbda1a20u, 0x00f6e200u, 0xd31635f8u, 0xbfcbd728u, 0xc83bf11du, 0xddd128ceu, 0x9b20eabfu, 0xddeecf1eu, 0x0a3637f2u, 0x134c0a04u, 0xf95354b9u, 0xdc106128u, 0xdc081fe4u }, // block 1 (dxil label 1871)
+    { 0x80a5cf18u, 0x19d4f138u, 0xfd42bcc6u, 0x8b6e37e8u, 0x09edd310u, 0xde59070fu, 0xf41bd7f7u, 0x40a51edbu, 0xdfe90ff9u, 0xfaf31529u, 0x0328a605u, 0xb67ffd07u, 0xf11412fbu, 0xd5f400ebu, 0x00371215u, 0x490aec1au }, // block 2 (dxil label 1905)
+    { 0x0ef518efu, 0xb502220bu, 0xee0bfa16u, 0x071c22fdu, 0xffef4400u, 0xcaec2452u, 0xc72d061au, 0xeb390eddu, 0x17eaffe2u, 0xecdf2124u, 0xe3ef07e3u, 0xdce2f625u, 0x18cacdc4u, 0xd7060e18u, 0xd695e826u, 0xec13a7d0u }, // block 3 (dxil label 1937)
+    { 0xed09fbbeu, 0x0a16f417u, 0xd9213311u, 0xe7c4fa34u, 0x0df72803u, 0x20d20ddau, 0x3f2ecc00u, 0xecde47deu, 0x02f4f4a7u, 0x10cdea0fu, 0x28cdc9b4u, 0x1cbb27ebu, 0xd1d1f214u, 0xf9dd1ef7u, 0xe5e41219u, 0x00e114edu }, // block 4 (dxil label 1971)
+    { 0xfa3e2c36u, 0xf31725c8u, 0x1af521d7u, 0x1ef6c10eu, 0xc7df0602u, 0x1b043ad6u, 0x1807164du, 0x0ed0c824u, 0x12fe08edu, 0xe6e4fe0eu, 0x031bcbf8u, 0x01e6fc11u, 0xf4e2dc81u, 0xdad3f408u, 0x512decd6u, 0x520f2c24u }, // block 5 (dxil label 2003)
+    { 0xfce1c2f9u, 0xffca4f05u, 0x19f7ad38u, 0x5bc9f8e6u, 0xf70e20fcu, 0xf0dbf4f1u, 0x18242523u, 0x0221c003u, 0xf7160100u, 0x2cf40de7u, 0xedf0040bu, 0xec35fb08u, 0x2bfee0e5u, 0xe0052cedu, 0xfceaf00au, 0xcdfaeff3u }, // block 6 (dxil label 2037)
+    { 0x61f3fad8u, 0xe5fdf105u, 0x4b221100u, 0x0f0e042au, 0x1d9611a0u, 0xd0e92d37u, 0x5d33f42fu, 0x4a4ad93au, 0x2695affau, 0x3cc716a3u, 0x931525eeu, 0x9e4de759u, 0x3050fc0au, 0x94c00e78u, 0xf9c8ef80u, 0xb909440bu }, // block 7 (dxil label 2069)
+    { 0xe8f73dd2u, 0x0bfa15edu, 0x43f23d27u, 0x0a2ed300u, 0x22f835fbu, 0xd8f5bbcau, 0x0b051eb5u, 0xeef1dcf4u, 0xeff62d21u, 0xb78f1a06u, 0xf9fbec1bu, 0x27c8da29u, 0x6c22dcf6u, 0x274910f2u, 0xafa44509u, 0x4da0a411u }, // block 8 (dxil label 2103)
+    { 0xc7533e14u, 0x051afc1du, 0x2a3f0a43u, 0xe4632554u, 0xf0f6114au, 0x2611eeedu, 0xe12cee34u, 0x540c10acu, 0xb54e1d53u, 0x80e0172bu, 0xf7ca141du, 0x4ee33504u, 0xfd210208u, 0x0ff905ecu, 0xe902140au, 0xcffd06c7u }, // block 9 (dxil label 2135)
+    { 0x1bf40d27u, 0xc81241e3u, 0x4823e5fcu, 0xfc40b8afu, 0x3f22fddbu, 0xfcbe2a18u, 0xd9fd4adau, 0x2905c6efu, 0xf125eb25u, 0xbd0c1225u, 0x4de5011fu, 0x2836d7dcu, 0x3c0a480fu, 0x280714fbu, 0xc7b8ed53u, 0x2263e34du }, // block 10 (dxil label 2169)
+    { 0xffbf052cu, 0x474db4e7u, 0x0bbf09d6u, 0x612801fbu, 0xedf11904u, 0xfa0c46e7u, 0x1ba8ea24u, 0xdcd2c524u, 0x1a08d4c4u, 0xe41cd229u, 0xefc82314u, 0xd2e804a6u, 0x5818c829u, 0xfbe00b26u, 0xa40a17f6u, 0x17ea07aeu }, // block 11 (dxil label 2201)
+    { 0x29bc2a36u, 0x27c60a0fu, 0x1cb7ce26u, 0x4e3b0942u, 0x0e0e00edu, 0x0f21dcfcu, 0x17ff0413u, 0xfcde04fcu, 0x0909f0e7u, 0x477bed0eu, 0x06e0fcf1u, 0xe0251cefu, 0x0ae5edfdu, 0xdbf220feu, 0x0a28e713u, 0x130115c7u }, // block 12 (dxil label 2235)
+    { 0x2001d932u, 0x8ce22e0au, 0xc22765f9u, 0x381d17d0u, 0x10e1e7efu, 0xf9a21a1du, 0x1fe808cdu, 0x0402e802u, 0xffb77f97u, 0x222d4f02u, 0xe37f3b63u, 0x61add680u, 0xdcb44606u, 0xd467f82au, 0xd5e10025u, 0x310577f0u }, // block 13 (dxil label 2267)
+    { 0x0bd613dfu, 0xc334f29eu, 0x1c25e6fau, 0x231fc15cu, 0x0af5eaf2u, 0xf9d84af1u, 0x582c4242u, 0x021007dcu, 0xedfd0b24u, 0xe20c101eu, 0xed2cfae7u, 0x1ef81beeu, 0xe7c93d29u, 0xa802d338u, 0xfbebf0dau, 0xf9da3cd8u }, // block 14 (dxil label 2301)
+    { 0xfe07f6d9u, 0x1b449fbfu, 0x180fc522u, 0x23d5fd13u, 0xed0a0bbfu, 0xcd30fc20u, 0x0a0bb312u, 0x100d4b03u, 0x3416a7bbu, 0xc0d1fa4cu, 0x16d7c23eu, 0xca19cc87u, 0x06c503edu, 0x00c63f0au, 0x081405fdu, 0xd2f4d935u }, // block 15 (dxil label 2333)
+    { 0xc2aac526u, 0x4e16ee1au, 0xf129eef1u, 0x21b2a8beu, 0xf118f3abu, 0x04be9befu, 0xeaf293f2u, 0xe6e9d0d5u, 0xbb162de4u, 0xfff82cc0u, 0x8d02e563u, 0x15d711f2u, 0xf8cb0ce4u, 0x2e2b266du, 0x374c8a12u, 0xda112258u }, // block 16 (dxil label 2367)
+    { 0xf52b0eeau, 0xfc44b8d0u, 0xfad6004cu, 0x59f81f39u, 0x071b2c13u, 0x6ddbcb20u, 0x0b17dae9u, 0xf9d61de3u, 0xe93de70cu, 0x69dfec26u, 0x0fedfecau, 0x23092815u, 0x040fdc21u, 0x14cbb800u, 0xf7e6f7f3u, 0xbef3fa15u }, // block 17 (dxil label 2399)
+    { 0x120db4e6u, 0xed01fa18u, 0x3bff100fu, 0xfbd525f8u, 0x311421f5u, 0x0baa104eu, 0xe7dd0522u, 0xcbed0c8eu, 0xce17e423u, 0xc513ddf2u, 0x0c16fbc9u, 0x0903cd2du, 0xafd9f1e5u, 0x44036d3cu, 0x04f99e17u, 0x01efe5ceu }, // block 18 (dxil label 2433)
+    { 0x06010311u, 0xd6d3273fu, 0xd5110f06u, 0xb2cf74d5u, 0x0c100914u, 0x25fa20dau, 0xee0bfdfau, 0xe5fe0f07u, 0x035f27e8u, 0xfc20ec10u, 0xf3e80829u, 0xd2c12bd1u, 0xe5c050cfu, 0x902feaf9u, 0x2419dee2u, 0x661f0a1bu }, // block 19 (dxil label 2465)
+    { 0x17e5041eu, 0xdae31cffu, 0xf0c4eeebu, 0xff1ecd0du, 0x1be00a22u, 0xdc1135f8u, 0xca330314u, 0xfc1602fau, 0xc00ffe49u, 0x30f52d07u, 0x0408f830u, 0x01b612e5u, 0x3828ed2au, 0xfa27ef08u, 0xf21af801u, 0xabe40511u }, // block 20 (dxil label 2499)
+    { 0x0af4cb14u, 0x1b5bb4c0u, 0x2afaaa36u, 0x49b4e643u, 0x0ea80adcu, 0xd31e0d28u, 0x2010260du, 0x3eee4afcu, 0x00cff5eeu, 0xf2fdf2dfu, 0xd2e214d0u, 0xdc0debf7u, 0x06d5182fu, 0xf706f40bu, 0xcdfb10f5u, 0x140015f3u }, // block 21 (dxil label 2531)
+    { 0xc6dfc721u, 0xec07d80bu, 0xe9c023d9u, 0x2bc30909u, 0xd005084bu, 0x33f712f6u, 0xf7f3e806u, 0xdbc6ee02u, 0x07061fc8u, 0xe734cdeau, 0xfa1f060du, 0x5efa0122u, 0x4a0edd1bu, 0x11b2d8ffu, 0xe6fc0ad2u, 0x06f06038u }, // block 22 (dxil label 2565)
+    { 0x27cd10e4u, 0xac21c1cbu, 0x3d38f80au, 0x3932001bu, 0xcd52fa00u, 0x2d0bc5fau, 0xdbdc66eau, 0xb81bd3b8u, 0xd5d6fdf7u, 0xf7214531u, 0x242bfff7u, 0x3c5bd021u, 0x0bf11783u, 0xd6d0f15fu, 0xfd5fa5d0u, 0x16e40123u }, // block 23 (dxil label 2597)
+    { 0xf229f407u, 0xd8ce10f5u, 0x1f2efbf0u, 0x423a0edfu, 0x1713fdeeu, 0xfa1c24eeu, 0x0bea01f2u, 0x19190314u, 0xd73040e3u, 0xcd495006u, 0xebb5c75du, 0xe9cf19e7u, 0xf93cc1f1u, 0xd121113du, 0x0518fc01u, 0x0102dbfau }, // block 24 (dxil label 2631)
+    { 0x1de7eff3u, 0xe8591007u, 0x2d560c20u, 0x2e305937u, 0x3026dac6u, 0x2ec1db44u, 0xf4e55a1fu, 0x4fe2050du, 0xd1fa1abbu, 0x310a5722u, 0x1902f9b2u, 0xeacf0d16u, 0x80093007u, 0xe7970a06u, 0xc04201f6u, 0x120ce9e9u }, // block 25 (dxil label 2663)
+    { 0x48fcfdfdu, 0xd0134fe2u, 0x721b1115u, 0xf42ce8d9u, 0xddd9f2e1u, 0xef5c0482u, 0xf345dc17u, 0x1fbb087fu, 0x050cf632u, 0xeb05f21du, 0xfe0bce13u, 0x11282fe7u, 0x21fdccddu, 0x0e07c50cu, 0xcef380ecu, 0x3c0bf5eau }, // block 26 (dxil label 2697)
+    { 0x1c195c19u, 0xec9dd8e2u, 0xdd4dea11u, 0x14f350fau, 0xe92d2122u, 0xfaeceb30u, 0x05f20711u, 0xe3ebfd00u, 0x2a9cd00eu, 0x2910c802u, 0x4056f310u, 0x493cf9c1u, 0x0f181122u, 0x2f3a0216u, 0xdc08e426u, 0xd000e326u }, // block 27 (dxil label 2729)
+    { 0xa8e9baeau, 0xfde43918u, 0xb6ec05b2u, 0xb4d4dce0u, 0x2d23c4a3u, 0x11c9e609u, 0x122cd7f8u, 0x47540d10u, 0x042fd3dfu, 0x5509efd4u, 0x24ed00deu, 0xf2c31225u, 0x2900ebf5u, 0x091df1fdu, 0xdfd7c9e2u, 0xf90efe12u }, // block 28 (dxil label 2763)
+    { 0xfbfd1c04u, 0x153edafau, 0x07d5a819u, 0xf2230ae4u, 0x512beb1eu, 0xa9e258fdu, 0x4913bb40u, 0x39c2dffdu, 0xf229fe09u, 0xe5ddc3d2u, 0xffda32aeu, 0x18d71df7u, 0xc3e7f80bu, 0x1d45bf5au, 0xe32a1553u, 0xbd233804u }, // block 29 (dxil label 2795)
+    { 0x3609e223u, 0xe41a09ffu, 0x060bbbe5u, 0x32f9e931u, 0x1ada163au, 0xd7011213u, 0xc417e30au, 0x3a220713u, 0xf6c5cdecu, 0xf001ca0au, 0xd8100257u, 0xd016d8f4u, 0xd802f92cu, 0xedc4fe91u, 0x33d4b9bcu, 0xe606e89bu }, // block 30 (dxil label 2829)
+    { 0x27edeb22u, 0xdd510317u, 0x10396021u, 0xf11edc1cu, 0x34ae4724u, 0xfc15f9dbu, 0xeaf92b58u, 0x0118e966u, 0x06ac2e03u, 0x1df7ead9u, 0xca3ceaf8u, 0xd135f89bu, 0x04d9fe1eu, 0xe81df407u, 0xee20d4f6u, 0x2e282505u }, // block 31 (dxil label 2861)
+};
+
+static const uint W2[32][16] = {
+    { 0x0304ef00u, 0x2227eed6u, 0x8be21015u, 0xac68e9fcu, 0xfc1704f9u, 0xfe7b0f80u, 0xb7083ff4u, 0xf70bb6eeu, 0xf4db26d1u, 0xe00e3fe4u, 0x49d907d3u, 0x04d6be0eu, 0xbdfebe20u, 0x0516fcb6u, 0x87d50c24u, 0x1ed2131du }, // block 0 (dxil label 3492)
+    { 0x00020306u, 0x31ea0d1eu, 0x3d291008u, 0xdaf51a2au, 0x6c0af2f6u, 0x1b20ca02u, 0x1df2d568u, 0x0fe6def7u, 0x2400e514u, 0xfff8d760u, 0xf5103f23u, 0xe529e244u, 0x2fea02feu, 0xecc9dbf4u, 0x2ef2d6ecu, 0xeff0441bu }, // block 1 (dxil label 3527)
+    { 0xfb15d92eu, 0x1603f10du, 0xbcfe291cu, 0x02f816fbu, 0x8bf8e226u, 0xdaf4fa2fu, 0xebe93017u, 0x5ee52432u, 0xf4251112u, 0xfc3c6a3eu, 0x0df9ebc4u, 0xe9de0f20u, 0xf7b829f6u, 0xf25e44b1u, 0xdfe7fcd5u, 0x1c372e06u }, // block 2 (dxil label 3559)
+    { 0xfdcb1df2u, 0x351218deu, 0x1925fd09u, 0x0aeccd1du, 0xe6def708u, 0xc315e9f8u, 0xfd291a08u, 0x41ccfa05u, 0xa6e40af9u, 0xcd0192f6u, 0xd9d3e4f2u, 0xe4b707ddu, 0x09d1daefu, 0x33d98814u, 0x0ee6fb2au, 0xe1461fedu }, // block 3 (dxil label 3591)
+    { 0x0f2aeae8u, 0xe409082bu, 0xe53b17feu, 0xc63232e4u, 0xf2b82ae3u, 0xf133e9c5u, 0xd31c04ecu, 0xf9385dffu, 0xff1ec2d1u, 0x47d80657u, 0x00e7dcfcu, 0x003dd0b6u, 0xe1dee3fcu, 0xc6180716u, 0x9ed40ac0u, 0xeed6e402u }, // block 4 (dxil label 3627)
+    { 0xe821261bu, 0xd9f33df2u, 0xf1002b1au, 0x12ed07d2u, 0x10e60b27u, 0xe2e315fcu, 0x0e0c400cu, 0xf41b0d1du, 0xd413372au, 0xe9f2211cu, 0x0006f4d2u, 0xfb02e3feu, 0xf43ffc06u, 0xe3ca0c29u, 0xd536b9fdu, 0xa704fce6u }, // block 5 (dxil label 3659)
+    { 0xc3d0500bu, 0xcffa990cu, 0x17eb261bu, 0x05010428u, 0x142335bfu, 0x26180f60u, 0x34e60752u, 0x020537f9u, 0xf1ec320bu, 0x003f493cu, 0x50e1091du, 0xc201e814u, 0xe5ea0bffu, 0xcaf5f0e4u, 0x40ede800u, 0x59fd15bfu }, // block 6 (dxil label 3691)
+    { 0xd9c935efu, 0xeefb4a02u, 0x1102f8c2u, 0x00cb3cecu, 0xb34312f8u, 0xcb0af2fbu, 0x110de3adu, 0xe6cdf6e0u, 0x0d2c1ce4u, 0x06c5b2edu, 0x1efd002du, 0x30e4ffe9u, 0xf0bf16c9u, 0x26311d25u, 0x17d30c2fu, 0x1ff23e18u }, // block 7 (dxil label 3723)
+    { 0xfc4fe126u, 0x2a3ddc02u, 0xf8f2e3f1u, 0xe7d4ffefu, 0x0a2546eeu, 0xf9e7f2f5u, 0x260ae50bu, 0xf705191cu, 0xe9e3eadcu, 0xbb67e5a0u, 0x761bf7ecu, 0xe23e02c1u, 0xf105ec31u, 0xf385d041u, 0xe228e222u, 0x0406dd16u }, // block 8 (dxil label 3759)
+    { 0x03cc15ecu, 0x06dd1cd9u, 0x41daccffu, 0xdff0e21eu, 0x1253b5fcu, 0xf9cfd0d5u, 0xf9f9bdeeu, 0x14f9134bu, 0x1f2c0801u, 0x0cfff9c3u, 0xd8f716abu, 0x302dd7e1u, 0xdaf705e5u, 0x02fb0cffu, 0x1209e6d5u, 0x06d3fb3fu }, // block 9 (dxil label 3791)
+    { 0xd5c24b00u, 0x01e62873u, 0xdae0151eu, 0xc6eff643u, 0x09e8fe21u, 0x151a7104u, 0xd20813d6u, 0x03eef4f7u, 0xdc2c45fcu, 0x92f7dccdu, 0xf2e9fb0fu, 0xa5fbaf15u, 0x3ff36d2eu, 0x200e0dc4u, 0x0cbb08c5u, 0xf7f9e1ddu }, // block 10 (dxil label 3823)
+    { 0x4bdee504u, 0x00dd1422u, 0x23010e4du, 0x2b21f313u, 0x22e1141eu, 0xd91d80f0u, 0x05120bffu, 0xb09a2f5au, 0x44f40df7u, 0x261c1f1bu, 0x36121716u, 0x33111941u, 0xa6221b06u, 0xf5dabd23u, 0xf5f5ccf0u, 0x91dfea0fu }, // block 11 (dxil label 3855)
+    { 0x22e7d1d4u, 0x062d0045u, 0xce5426fcu, 0xe41d2922u, 0xe5e6ee18u, 0xf69cf747u, 0x1809b8ddu, 0x4601f047u, 0xedaacadbu, 0xbfd43725u, 0x04fc2aedu, 0xdf1fc5f6u, 0x0e3c1010u, 0xcc3433a3u, 0x19f60dc3u, 0x08455a11u }, // block 12 (dxil label 3891)
+    { 0xbcd523f1u, 0xcdfa10e8u, 0xeaed1803u, 0xfbd6dc35u, 0xb634bb00u, 0x36b61ff9u, 0x0f0adf12u, 0xcbee48b3u, 0xedc6f8ddu, 0x181511e8u, 0x41ecbef4u, 0x0adc19dfu, 0x37ecde27u, 0xd01dfd03u, 0x031fecd6u, 0xe7fe0bf7u }, // block 13 (dxil label 3923)
+    { 0xd8152bb9u, 0xf90b650du, 0xf6d958ecu, 0xf63d2f12u, 0x24dfc001u, 0x2816cbffu, 0xc90e04f5u, 0x14321ffau, 0x0f252ceau, 0xb3e5d32eu, 0x3ed83309u, 0x0db522edu, 0xd51600eau, 0x38ebbcefu, 0x061502c9u, 0x0bd0fa39u }, // block 14 (dxil label 3955)
+    { 0xe8f012e7u, 0xea33a72au, 0x0a182926u, 0x4e3a111fu, 0x22f3e159u, 0x2f0e1832u, 0x1a32c2dau, 0xdcc8e91au, 0x8aebc2f3u, 0xa6e04101u, 0xf9f52151u, 0xc8e938d4u, 0xc62a2526u, 0x021c41e0u, 0x1b460959u, 0x525510dbu }, // block 15 (dxil label 3987)
+    { 0xea0e170eu, 0xd3f7101au, 0xd5ba112eu, 0xe043ef00u, 0xf2e60f19u, 0x1012f9ffu, 0x20f5ecc5u, 0x5f41abe9u, 0xf344f6ecu, 0xff4e28e4u, 0xd44e19f1u, 0xb63ead0eu, 0x42fa9a80u, 0x14125ad8u, 0x2302df13u, 0x9f913a0cu }, // block 16 (dxil label 4023)
+    { 0xf006f529u, 0xf6c1f249u, 0x783bcc20u, 0xe3fcf804u, 0xfb0527b9u, 0x02ea0b11u, 0xcdf6a12eu, 0x0ed90627u, 0x2fb73b22u, 0x0cc610bbu, 0xe718a4fdu, 0xc5480821u, 0x1004e915u, 0xe1a5f40au, 0xe21a5cc1u, 0xdfe619e7u }, // block 17 (dxil label 4055)
+    { 0x07e62207u, 0xdd2536edu, 0x17151924u, 0xf7ddf5e6u, 0x1d0602e9u, 0xf4ff37a7u, 0xcaebde04u, 0xf237033au, 0x012c06f9u, 0x90dd4659u, 0xebfccca4u, 0x20262de7u, 0xd700122eu, 0x0a0e11efu, 0x48cc36f6u, 0x090a58d0u }, // block 18 (dxil label 4087)
+    { 0xda042214u, 0x32f9b6edu, 0xeaebc0f1u, 0x24251e0cu, 0x012a5af4u, 0x6506cd73u, 0xc3e5f4efu, 0x161d5923u, 0xe611d6f7u, 0xbffaf6deu, 0x5b55d327u, 0x07d5f610u, 0x75e8bb1au, 0x19040331u, 0xb4dd5c10u, 0x5ce63bf5u }, // block 19 (dxil label 4119)
+    { 0xc3f8f4d6u, 0x2d1dc9f4u, 0x5b10ec42u, 0xc95842eeu, 0xeaa7451au, 0x21340db2u, 0xa8caecf9u, 0x24dfe219u, 0x1008d49bu, 0x08ddadf5u, 0xcae01724u, 0xe5aa15f2u, 0x14c7e42du, 0x08d8e202u, 0x7e1c06e1u, 0x7fd1c100u }, // block 20 (dxil label 4155)
+    { 0x0335041cu, 0xe31eead4u, 0xf0335dcfu, 0x1fd4312bu, 0xf2b0f1e8u, 0xf711f005u, 0x34acadbau, 0x0e0417ebu, 0x2ea1d1c6u, 0x29f1bf00u, 0x5ec2ac34u, 0xfe8702ebu, 0xe97ef6e4u, 0x24d60fffu, 0xf32228edu, 0x220ee62bu }, // block 21 (dxil label 4187)
+    { 0x06254c04u, 0xfad84ae3u, 0xd30b1decu, 0xb55fc509u, 0x1840f1aeu, 0x3ef1fb4fu, 0x1d0b0fd2u, 0xe4a966aau, 0x1d0e09e6u, 0xf3325526u, 0xba26c4e6u, 0xef1db4f3u, 0x2773da03u, 0xd6262be0u, 0x3bf41ae9u, 0x7f39e6d0u }, // block 22 (dxil label 4219)
+    { 0xb8e5ce2eu, 0xb919b236u, 0x2611f4c1u, 0xbfc830e1u, 0x355ef91fu, 0x309b02e5u, 0x2831fe03u, 0x2439e8dcu, 0x7f0b3040u, 0x052ceef6u, 0x2607d81fu, 0x1f1fdb23u, 0x282bfa2cu, 0xef05b6ccu, 0x2637feeeu, 0xbf04d25au }, // block 23 (dxil label 4251)
+    { 0xebd61ff0u, 0xedfb1afcu, 0xceae1209u, 0x379c67e2u, 0xbedbd0e0u, 0xe0ffebf5u, 0xef05c5eau, 0xdc58d32cu, 0xd6d9d179u, 0x950c26ffu, 0x23f0c20eu, 0x5bd0e561u, 0x3f6406e0u, 0x39d8d41fu, 0xd250e719u, 0xf50a0f32u }, // block 24 (dxil label 4287)
+    { 0x128001bbu, 0x4e5ad5c9u, 0x0880ef31u, 0xe1d3581au, 0xeb02233fu, 0x10241021u, 0xc4183bc5u, 0xd910c6eau, 0xe32903e9u, 0xdb03ece3u, 0xd3eefa8du, 0x11cf4300u, 0xf9a41a08u, 0x3ddca8e8u, 0xb0c63b58u, 0x1c2bcf63u }, // block 25 (dxil label 4319)
+    { 0x1016161eu, 0x0a490f2bu, 0xf4fd2ae4u, 0x3c2148bfu, 0x23ea030eu, 0xea35ef23u, 0x02c92735u, 0xb308e6e7u, 0xd0fdf7d7u, 0xd9c2a323u, 0xac16ea4fu, 0xeb2414e3u, 0x40ccffa7u, 0x46d66269u, 0x55e61dfau, 0x0838fc23u }, // block 26 (dxil label 4351)
+    { 0xfbd0d4e2u, 0x80a2f617u, 0x300bf910u, 0xebeb42c7u, 0x1b0eec13u, 0xfad719ecu, 0xf91fe30bu, 0xf0b6ff40u, 0x30f42516u, 0x1911071eu, 0x29df06e4u, 0x1f222431u, 0x50061bfbu, 0xe5468d06u, 0xfef6e9e3u, 0xd64bf33bu }, // block 27 (dxil label 4383)
+    { 0x62f43118u, 0xdf3205f4u, 0x285a4c15u, 0x0ef761ecu, 0x1717dd09u, 0xe428eceau, 0xfc04180eu, 0x0ac5a1b9u, 0x00d4f707u, 0xd87728e3u, 0xccc5192cu, 0x9f014008u, 0xec373376u, 0x5c580c27u, 0x121ae3d0u, 0xf093cc12u }, // block 28 (dxil label 4419)
+    { 0xf2252107u, 0x63b44112u, 0x1d670b66u, 0xfe35dd12u, 0x1634569cu, 0xa1fd2e1bu, 0x611f0ff4u, 0xf6d6c315u, 0x08e84aaau, 0xfd1e13e4u, 0x2425ed0du, 0xea2810c9u, 0xec9452e1u, 0x03dc3001u, 0x10951dc8u, 0xe5deec30u }, // block 29 (dxil label 4451)
+    { 0x02260622u, 0x340ee103u, 0xd5b734f4u, 0x24f615cdu, 0x0afe111du, 0xfaf42c21u, 0xc40b07d4u, 0x5054ca2eu, 0xc907261cu, 0xf526f5b4u, 0xd6e43834u, 0xd5efdcfau, 0x132c2216u, 0xddd44b37u, 0x3ed90d4cu, 0xdd0d4420u }, // block 30 (dxil label 4483)
+    { 0x3816200fu, 0x28d3f7d4u, 0x3639cd1au, 0x09099a18u, 0xe5f721efu, 0xfb04f639u, 0xff03e803u, 0xfc053400u, 0x02c9e1ceu, 0xabd758e0u, 0x43e30e25u, 0x6df1e30eu, 0x12eae80du, 0xf4effafeu, 0xf10fe801u, 0xf307f924u }, // block 31 (dxil label 4515)
+};
+
+int requant_shift(int x, uint shift, int add)
+{
+    uint bit = (uint(x) >> shift) & 1u;
+    return (x + add + int(bit)) >> int(shift);
+}
+
+uint pack_bytes(int4 q)
+{
+    // SM 6.6 intrinsic -> DXIL Pack4x8 packMode 2 (SClamp). (Do NOT name this
+    // helper pack_s8: it shadows the intrinsic and dxc emits truncating packs.)
+    return (uint)pack_clamp_s8(q);
+}
+
+int int16_wrap(int v)
+{
+    return ((v & 0xFFFF) ^ 0x8000) - 0x8000;
+}
+
+[numthreads(64, 1, 1)]
+void reimpl_pass4_2160(uint3 tid : SV_DispatchThreadID)
+{
+    const uint tx = tid.x;
+    const uint ty = tid.y;
+    if (tx > 959u || ty > 539u)
+        return;
+    const bool inRange = tx < 960u && ty < 540u;
+
+    // ---- biases ----
+    int acc0[16]; int acc1[64]; int acc2[32];
+    [unroll]
+    for (int b0 = 0; b0 < 4; b0++) {
+        const uint4 v = t18_initializer.Load4(13056u + 16u * b0);
+        [unroll] for (int q0 = 0; q0 < 4; q0++) acc0[4 * b0 + q0] = asint(v[q0]);
+    }
+    [unroll]
+    for (int b1 = 0; b1 < 16; b1++) {
+        const uint4 v = t18_initializer.Load4(15232u + 16u * b1);
+        [unroll] for (int q1 = 0; q1 < 4; q1++) acc1[4 * b1 + q1] = asint(v[q1]);
+    }
+    [unroll]
+    for (int b2 = 0; b2 < 8; b2++) {
+        const uint4 v = t18_initializer.Load4(17536u + 16u * b2);
+        [unroll] for (int q2 = 0; q2 < 4; q2++) acc2[4 * b2 + q2] = asint(v[q2]);
+    }
+
+    // ---- stage 0: partial 3x3 conv, channels 0-15 ----
+    [unroll]
+    for (int t = 0; t < 9; t++) {
+        const int dy = t / 3;
+        const int dx = t % 3;
+        const int row = int(ty) + dy;
+        const int col = int(tx) + dx;
+        // logical tensor = plane rows 1..540, cols 1..960
+        if (row < 1 || row > 540 || col < 1 || col > 960)
+            continue;
+        const uint4 pix = ScratchBuffer.Load4(33273664u + 15392u * uint(row) + 16u * uint(col));
+        [unroll]
+        for (int g = 0; g < 4; g++) {
+            [unroll]
+            for (int i = 0; i < 4; i++) {
+                int acc = acc0[4 * g + i];
+                [unroll]
+                for (int c = 0; c < 4; c++)
+                    acc = dot4add_i8packed(pix[c], W0[g * 9 + t][4 * i + c], acc);
+                acc0[4 * g + i] = acc;
+            }
+        }
+    }
+    uint conv_result[8];
+    [unroll]
+    for (int d0 = 0; d0 < 4; d0++) {
+        int4 q;
+        [unroll]
+        for (int j0 = 0; j0 < 4; j0++)
+            q[j0] = requant_shift(acc0[4 * d0 + j0], 7u, 63);
+        conv_result[d0] = pack_bytes(q);
+    }
+    // channels 16-31 passthrough: P1 pixel at the output position
+    conv_result[4] = ScratchBuffer.Load(41616128u + 15392u * (ty + 1u) + 16u * (tx + 1u));
+    conv_result[5] = ScratchBuffer.Load(41616128u + 15392u * (ty + 1u) + 16u * (tx + 1u) + 4u);
+    conv_result[6] = ScratchBuffer.Load(41616128u + 15392u * (ty + 1u) + 16u * (tx + 1u) + 8u);
+    conv_result[7] = ScratchBuffer.Load(41616128u + 15392u * (ty + 1u) + 16u * (tx + 1u) + 12u);
+
+    // ---- stage 1: pw 32->64 + ReLU ----
+    [unroll]
+    for (int o = 0; o < 16; o++) {
+        [unroll]
+        for (int s = 0; s < 2; s++) {
+            [unroll]
+            for (int i2 = 0; i2 < 4; i2++) {
+                int acc = acc1[4 * o + i2];
+                [unroll]
+                for (int d1 = 0; d1 < 4; d1++)
+                    acc = dot4add_i8packed(conv_result[4 * s + d1], W1[2 * o + s][4 * i2 + d1], acc);
+                acc1[4 * o + i2] = acc;
+            }
+        }
+    }
+    uint relu_res[16];
+    [unroll]
+    for (int d2 = 0; d2 < 16; d2++) {
+        int4 q2;
+        [unroll]
+        for (int j2 = 0; j2 < 4; j2++)
+            q2[j2] = requant_shift(max(acc1[4 * d2 + j2], 0), 8u, 127);
+        relu_res[d2] = pack_bytes(q2);
+    }
+
+    // ---- stage 2: pw 64->32 ----
+    [unroll]
+    for (int o2 = 0; o2 < 8; o2++) {
+        [unroll]
+        for (int jj = 0; jj < 4; jj++) {
+            [unroll]
+            for (int i3 = 0; i3 < 4; i3++) {
+                int acc = acc2[4 * o2 + i3];
+                [unroll]
+                for (int d3 = 0; d3 < 4; d3++)
+                    acc = dot4add_i8packed(relu_res[4 * jj + d3], W2[4 * o2 + jj][4 * i3 + d3], acc);
+                acc2[4 * o2 + i3] = acc;
+            }
+        }
+    }
+
+    // ---- tail: residual + float requant, two planes ----
+    [unroll]
+    for (int qq = 0; qq < 2; qq++) {
+        const float scale = (qq == 0) ? 64.0f : 32.0f;
+        const uint rbase = (qq == 0) ? 33273664u : 41616128u;
+        const uint wbase = (qq == 0) ? 49958592u : 58301056u;
+        [unroll]
+        for (int d4 = 0; d4 < 4; d4++) {
+            int4 lanes;
+            [unroll]
+            for (int j3 = 0; j3 < 4; j3++) {
+                const uint raddr = rbase + 15392u * (ty + 1u) + 16u * (tx + 1u) + 4u * d4;
+                const uint rdw = ScratchBuffer.Load(raddr);
+                const int rb = (int)(((rdw >> (8 * j3)) & 0xFFu) << 24) >> 24;
+                const float v = float(rb) * 0.015625f + float(acc2[16 * qq + 4 * d4 + j3]) * 0.00006103515625f;
+                const float rr = round(v * scale);
+                int iv = int16_wrap(int(rr));
+                lanes[j3] = iv;
+            }
+            const uint val = inRange ? pack_bytes(lanes) : 0u;
+            const uint addr = wbase + 15392u * (ty + 1u) + 16u * (tx + 1u) + 4u * d4;
+            ScratchBuffer.Store(addr, val);
+        }
+    }
+}

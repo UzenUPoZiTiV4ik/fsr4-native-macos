@@ -1,0 +1,435 @@
+{
+ "schema": "fsr411_provider_manifest_v1",
+ "target": "ffx-compatible provider DLL for 4.1.1 INT8 on TU117 (GTX 1650), 2160 class (2560x1440 render -> 3840x2160 output)",
+ "model": "fsr4_model_v07_fp8_no_scale (entry names preserved from 4.0.2 host-side selector)",
+ "class2160_transaction": "2160-class 2560x1440 transaction (27 passes; fully homegrown EXACT_411 chain)",
+ "taxonomy": {
+  "EXACT_411": "our kernel byte-identical to AMD container on same captured pre-state",
+  "EXACT_411_REPLAY": "AMD's own container replayed 0-mismatch vs capture in our harness",
+  "UNVALIDATED_411": "no oracle capture yet"
+ },
+ "scratch_arena": {
+  "size": 83232256,
+  "note": "2160-class scratch arena (2560x1440 render -> 3840x2160 output); per-pass geometry (guards/strides/bases) in docs/evidence411/2160/*.json"
+ },
+ "initializer": {
+  "t18_size": 131072,
+  "note": "131072-byte v07 containers per 4.1.0 RE tensor map; runtime biases per-pass at t18 offsets (pass1: 3456/4096/4736, pass2: 7168/7808/8448)"
+ },
+ "roots_implemented_in_harness": [
+  "pre 26176 (UAV12 SRV18 rootCBV b1/b0 + static samplers)",
+  "epi 26033 (UAV12 + root CBV b0)",
+  "compute 26039 (UAV12 + SRV19 + root CBV b0)",
+  "nocbv 26044 (UAV12 + SRV19)",
+  "post 26065 (UAV12 + SRV18 + root CBV b1)"
+ ],
+ "passes": [
+  {
+   "pix_pass": "FFX_FSR4_PASS_0",
+   "global_id": null,
+   "role": "PRE",
+   "classification": "EXACT_411",
+   "container": "0e82b0ed5c2ffac175f9f92836af04bd82e37299d880932d30377ee6174ef2b9",
+   "kernel": "bench/shaders/reimpl2160/pre_rev_411_v15_2160.hlsl",
+   "dispatch": [
+    240,
+    135,
+    1
+   ],
+   "root": "pre (26176)",
+   "evidence": "docs/evidence411/2160/411_2160_pass0_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_1",
+   "global_id": null,
+   "role": "epilogue after logical pass 0 (pass0_post, arena zero-fill)",
+   "classification": "EXACT_411",
+   "container": "65f7f7faa844f69d5660b86dfd98927be7693dd6889ecd1ec6d19ed0b7d3b75b",
+   "kernel": "bench/shaders/reimpl2160/pass0_post_2160.hlsl",
+   "dispatch": [
+    188,
+    1,
+    1
+   ],
+   "root": "epi (26033)",
+   "evidence": "docs/evidence411/2160/411_2160_pass1_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_2",
+   "global_id": null,
+   "role": "logical neural pass 1 (ConvNextBlock family)",
+   "classification": "EXACT_411",
+   "container": "24aebd6b6c08c8ef47efc679767eb65f98f7c804484b07dd18679d768605d07b",
+   "kernel": "bench/shaders/reimpl2160/reimpl_pass1_2160.hlsl",
+   "dispatch": [
+    30,
+    1080,
+    1
+   ],
+   "root": "compute (26039)",
+   "evidence": "docs/evidence411/2160/411_2160_pass2_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_3",
+   "global_id": null,
+   "role": "epilogue after logical pass 1 (pass1_post, arena zero-fill)",
+   "classification": "EXACT_411",
+   "container": "ae0aacafa438f7a100c389ec3366b409e4d731752c607b768599da73de9bbad3",
+   "kernel": "bench/shaders/reimpl2160/pass1_post_2160.hlsl",
+   "dispatch": [
+    188,
+    1,
+    1
+   ],
+   "root": "epi (26033)",
+   "evidence": "docs/evidence411/2160/411_2160_pass3_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_4",
+   "global_id": null,
+   "role": "logical neural pass 2 (ConvNextBlock family)",
+   "classification": "EXACT_411",
+   "container": "724d1ef7006a1c8a6af359e725ce42366d4543d428fbe5bb382236ea1b05b420",
+   "kernel": "bench/shaders/reimpl2160/reimpl_pass2_2160.hlsl",
+   "dispatch": [
+    30,
+    1080,
+    1
+   ],
+   "root": "compute (26039)",
+   "evidence": "docs/evidence411/2160/411_2160_pass4_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_5",
+   "global_id": null,
+   "role": "epilogue after logical pass 2 (pass2_post, arena zero-fill)",
+   "classification": "EXACT_411",
+   "container": "e267fa0dccb84715c0aa398d747440b8178c2d43c34af27a9a38ba5a7bbe847e",
+   "kernel": "bench/shaders/reimpl2160/pass2_post_2160.hlsl",
+   "dispatch": [
+    188,
+    1,
+    1
+   ],
+   "root": "epi (26033)",
+   "evidence": "docs/evidence411/2160/411_2160_pass5_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_6",
+   "global_id": null,
+   "role": "logical neural pass 3 (DownscaleStridedConv2x2 16->32)",
+   "classification": "EXACT_411",
+   "container": "276c1ef037e071050b6635f3c578ff7e30b8aa1dd69534d0ca1fe84b60f0cefa",
+   "kernel": "bench/shaders/reimpl2160/reimpl_pass3_2160.hlsl",
+   "dispatch": [
+    15,
+    540,
+    1
+   ],
+   "root": "nocbv (26044)",
+   "evidence": "docs/evidence411/2160/411_2160_pass6_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_7",
+   "global_id": null,
+   "role": "epilogue after logical pass 3 (pass3_post, arena zero-fill)",
+   "classification": "EXACT_411",
+   "container": "8135420de3fe543e46489d8c8ac0e818ec6bad6baf4384a8cbce9ca958f214a7",
+   "kernel": "bench/shaders/reimpl2160/pass3_post_2160.hlsl",
+   "dispatch": [
+    94,
+    1,
+    1
+   ],
+   "root": "epi (26033)",
+   "evidence": "docs/evidence411/2160/411_2160_pass7_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_8",
+   "global_id": null,
+   "role": "logical neural pass 4 (FasterNetBlock numFeatures=32)",
+   "classification": "EXACT_411",
+   "container": "19c912ae7e43c9b8898b919ded32360aa1282aef8b27fe4588a63b767a4c9375",
+   "kernel": "bench/shaders/reimpl2160/reimpl_pass4_2160.hlsl",
+   "dispatch": [
+    15,
+    540,
+    1
+   ],
+   "root": "compute (26039)",
+   "evidence": "docs/evidence411/2160/411_2160_pass8_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_9",
+   "global_id": null,
+   "role": "epilogue after logical pass 4 (pass4_post, arena zero-fill)",
+   "classification": "EXACT_411",
+   "container": "49ad755f210be3af588889c26b809709eb2b769a36199e0bc9e0e2cee614d552",
+   "kernel": "bench/shaders/reimpl2160/pass4_post_2160.hlsl",
+   "dispatch": [
+    94,
+    1,
+    1
+   ],
+   "root": "epi (26033)",
+   "evidence": "docs/evidence411/2160/411_2160_pass9_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_10",
+   "global_id": null,
+   "role": "logical neural pass 5 (FasterNetBlock numFeatures=32)",
+   "classification": "EXACT_411",
+   "container": "3ecec100dee5b0928f53843bb11039f74e7d4c2afc0d69dc70ab78b93cb915b8",
+   "kernel": "bench/shaders/reimpl2160/reimpl_pass5_2160.hlsl",
+   "dispatch": [
+    15,
+    540,
+    1
+   ],
+   "root": "compute (26039)",
+   "evidence": "docs/evidence411/2160/411_2160_pass10_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_11",
+   "global_id": null,
+   "role": "epilogue after logical pass 5 (pass5_post, arena zero-fill)",
+   "classification": "EXACT_411",
+   "container": "6cf53fa886bad3e62f0d8284296668bc067226d22e8b9d153b1008e8230078bc",
+   "kernel": "bench/shaders/reimpl2160/pass5_post_2160.hlsl",
+   "dispatch": [
+    94,
+    1,
+    1
+   ],
+   "root": "epi (26033)",
+   "evidence": "docs/evidence411/2160/411_2160_pass11_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_12",
+   "global_id": null,
+   "role": "logical neural pass 6",
+   "classification": "EXACT_411",
+   "container": "a0ab0f8d16aa158e9a09674526d03502249879195ac3bbd8457498ce1506ae41",
+   "kernel": "bench/shaders/reimpl2160/reimpl_pass6_2160.hlsl",
+   "dispatch": [
+    8,
+    270,
+    1
+   ],
+   "root": "nocbv (26044)",
+   "evidence": "docs/evidence411/2160/411_2160_pass12_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_13",
+   "global_id": null,
+   "role": "epilogue after logical pass 6 (pass6_post, arena zero-fill)",
+   "classification": "EXACT_411",
+   "container": "1c96153ee3c692b85ed93b9f2eb6719cc6476dc27e80c5ed095ebb8b14af50ef",
+   "kernel": "bench/shaders/reimpl2160/pass6_post_2160.hlsl",
+   "dispatch": [
+    47,
+    1,
+    1
+   ],
+   "root": "epi (26033)",
+   "evidence": "docs/evidence411/2160/411_2160_pass13_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_14",
+   "global_id": null,
+   "role": "logical neural pass 7",
+   "classification": "EXACT_411",
+   "container": "283c8b86864f0c7c3a3d827cc45492cacc051aed5b63908f42aae8fce17e1ee7",
+   "kernel": "bench/shaders/reimpl2160/reimpl_pass7_2160.hlsl",
+   "dispatch": [
+    16,
+    540,
+    1
+   ],
+   "root": "nocbv (26044)",
+   "evidence": "docs/evidence411/2160/411_2160_pass14_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_15",
+   "global_id": null,
+   "role": "epilogue after logical pass 7 (pass7_post, arena zero-fill)",
+   "classification": "EXACT_411",
+   "container": "15bb0eb57c1ca1c11ffc289be6e82dd283b1ff3d2321c4ec6b0aa7c769a0db1c",
+   "kernel": "bench/shaders/reimpl2160/pass7_post_2160.hlsl",
+   "dispatch": [
+    47,
+    1,
+    1
+   ],
+   "root": "epi (26033)",
+   "evidence": "docs/evidence411/2160/411_2160_pass15_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_16",
+   "global_id": null,
+   "role": "logical neural pass 8",
+   "classification": "EXACT_411",
+   "container": "497dfe9dd8601a69431bbb9a4df9fb681c79fe5b01afbc6f6b5d550192c6c627",
+   "kernel": "bench/shaders/reimpl2160/reimpl_pass8_2160.hlsl",
+   "dispatch": [
+    16,
+    540,
+    1
+   ],
+   "root": "nocbv (26044)",
+   "evidence": "docs/evidence411/2160/411_2160_pass16_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_17",
+   "global_id": null,
+   "role": "epilogue after logical pass 8 (pass8_post, arena zero-fill)",
+   "classification": "EXACT_411",
+   "container": "b4e93b781f41ff5d1f185a48a8cdf3ac5c4e8ba1b15e26caf373d96accfb80b4",
+   "kernel": "bench/shaders/reimpl2160/pass8_post_2160.hlsl",
+   "dispatch": [
+    47,
+    1,
+    1
+   ],
+   "root": "epi (26033)",
+   "evidence": "docs/evidence411/2160/411_2160_pass17_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_18",
+   "global_id": null,
+   "role": "logical neural pass 9",
+   "classification": "EXACT_411",
+   "container": "905384f36e88e841c4c1f9b8c2a5a739f19aa8a9d02d6711ef74e8dc97681533",
+   "kernel": "bench/shaders/reimpl2160/reimpl_pass9_2160.hlsl",
+   "dispatch": [
+    8,
+    270,
+    1
+   ],
+   "root": "compute (26039)",
+   "evidence": "docs/evidence411/2160/411_2160_pass18_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_19",
+   "global_id": null,
+   "role": "epilogue after logical pass 9 (pass9_post, arena zero-fill)",
+   "classification": "EXACT_411",
+   "container": "c1de8f71df79d8c0ecde737cfec1f9cc62ebe0c92ecc215a5f3af1b0bd871027",
+   "kernel": "bench/shaders/reimpl2160/pass9_post_2160.hlsl",
+   "dispatch": [
+    94,
+    1,
+    1
+   ],
+   "root": "epi (26033)",
+   "evidence": "docs/evidence411/2160/411_2160_pass19_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_20",
+   "global_id": null,
+   "role": "logical neural pass 10",
+   "classification": "EXACT_411",
+   "container": "28a7b2e061236cff3e9f85b87b06c117092dc09f821506239ad57201307557e7",
+   "kernel": "bench/shaders/reimpl2160/reimpl_pass10_2160.hlsl",
+   "dispatch": [
+    15,
+    540,
+    1
+   ],
+   "root": "compute (26039)",
+   "evidence": "docs/evidence411/2160/411_2160_pass20_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_21",
+   "global_id": null,
+   "role": "epilogue after logical pass 10 (pass10_post, arena zero-fill)",
+   "classification": "EXACT_411",
+   "container": "cbb08573bd3a5e390adac63abe187586b67c04979d1d364ecbc9d3c7fb93bf0c",
+   "kernel": "bench/shaders/reimpl2160/pass10_post_2160.hlsl",
+   "dispatch": [
+    94,
+    1,
+    1
+   ],
+   "root": "epi (26033)",
+   "evidence": "docs/evidence411/2160/411_2160_pass21_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_22",
+   "global_id": null,
+   "role": "logical neural pass 11",
+   "classification": "EXACT_411",
+   "container": "8d7ae53a1de30332f48002fb8da6b4434a18d668c435be9283936e5e6662759e",
+   "kernel": "bench/shaders/reimpl2160/reimpl_pass11_2160.hlsl",
+   "dispatch": [
+    15,
+    540,
+    1
+   ],
+   "root": "compute (26039)",
+   "evidence": "docs/evidence411/2160/411_2160_pass22_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_23",
+   "global_id": null,
+   "role": "epilogue after logical pass 11 (pass11_post, arena zero-fill)",
+   "classification": "EXACT_411",
+   "container": "9b16680e621c6230eb51bad15804786ea45b9cfdf928b7c1090d2b88677be466",
+   "kernel": "bench/shaders/reimpl2160/pass11_post_2160.hlsl",
+   "dispatch": [
+    188,
+    1,
+    1
+   ],
+   "root": "epi (26033)",
+   "evidence": "docs/evidence411/2160/411_2160_pass23_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_24",
+   "global_id": null,
+   "role": "logical neural pass 12",
+   "classification": "EXACT_411",
+   "container": "f210d63863619c0903190ebdf2efdc98a0fa98490d55c5207a6f50a3ef6e59c6",
+   "kernel": "bench/shaders/reimpl2160/reimpl_pass12_2160.hlsl",
+   "dispatch": [
+    30,
+    1080,
+    1
+   ],
+   "root": "compute (26039)",
+   "evidence": "docs/evidence411/2160/411_2160_pass24_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_25",
+   "global_id": null,
+   "role": "epilogue after logical pass 12 (pass12_post, arena zero-fill)",
+   "classification": "EXACT_411",
+   "container": "f6790f543421e9a06cf29068fb77ce525f6002a4cda16906b4815853d26cd838",
+   "kernel": "bench/shaders/reimpl2160/pass12_post_2160.hlsl",
+   "dispatch": [
+    188,
+    1,
+    1
+   ],
+   "root": "epi (26033)",
+   "evidence": "docs/evidence411/2160/411_2160_pass25_our_reimpl.json"
+  },
+  {
+   "pix_pass": "FFX_FSR4_PASS_26",
+   "global_id": null,
+   "role": "POST",
+   "classification": "EXACT_411",
+   "container": "3bd36f7f4bc228869b00fd6160dd00fd0caf5696443b4884ba40450766af5bcf",
+   "kernel": "bench/shaders/reimpl2160/post_rev_411_2160.hlsl",
+   "dispatch": [
+    120,
+    68,
+    1
+   ],
+   "root": "post (26065)",
+   "evidence": "docs/evidence411/2160/411_2160_pass26_our_reimpl.json"
+  }
+ ],
+ "export_note": "Public export: kernel paths translated from bench/shaders/candidates/* to bench/shaders/reimpl2160/ (stems keep the _2160 suffix so Quality and 2160 files never collide). All 27 passes EXACT_411 (our kernels, byte-identical to AMD containers on identical pre-states). container SHAs identify AMD containers and resolve only in the private tree. AMD (C) notice in LICENSE. reimpl2160 PRE/POST resolve includes via -I ../reimpl411 (staged flat includes) + SDK ml2code_runtime, same story as Quality.",
+ "include_note": "reimpl2160 PRE/POST resolve includes via -I ../reimpl411 (staged flat includes) + SDK ml2code_runtime, same story as Quality; no duplicated include files."
+}

@@ -1,0 +1,58 @@
+{
+  "date": "2026-10-11T00:15:50+03:00",
+  "baseline_commit": "073853028f175a381aeb1271ad92798cd37c2541",
+  "device": "Apple M5",
+  "os": "macOS 27.0.1",
+  "power": "Battery 17-29%, Low Power Mode off",
+  "fixture": "build/perf411/input_game: 864x560 -> 1712x1112, 8 frames, RCAS 0.504, AE on",
+  "protocol": "4 interleaved rounds x 15 measured sequences, one warmup each, full command buffer, no stage counters",
+  "summary_median_of_round_means_ms": {
+    "lossy_before": {
+      "profile": "lossy",
+      "rounds": 4,
+      "mean_ms": 4.2658361110928436,
+      "round_mean_range_ms": [
+        4.15608923540276,
+        4.438426387908597
+      ],
+      "reset_mean_ms": 6.575399999564979,
+      "full_mean_ms": 5.820232868589098,
+      "reuse_mean_ms": 2.4994479172164574,
+      "steady_equal_mean_ms": 4.15592604169635
+    },
+    "lossy_after": {
+      "profile": "lossy",
+      "rounds": 4,
+      "mean_ms": 3.6015210069914856,
+      "round_mean_range_ms": [
+        3.5500937494362006,
+        3.647149304864191
+      ],
+      "reset_mean_ms": 6.096870832455655,
+      "full_mean_ms": 5.314311574006246,
+      "reuse_mean_ms": 1.705930208117934,
+      "steady_equal_mean_ms": 3.503492245444148
+    },
+    "exact": {
+      "profile": "exact",
+      "rounds": 4,
+      "mean_ms": 5.901944791670152,
+      "round_mean_range_ms": [
+        5.847840972031311,
+        6.044242360682499
+      ],
+      "reset_mean_ms": 6.410224999611577,
+      "full_mean_ms": 5.839992261982323
+    }
+  },
+  "quality_four_game_captures_32_frames": {
+    "lossy_vs_previous_lossy": "0/32 byte-identical; mean|d| 7e-6, max|d| 0.302, PSNR min 67.9 dB, mean 87.0 dB",
+    "lossy_vs_exact_before_and_after": "mean|d| 5.1e-5, max|d| 3.375, PSNR min 48.7 dB (unchanged)",
+    "exact_vs_previous_exact": "32/32 byte-identical; pre/post metallibs byte-identical",
+    "cell_dedup_vs_flags_only": "32/32 byte-identical (16 reused frames)"
+  },
+  "source_sha256": {
+    "tools/compile_fsr411.py": "c7ca919e78bf830aa1c7d269baa1f817e49608437d06cbb149c0f6c7100f7680",
+    "tools/fsr411/lossy_shaders.py": "90d6850b622758876800bb3ccfefe52b54a34b5c7eeb3963ba9581882feeb289"
+  }
+}

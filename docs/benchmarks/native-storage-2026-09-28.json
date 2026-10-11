@@ -1,0 +1,228 @@
+{
+  "device": "Apple M5",
+  "macos": "27.0",
+  "low_power_mode": false,
+  "baseline_commit": "c846e66",
+  "change": "Reuse threadgroup activation storage; original pre convolution retained",
+  "series": {
+    "long": {
+      "bench_iterations": 60,
+      "reps": 10,
+      "frames_per_run": 120,
+      "order": "Alternating before/after; reverse order on odd rounds",
+      "cases": {
+        "quality": {
+          "before": {
+            "fused_frame_means_ms": [
+              4.8498,
+              4.6767,
+              4.9675,
+              4.8357,
+              5.1172
+            ]
+          },
+          "after": {
+            "fused_frame_means_ms": [
+              4.6521,
+              4.5701,
+              4.654,
+              4.7788,
+              5.2117
+            ]
+          }
+        },
+        "performance": {
+          "before": {
+            "fused_frame_means_ms": [
+              4.7337,
+              4.7731,
+              4.7208,
+              5.1339,
+              5.2545
+            ]
+          },
+          "after": {
+            "fused_frame_means_ms": [
+              4.5737,
+              4.6563,
+              4.5766,
+              4.8974,
+              5.3673
+            ]
+          }
+        },
+        "balanced": {
+          "before": {
+            "fused_frame_means_ms": [
+              4.4715,
+              4.4849,
+              4.3795,
+              4.7941,
+              5.4265
+            ]
+          },
+          "after": {
+            "fused_frame_means_ms": [
+              4.4228,
+              4.3871,
+              4.5267,
+              4.7557,
+              5.1427
+            ]
+          }
+        }
+      }
+    },
+    "short": {
+      "bench_iterations": 20,
+      "reps": 10,
+      "frames_per_run": 40,
+      "order": "Alternating before/after; reverse order on odd rounds",
+      "cases": {
+        "quality": {
+          "before": {
+            "fused_frame_means_ms": [
+              4.7122,
+              4.6315,
+              4.819
+            ]
+          },
+          "after": {
+            "fused_frame_means_ms": [
+              4.4054,
+              4.5234,
+              4.543
+            ]
+          }
+        },
+        "performance": {
+          "before": {
+            "fused_frame_means_ms": [
+              4.5249,
+              4.6955,
+              4.4939
+            ]
+          },
+          "after": {
+            "fused_frame_means_ms": [
+              4.677,
+              4.5546,
+              4.8879
+            ]
+          }
+        },
+        "balanced": {
+          "before": {
+            "fused_frame_means_ms": [
+              4.2548,
+              4.274,
+              4.401
+            ]
+          },
+          "after": {
+            "fused_frame_means_ms": [
+              4.0348,
+              4.2816,
+              4.3884
+            ]
+          }
+        }
+      }
+    }
+  },
+  "validation": [
+    {
+      "case": "recorded-quality",
+      "frames": 2,
+      "different_frames": []
+    },
+    {
+      "case": "recorded-performance",
+      "frames": 2,
+      "different_frames": []
+    },
+    {
+      "case": "game-balanced",
+      "frames": 2,
+      "different_frames": []
+    },
+    {
+      "case": "downscale",
+      "frames": 3,
+      "different_frames": []
+    },
+    {
+      "case": "drs",
+      "frames": 3,
+      "different_frames": []
+    },
+    {
+      "case": "native",
+      "frames": 3,
+      "different_frames": []
+    },
+    {
+      "case": "odd",
+      "frames": 8,
+      "different_frames": []
+    },
+    {
+      "case": "performance8",
+      "frames": 8,
+      "different_frames": []
+    },
+    {
+      "case": "pq",
+      "frames": 3,
+      "different_frames": []
+    },
+    {
+      "case": "quality8",
+      "frames": 8,
+      "different_frames": []
+    },
+    {
+      "case": "rcas",
+      "frames": 3,
+      "different_frames": []
+    },
+    {
+      "case": "srgb",
+      "frames": 3,
+      "different_frames": []
+    },
+    {
+      "case": "tier2160",
+      "frames": 2,
+      "different_frames": []
+    },
+    {
+      "case": "tier4320",
+      "frames": 2,
+      "different_frames": []
+    },
+    {
+      "case": "ultraperf",
+      "frames": 3,
+      "different_frames": []
+    }
+  ],
+  "state_comparison": [
+    {
+      "case": "quality",
+      "files": 40,
+      "different": []
+    },
+    {
+      "case": "odd",
+      "files": 160,
+      "different": []
+    }
+  ],
+  "checks": [
+    "make test",
+    "make test-gpu",
+    "Metal API validation",
+    "classic and Metal 4 live output equality under x86_64/Rosetta"
+  ]
+}

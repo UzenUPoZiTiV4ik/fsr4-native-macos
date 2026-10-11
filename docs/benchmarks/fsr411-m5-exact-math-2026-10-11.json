@@ -1,0 +1,146 @@
+{
+  "date": "2026-10-11T00:34:05+03:00",
+  "baseline_commit": "073853028f175a381aeb1271ad92798cd37c2541",
+  "baseline": "working tree after the Lossy math change (Exact PRE/POST with IEEE division, precise functions)",
+  "device": "Apple M5",
+  "os": "macOS 27.0.1",
+  "power": "Battery 13-16%, Low Power Mode off",
+  "fixture": "build/perf411/input_game: 864x560 -> 1712x1112, 8 frames, RCAS 0.504, AE on",
+  "protocol": "4 interleaved rounds x 15 measured sequences, one warmup each, full command buffer, no stage counters",
+  "summary_median_of_round_means_ms": {
+    "exact_before": {
+      "profile": "exact",
+      "rounds": 4,
+      "mean_ms": 6.253939061753044,
+      "round_mean_range_ms": [
+        5.853424999562169,
+        6.710159374779323
+      ],
+      "reset_mean_ms": 6.650008332023086,
+      "full_mean_ms": 6.197357737428753
+    },
+    "exact_after": {
+      "profile": "exact",
+      "rounds": 4,
+      "mean_ms": 5.381285417024628,
+      "round_mean_range_ms": [
+        5.283786111249356,
+        5.464083680756933
+      ],
+      "reset_mean_ms": 6.027343056727356,
+      "full_mean_ms": 5.2889914684956665
+    },
+    "lossy": {
+      "profile": "lossy",
+      "rounds": 4,
+      "mean_ms": 3.6087118061307892,
+      "round_mean_range_ms": [
+        3.5770475697063375,
+        3.647828472094261
+      ],
+      "reset_mean_ms": 6.018943055823911,
+      "full_mean_ms": 5.288948610864787,
+      "reuse_mean_ms": 1.7540416664511818,
+      "steady_equal_mean_ms": 3.52096041677012
+    }
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "variant": "exact_before",
+      "all_mean_ms": 6.076909027008999,
+      "full_mean_ms": 5.997113491286568
+    },
+    {
+      "round": 1,
+      "variant": "exact_after",
+      "all_mean_ms": 5.464083680756933,
+      "full_mean_ms": 5.339527381112843
+    },
+    {
+      "round": 1,
+      "variant": "lossy",
+      "all_mean_ms": 3.647828472094261,
+      "full_mean_ms": 5.32961296363889
+    },
+    {
+      "round": 2,
+      "variant": "lossy",
+      "all_mean_ms": 3.610845138488609,
+      "full_mean_ms": 5.280071295823695
+    },
+    {
+      "round": 2,
+      "variant": "exact_after",
+      "all_mean_ms": 5.353754166935687,
+      "full_mean_ms": 5.256265476124272
+    },
+    {
+      "round": 2,
+      "variant": "exact_before",
+      "all_mean_ms": 6.43096909649709,
+      "full_mean_ms": 6.3976019835709375
+    },
+    {
+      "round": 3,
+      "variant": "exact_before",
+      "all_mean_ms": 6.710159374779323,
+      "full_mean_ms": 6.607671824721841
+    },
+    {
+      "round": 3,
+      "variant": "exact_after",
+      "all_mean_ms": 5.40881666711357,
+      "full_mean_ms": 5.321717460867061
+    },
+    {
+      "round": 3,
+      "variant": "lossy",
+      "all_mean_ms": 3.5770475697063375,
+      "full_mean_ms": 5.297825925905879
+    },
+    {
+      "round": 4,
+      "variant": "lossy",
+      "all_mean_ms": 3.60657847377297,
+      "full_mean_ms": 5.195810185978189
+    },
+    {
+      "round": 4,
+      "variant": "exact_after",
+      "all_mean_ms": 5.283786111249356,
+      "full_mean_ms": 5.204925000240716
+    },
+    {
+      "round": 4,
+      "variant": "exact_before",
+      "all_mean_ms": 5.853424999562169,
+      "full_mean_ms": 5.764088888342182
+    }
+  ],
+  "stage_profile_non_reset_ms": {
+    "pre": "1.22-1.39 -> 0.80-0.85",
+    "post": "0.90-1.01 -> 0.67-0.78",
+    "network_and_post_cnb": "3.56-3.78 -> 3.37-3.63 (unchanged within noise)"
+  },
+  "quality_four_game_captures_32_frames": {
+    "exact_vs_previous_exact": "0/32 byte-identical; mean|d| 1.0e-5, max|d| 0.482, PSNR min 66.9 dB, mean 82.8 dB",
+    "exact_vs_lossy_before_and_after": "mean|d| 5.1e-5, max|d| 3.374, PSNR min 48.7 dB (unchanged)",
+    "lossy_vs_previous_build": "pre/post metallibs byte-identical"
+  },
+  "tests": [
+    "make test",
+    "test-fsr411-runtime (17 cases, 51 frames)",
+    "test-fsr411-scalar",
+    "test-fsr411-lossy",
+    "test-fsr411-cadence",
+    "test-fsr411-cli",
+    "test-fsr411-autoexposure",
+    "test-fsr411-snapshot",
+    "test-fsr411-live"
+  ],
+  "source_sha256": {
+    "tools/compile_fsr411.py": "a856767d45104229207262ca02f3cec0043f1f072ca9f1af6573874a12418613",
+    "tools/fsr411/lossy_shaders.py": "90d6850b622758876800bb3ccfefe52b54a34b5c7eeb3963ba9581882feeb289"
+  }
+}

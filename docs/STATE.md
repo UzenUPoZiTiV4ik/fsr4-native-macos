@@ -1,7 +1,209 @@
 # FSR4-Metal — project state & handoff
 
-Last updated: 2026-09-24 (M1–M5 selection and FP16 boundary fixes). Read this before continuing
-optimization work — it contains everything a fresh session needs.
+Last updated: **2026-10-11**, optimization of **FSR 4.1.1.2740 INT8**.
+
+2026-10-11 (FSR 4.0 comparison, latest): same-session means on the recorded
+sequence: FSR 4.0.2 4.47, Exact 5.01, Exact Fast 4.30, Lossy 3.00 ms.
+Exact Fast and Lossy PRE/POST now compile with Metal relaxed math (as 4.0.2
+uses fast math): −0.12 to −0.15 ms, ≥ 63 dB from the ordered build, no
+non-finite output. Bit-exact tests use `--strict-math` (`_sm1` builds). The
+panel selector is **FSR 4 / FSR 4.1 / FSR 4.1 Lite** = `fsr4` (live value 3,
+routes the bridge to the 4.0.2 model) / `exact-fast` / `lossy`; Exact is
+launch-only via `FSR4_PROFILE=exact`. `FSR4_VERSION=4.0.2` still pins 4.0.2.
+
+2026-10-11 (profiles, latest): three profiles. **Exact** restores IEEE
+PRE/POST math and is byte-identical to `ef1fa1b` again (32/32 capture
+frames); **Exact Fast** (`exact-fast`) is the former fast-math Exact,
+byte-identical to it; Lossy is unchanged. Same-session M5 means: Exact
+5.35, Exact Fast 4.72, Lossy 3.36 ms. The panel UI and hook/capture status
+messages are now English.
+
+2026-10-11 (network, latest): **Exact 5.47 → 4.34 ms, Lossy 3.70 → 3.03 ms**
+on the recorded game sequence, byte-identical (64/64 capture frames). Lossy
+is at the 3 ms target; Exact remains above 4 ms. See
+[BENCHMARK.md](../BENCHMARK.md).
+
+2026-10-11: **Lossy 4.27 → 3.60 ms** on the recorded game sequence (full
+5.82 → 5.31, reused 2.50 → 1.71 ms), now inside the 3–4 ms target.
+**Exact 6.25 → 5.38 ms** (same-session comparison) with the same PRE/POST
+math; Exact output is no longer byte-identical to the earlier recordings
+(mean |Δ| 1·10⁻⁵, PSNR ≥ 66.9 dB). See [BENCHMARK.md](../BENCHMARK.md).
+
+Previous reduction versus the corrected `ef1fa1b` baseline: **16.97%
+Exact / 17.15% Lossy**. Final long comparison with RCAS and AE enabled:
+7.695 → 6.390 ms Exact, 5.434 → 4.502 ms Lossy. All 64 recorded output
+frames remained byte-identical at that point.
+See [FSR411_PERFORMANCE.md](FSR411_PERFORMANCE.md) for protocol, source
+hashes, variance and validation, and [FSR411_PROFILING.md](FSR411_PROFILING.md)
+for the opt-in GPU counters.
+
+## Current 4.1.1 path
+
+Default CLI, live bridge and installer: **4.1.1 / Lossy**. Exact and Exact
+Fast are selected with `--profile exact|exact-fast`, `FSR4_PROFILE`, or the
+running panel. Profile changes reset temporal history. Exact Fast has its
+own build key suffix `_fast` and shares Exact's native network directory.
+`panel.conf` stores names; the integer API keeps 0 = Exact, 1 = Lossy and
+adds 2 = Exact Fast so older files still load. Explicit 4.0.2 selection preserves the old
+model and FP16 backend; the old Windows 4.0 captures are only for that model.
+
+`src/fsr411_runtime.h` is shared by `fsr411_cli.mm` and `fsr411_live.mm`.
+It dispatches PRE, thirteen border stages, twelve native/scalar integer
+stages, a separate native POST CNB and the floating POST filter. Normal and
+Ultra Performance use their own 131,072-byte initializers; UP also uses its
+authentic source overlays. No old 4.0 weights are substituted. Source pins,
+licenses and extracted-model hashes are in `third_party/fsr411/README.md`.
+
+Auto selects tensor INT8 on Apple family 10+ and scalar INT8 elsewhere.
+`--reference` runs the direct imported HLSL; its large neural kernels use
+Metal `-O0` because this M5 driver crashes optimizing the generated pass4.
+Native MPP kernels use at most 20 KiB of threadgroup memory. NF64 passes
+use 16×1 tiles on four SIMD groups (10 KiB). CNB (including POST CNB) and
+NF32 FNB/CT use one SIMD32 group and the cooperative chains below. Every
+geometry has its own kernel name; old names retain their original geometry
+for existing manifests.
+Physical validation is M5/macOS 27.0.1; earlier Apple GPUs remain unmeasured.
+
+The live input chain is DLSS → D3DMetal → MetalFX → FSR. Preserve signs
+already converted by D3DMetal. `src/fsr4_input.h` normalizes motion by logical
+render/output extent, handles jitter cancellation and exposure separately,
+and defines region/copy/reset policy. Input-only DRS changes preserve
+history; model, profile, output-size or convention changes reset it.
+Classic Metal and Metal 4 use per-frame constants, argument tables and
+retirement tokens. Resources survive owner release and queued resizing.
+
+## Optimizations and numeric contract
+
+- Native requantization operates on four int32 values together, retaining
+  unsigned wrap, signed shifts, ties-to-even/half-up, int16 narrowing before
+  int8 clamping, and residual arithmetic. Three GPU probes each compare
+  1,006,604 values against the original CPU `finish` contract, including
+  specialized CNB intermediate paths and their generic fallback.
+- PRE packs eight half features and exchanges three uint4 vectors per quad,
+  reducing scalar exchanges from 32 to 12, with one packed output word per lane.
+- POST uses one output pixel per thread, a 16×16 output tile and a 20×20 float32
+  transformed-color cache. Dispatch reads `post_pixels_per_group` from the
+  manifest; a direct-load fallback covers footprints outside the cache.
+  Cache loads are bounded by the active upscaling footprint. CT2D uses exact
+  float32 integer products/sums, proven below 2^24 for all normal/UP tables.
+- **PRE/POST must compile with `-fno-fast-math -ffp-contract=off`.** Moving
+  exchanges exposes new reassociation opportunities: the first attempt
+  changed 10 INT8 PRE values by one in a 64×36→128×72 fixture, producing an RGB
+  maximum difference 0.225 downstream. Ordered arithmetic restored exact
+  PRE bytes and RGB. POST also needed contraction disabled to remove tiny
+  float32 differences between inline and separated CNB variants.
+  PRE/POST of **Exact Fast and Lossy** use `-fmetal-math-mode=relaxed
+  -fmetal-math-fp32-functions=fast` (`math_flags(name, profile, strict)` in
+  `tools/compile_fsr411.py`), like 4.0.2's default fast math. Reordering
+  moves a few INT8 PRE values, so `--optimize 0/1` no longer match bit for
+  bit in these builds. The bit-exact matrix builds them with ordered math
+  instead (`--strict-math`, `Options::strictMath`, key suffix `_sm1`:
+  `-fno-fast-math -freciprocal-math ... -ffp-contract=off`); `*_relaxed`
+  cases compare production against it with a mean tolerance. Use `relaxed`,
+  never `fast`: fast math drops PRE's isnan/isinf colour checks. **Exact**
+  keeps IEEE math and is byte-identical to the imported reference. AE keeps
+  the strict flags in every profile.
+- Native pass metadata except dimensions and POST's appended output offset
+  is specialized per logical pass with function constants
+  (`specialize_metadata` in `src/fsr411_model.h`, `FSR411_SPECIALIZE`).
+  The runtime keys pipelines by kernel and pass; `PassParams` stays the ABI.
+- `fsr411_cnb_coop_chain_32x1` and `fsr411_{fnb,ct}32_coop_chain_16x1`
+  pass each matrix product's cooperative destination to the next product
+  without threadgroup memory. They rely on implementation-defined
+  cooperative-tensor ownership, check it with `simd_all` before any write,
+  and otherwise run the SG1 kernel of the same tile. Keep the guard: the
+  layout is only verified on the M5 runtime. `test-fsr411-native` runs the
+  fallback via `FSR411_CHAIN_FORCE_FALLBACK=1`.
+- Lossy POST (optimized) classifies each 2×2 cell once, in lanes 192–255
+  before the colour-cache barrier (`apply_lossy_post_cells`). `--optimize 0`
+  keeps per-pixel classification and is the parity reference for it.
+- Lossy independently implements the pinned RX-project's folded coefficients,
+  half-up intermediate quantizers, motion/occlusion/rest/edge repairs and
+  cached inference. Folded tables match all 12 affected published shader
+  variants. Dense MPP still computes products for zero weights.
+- Inference reuse requires valid cache, non-reset frame, negative jitterX,
+  renderWidth×2≥alignedOutputWidth, Normal model, and a full previous frame.
+  No consecutive skips: a one-frame motion vector cannot address an older
+  cache. PRE/POST still update the current frame, while neural/border/CNB
+  stages stay untouched. Clear ownership on every reused frame.
+- SPD autoexposure uses separate tile and final dispatches with Metal
+  visibility barriers. The original translated single-dispatch shader
+  demonstrably read stale tile means before other groups published them.
+  The split keeps the reduction math, fixes mip6's missing exposure update,
+  bounds logical tiles explicitly, and writes previous exposure first.
+- Generated model files are published atomically under a per-directory lock;
+  unchanged builds retain files, and runtime checks their declared lengths.
+
+`--optimize 0` selects original PRE routing/POST filtering for A/B checks;
+it does not disable native tensor operations or change the selected profile.
+Both modes use the ordered floating arithmetic contract.
+
+## Validation at migration
+
+- `make test`: **7,451,634 arithmetic checks**, 98 input checks, 72 legacy
+  backend-policy checks, settings reload checks, 26 Python host/model tests
+  and 42 import/transform tests. Integer arithmetic also passed ASan/UBSan.
+- `tests/run_fsr411_runtime.py`: **19 cases × 3 frames** (Exact Fast PRE and RCAS added 2026-10-11), exact RGB against
+  direct imported HLSL plus independently cropped inputs/output. Includes
+  Exact/Lossy, UP, scalar, odd dimensions, both motion resolutions, reversed
+  depth, jittered motion, colorspaces 0–3, RCAS and AE. The 2160/4320 cases
+  force those tensor classes with small active viewports, not full 8K images.
+- Native/scalar block tests compare actual packed models to independent CPU
+  arithmetic. Lossy helper tests: 180 scenarios / 1,894,068 assertions over
+  all three tiers, both depth conventions and both motion resolutions.
+- AE: 54 varying-color/preExposure frames match an imported single-dispatch
+  oracle after restoring its publication barrier, including partial extents
+  and poisoned oversized luma. 30 tiny constant-luminance cases match a CPU
+  formula; previous/current exposure history is checked independently.
+- Live: 80 successful encodes across classic/Metal 4 and low/high-res MV,
+  Exact→Lossy→Exact, region sentinels, owner lifecycle and explicit resets.
+  CLI: 15 frames check defaults, snapshots, warmup and inference/reuse counts.
+- In-flight classic/Metal 4: 36 queued frames per API match sequential output;
+  the 32-slot bound rejects overflow without modifying queued constants and
+  successfully recovers after GPU retirement (1,784,247 / 1,784,329 assertions).
+- Full-size synthetic 1712×1112: both Exact frames are byte-identical with
+  PRE/POST optimization disabled/enabled. Initial benchmark: Lossy 5.224 ms
+  versus Exact 7.710 ms at 540p→1080p, with 50% inference reuse on M5.
+  PRE/POST speedup is measured for Lossy; Exact did not show a reliable gain.
+
+These establish local Metal/model consistency. They are not a Windows 4.1.1
+GPU golden replay or a claim of visual equivalence in every game. Performance
+and image comparisons are recorded in [BENCHMARK.md](../BENCHMARK.md).
+
+## Reproduction
+
+```sh
+make -B tools/bin/fsr4mac
+make test
+make build-fsr411-tests
+make test-fsr411-gpu
+python3 tools/fsr411/import_model.py --verify --with-shaders
+python3 tools/fsr411/recover_ultraperformance.py --verify
+```
+
+Use `run.json` for actual backend, profile, `skipped_inference`, reset reasons
+and measured neural/reuse counts. `--bench N` means N full sequences after
+one warmup, with a fresh View per sequence. Keep captures and GPU validation
+out of benchmark runs. The older `--reps` method below applies to 4.0.2.
+
+## Historical FSR 4.0.2 state
+
+Historical 4.0.2 entries below are preserved for comparison; they do not describe the current default model.
+
+## 2026-09-28: reuse native INT8 activation storage
+
+`src/i8mpp.metal` now shares threadgroup activation storage between
+non-overlapping lifetimes: CNB a1/a2 (and a3 in pass 13), and FNB-CT2D a2/a3
+in passes 9/11. Each reuse follows the existing barrier after the GEMM's
+last read. GEMM input and accumulator allocations remain separate. FNB a1
+must remain separate because its upper channels supply the residual.
+
+Declared threadgroup storage falls from 22 to 20 KiB in passes 1/2/12,
+24 to 20 KiB in pass 13, and 24 to 22 KiB in passes 9/11. Weights, math,
+tile geometry, dispatch and synchronization are unchanged. CLI and live
+both load this source through the content-keyed native shader cache; no
+manifest migration or hook rebuild is required. Restart the game to create
+new pipelines. See [BENCHMARK.md](../BENCHMARK.md) for measurements and checks.
 
 ## 2026-09-24: automatic backend and portable FP16
 

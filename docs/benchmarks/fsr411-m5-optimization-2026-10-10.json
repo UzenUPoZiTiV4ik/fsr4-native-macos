@@ -1,0 +1,783 @@
+{
+  "date": "2026-10-10T22:03:14.594064+03:00",
+  "baseline_commit": "ef1fa1b17171649762aec4c0ecd44fb1e07a9bee",
+  "device": "Apple M5",
+  "os": "macOS 27.0.1",
+  "power": "Battery; Low Power Mode disabled by the user; assistant did not change power settings",
+  "fixture": {
+    "source": "local game recording",
+    "render": [
+      864,
+      560
+    ],
+    "output": [
+      1712,
+      1112
+    ],
+    "frames": 8,
+    "rcas": true,
+    "sharpness": 0.504,
+    "auto_exposure": true,
+    "colorspace": "linear",
+    "reversed_depth": true,
+    "low_res_motion": true
+  },
+  "protocol": {
+    "rounds": 5,
+    "measured_sequences_per_round": 30,
+    "frames_per_round": 240,
+    "warmup_sequences_per_run": 1,
+    "summary": "median of per-round means",
+    "order": "alternate forward and reversed variant order",
+    "scope": "entire frame command buffer",
+    "gpu_counters": false,
+    "concurrent_gpu_test_jobs": false,
+    "background": "Normal desktop apps remained running; absolute timing varied across the session"
+  },
+  "summary_median_of_round_means_ms": {
+    "baseline_exact": {
+      "profile": "exact",
+      "rounds": 5,
+      "mean_ms": 7.695352604605432,
+      "round_mean_range_ms": [
+        7.6140319442250375,
+        7.956201735396462
+      ],
+      "reset_mean_ms": 8.26382777740946,
+      "full_mean_ms": 7.614141865633428
+    },
+    "baseline_lossy": {
+      "profile": "lossy",
+      "rounds": 5,
+      "mean_ms": 5.433963541266469,
+      "round_mean_range_ms": [
+        5.379482292058431,
+        5.44285694516778
+      ],
+      "reset_mean_ms": 8.227931944808612,
+      "full_mean_ms": 7.737299537176215,
+      "reuse_mean_ms": 2.979258333289181,
+      "steady_equal_mean_ms": 5.371923264101497
+    },
+    "optimized_exact": {
+      "profile": "exact",
+      "rounds": 5,
+      "mean_ms": 6.389700868445895,
+      "round_mean_range_ms": [
+        6.296912673618256,
+        6.413463367850151
+      ],
+      "reset_mean_ms": 6.895459722242474,
+      "full_mean_ms": 6.29857202418082
+    },
+    "optimized_lossy": {
+      "profile": "lossy",
+      "rounds": 5,
+      "mean_ms": 4.502194965122423,
+      "round_mean_range_ms": [
+        4.445013541832547,
+        4.571189409701522
+      ],
+      "reset_mean_ms": 6.805023610650096,
+      "full_mean_ms": 6.292824537538561,
+      "reuse_mean_ms": 2.588261805673634,
+      "steady_equal_mean_ms": 4.438170080983481
+    }
+  },
+  "gpu_time_reduction_percent": {
+    "exact": 16.966756472967138,
+    "lossy": 17.147126017096593
+  },
+  "source_sha256": {
+    "src/fsr411_mpp.metal": "c4a27ebd47b8ef29a1c3047a50ef8c29a74cc5c00e127707707c54125fa95c20",
+    "tools/gen_fsr411_native.py": "3f4c267802660fe188c3b0466812b5b5cce09209e06c1ec6161e49dfc75e3697",
+    "tools/fsr411/post_optimization.py": "b6854ede5fefd064396fbc46da15a14ce63d7bf3c6608767d6c10321cfb6386b",
+    "src/fsr411_runtime.h": "fc14775e7e9fbea931c729f62903750ac7a10239e221c49a3704dfd451007d91",
+    "src/fsr411_cli.mm": "912bbd15221df2ebf1eaa55cac82e5a08714cbd4a6d19d087fd77228b0a48f46",
+    "tools/bin/fsr4mac": "bbcde56bea7480955291f7bba05484ac1abde7c50b67c2bf306296c7d952938d"
+  },
+  "validation": {
+    "cpu_suite": "PASS",
+    "native": "4 models (normal/UP x Exact/Lossy) x MPP/scalar x 52 cases PASS",
+    "quantization": "3 probes x 1006604 lanes PASS, including specialized CNB paths and generic fallback",
+    "runtime_matrix": "17 cases / 51 frame comparisons PASS",
+    "game_replay": {
+      "captures": 4,
+      "profiles": [
+        "exact",
+        "lossy"
+      ],
+      "frames": 64,
+      "byte_identical": true,
+      "reference": "corrected 4.1.1 replay-fixed profile outputs",
+      "sharpness": 0.401
+    },
+    "inflight": "Classic and Metal4: each 36 queued frames identical to sequential, 32-slot rejection/recovery PASS",
+    "installed_hook": "Classic and Metal4: low/high-resolution MV, cropped texture regions, lifecycle and Exact/Lossy switching PASS",
+    "stage_profiler": "Unchanged pixels, calibrated timestamps and Lossy stage accounting PASS"
+  },
+  "rcas_comparison": {
+    "method": "3 interleaved rounds x 10 measured sequences; previous vector+POST candidate",
+    "on_mean_ms": 4.655640624878288,
+    "off_mean_ms": 4.4583026039617835,
+    "difference_ms": 0.19733802091650432,
+    "local_results": "build/perf411/gate-rcas-ranking/summary.json"
+  },
+  "local_selection_evidence": [
+    "build/perf411/small-native-ranking/summary.json",
+    "build/perf411/selected_native_root/selection.json",
+    "build/perf411/selected-native-long/summary.json"
+  ],
+  "runs": [
+    {
+      "variant": "baseline_exact",
+      "round": 1,
+      "profile": "exact",
+      "all": {
+        "count": 240,
+        "mean_ms": 7.6140319442250375,
+        "median_ms": 7.697895838646218,
+        "min_ms": 6.794291679398157,
+        "max_ms": 9.11324999469798
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 8.124609722290188,
+        "median_ms": 8.148604167217854,
+        "min_ms": 7.240000006277114,
+        "max_ms": 9.11324999469798
+      },
+      "full": {
+        "count": 210,
+        "mean_ms": 7.541092261644302,
+        "median_ms": 7.683874995564111,
+        "min_ms": 6.794291679398157,
+        "max_ms": 8.441291662165895
+      },
+      "reuse": {
+        "count": 0
+      },
+      "local_run_json": "build/perf411/final-benchmark/baseline_exact-r1/run.json"
+    },
+    {
+      "variant": "baseline_lossy",
+      "round": 1,
+      "profile": "lossy",
+      "all": {
+        "count": 240,
+        "mean_ms": 5.379482292058431,
+        "median_ms": 5.250270827673376,
+        "min_ms": 2.6237083366140723,
+        "max_ms": 8.907249997719191
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 8.180665277662532,
+        "median_ms": 8.243749995017424,
+        "min_ms": 7.320000004256144,
+        "max_ms": 8.907249997719191
+      },
+      "full": {
+        "count": 90,
+        "mean_ms": 7.709140278489536,
+        "median_ms": 7.7668958401773125,
+        "min_ms": 6.885666662128642,
+        "max_ms": 8.824250006000511
+      },
+      "reuse": {
+        "count": 120,
+        "mean_ms": 2.9319430558340778,
+        "median_ms": 2.6813750009750947,
+        "min_ms": 2.6237083366140723,
+        "max_ms": 3.614874993218109
+      },
+      "steady_equal_mean_ms": 5.320541667161807,
+      "local_run_json": "build/perf411/final-benchmark/baseline_lossy-r1/run.json"
+    },
+    {
+      "variant": "optimized_exact",
+      "round": 1,
+      "profile": "exact",
+      "all": {
+        "count": 240,
+        "mean_ms": 6.296912673618256,
+        "median_ms": 6.3840208313195035,
+        "min_ms": 5.595916663878597,
+        "max_ms": 7.537249999586493
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 6.7412249991321005,
+        "median_ms": 6.8286458335933276,
+        "min_ms": 6.040541658876464,
+        "max_ms": 7.537249999586493
+      },
+      "full": {
+        "count": 210,
+        "mean_ms": 6.233439484259136,
+        "median_ms": 6.366291672748048,
+        "min_ms": 5.595916663878597,
+        "max_ms": 7.110791659215465
+      },
+      "reuse": {
+        "count": 0
+      },
+      "local_run_json": "build/perf411/final-benchmark/optimized_exact-r1/run.json"
+    },
+    {
+      "variant": "optimized_lossy",
+      "round": 1,
+      "profile": "lossy",
+      "all": {
+        "count": 240,
+        "mean_ms": 4.473273958380257,
+        "median_ms": 4.452687498996966,
+        "min_ms": 2.2969583224039525,
+        "max_ms": 7.466750001185574
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 6.736025001252226,
+        "median_ms": 6.826229167927522,
+        "min_ms": 6.0760000051232055,
+        "max_ms": 7.466750001185574
+      },
+      "full": {
+        "count": 90,
+        "mean_ms": 6.232373147698429,
+        "median_ms": 6.361333333188668,
+        "min_ms": 5.620374999125488,
+        "max_ms": 7.180958331446163
+      },
+      "reuse": {
+        "count": 120,
+        "mean_ms": 2.588261805673634,
+        "median_ms": 2.3562499991385266,
+        "min_ms": 2.2969583224039525,
+        "max_ms": 3.284999998868443
+      },
+      "steady_equal_mean_ms": 4.410317476686032,
+      "local_run_json": "build/perf411/final-benchmark/optimized_lossy-r1/run.json"
+    },
+    {
+      "variant": "optimized_lossy",
+      "round": 2,
+      "profile": "lossy",
+      "all": {
+        "count": 240,
+        "mean_ms": 4.445013541832547,
+        "median_ms": 4.446979168278631,
+        "min_ms": 2.305124988197349,
+        "max_ms": 7.637291666469537
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 6.7463666666299105,
+        "median_ms": 6.8088124971836805,
+        "min_ms": 6.081874991650693,
+        "max_ms": 7.637291666469537
+      },
+      "full": {
+        "count": 90,
+        "mean_ms": 6.227081943911293,
+        "median_ms": 6.383041662047617,
+        "min_ms": 5.633249995298684,
+        "max_ms": 7.210875002783723
+      },
+      "reuse": {
+        "count": 120,
+        "mean_ms": 2.533123959074146,
+        "median_ms": 2.342624997254461,
+        "min_ms": 2.305124988197349,
+        "max_ms": 3.260708341258578
+      },
+      "steady_equal_mean_ms": 4.38010295149272,
+      "local_run_json": "build/perf411/final-benchmark/optimized_lossy-r2/run.json"
+    },
+    {
+      "variant": "optimized_exact",
+      "round": 2,
+      "profile": "exact",
+      "all": {
+        "count": 240,
+        "mean_ms": 6.372340972241848,
+        "median_ms": 6.498916663986165,
+        "min_ms": 5.6096249900292605,
+        "max_ms": 7.830583330360241
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 6.895459722242474,
+        "median_ms": 6.963874999200925,
+        "min_ms": 6.067000009352341,
+        "max_ms": 7.830583330360241
+      },
+      "full": {
+        "count": 210,
+        "mean_ms": 6.297609722241759,
+        "median_ms": 6.424791667086538,
+        "min_ms": 5.6096249900292605,
+        "max_ms": 7.303583333850838
+      },
+      "reuse": {
+        "count": 0
+      },
+      "local_run_json": "build/perf411/final-benchmark/optimized_exact-r2/run.json"
+    },
+    {
+      "variant": "baseline_lossy",
+      "round": 2,
+      "profile": "lossy",
+      "all": {
+        "count": 240,
+        "mean_ms": 5.43365642382317,
+        "median_ms": 5.27404166496126,
+        "min_ms": 2.657958335475996,
+        "max_ms": 9.478624997427687
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 8.227931944808612,
+        "median_ms": 8.256979170255363,
+        "min_ms": 7.338625000556931,
+        "max_ms": 9.478624997427687
+      },
+      "full": {
+        "count": 90,
+        "mean_ms": 7.734066667035222,
+        "median_ms": 7.79595833591884,
+        "min_ms": 6.883583337184973,
+        "max_ms": 8.62675000098534
+      },
+      "reuse": {
+        "count": 120,
+        "mean_ms": 3.0097798611677717,
+        "median_ms": 2.7410416660131887,
+        "min_ms": 2.657958335475996,
+        "max_ms": 3.6644999927375466
+      },
+      "steady_equal_mean_ms": 5.371923264101497,
+      "local_run_json": "build/perf411/final-benchmark/baseline_lossy-r2/run.json"
+    },
+    {
+      "variant": "baseline_exact",
+      "round": 2,
+      "profile": "exact",
+      "all": {
+        "count": 240,
+        "mean_ms": 7.695352604605432,
+        "median_ms": 7.743395835859701,
+        "min_ms": 6.830250000348315,
+        "max_ms": 9.000624995678663
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 8.26382777740946,
+        "median_ms": 8.207062499423046,
+        "min_ms": 7.282499995199032,
+        "max_ms": 9.000624995678663
+      },
+      "full": {
+        "count": 210,
+        "mean_ms": 7.614141865633428,
+        "median_ms": 7.724541661445983,
+        "min_ms": 6.830250000348315,
+        "max_ms": 8.670458337292075
+      },
+      "reuse": {
+        "count": 0
+      },
+      "local_run_json": "build/perf411/final-benchmark/baseline_exact-r2/run.json"
+    },
+    {
+      "variant": "baseline_exact",
+      "round": 3,
+      "profile": "exact",
+      "all": {
+        "count": 240,
+        "mean_ms": 7.693593403079528,
+        "median_ms": 7.743687499896623,
+        "min_ms": 6.834375002654269,
+        "max_ms": 9.149374993285164
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 8.306888888182584,
+        "median_ms": 8.23552083602408,
+        "min_ms": 7.288666660315357,
+        "max_ms": 9.149374993285164
+      },
+      "full": {
+        "count": 210,
+        "mean_ms": 7.605979762350519,
+        "median_ms": 7.7328124971245416,
+        "min_ms": 6.834375002654269,
+        "max_ms": 8.680750004714355
+      },
+      "reuse": {
+        "count": 0
+      },
+      "local_run_json": "build/perf411/final-benchmark/baseline_exact-r3/run.json"
+    },
+    {
+      "variant": "baseline_lossy",
+      "round": 3,
+      "profile": "lossy",
+      "all": {
+        "count": 240,
+        "mean_ms": 5.433963541266469,
+        "median_ms": 5.317083327099681,
+        "min_ms": 2.6567500026430935,
+        "max_ms": 9.063250006875023
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 8.211395831312984,
+        "median_ms": 8.259937501861714,
+        "min_ms": 7.359166658716276,
+        "max_ms": 9.063250006875023
+      },
+      "full": {
+        "count": 90,
+        "mean_ms": 7.737299537176215,
+        "median_ms": 7.802333333529532,
+        "min_ms": 6.89583332859911,
+        "max_ms": 8.640458327136002
+      },
+      "reuse": {
+        "count": 120,
+        "mean_ms": 3.0121034718225324,
+        "median_ms": 2.7522708260221407,
+        "min_ms": 2.6567500026430935,
+        "max_ms": 3.7383333256002516
+      },
+      "steady_equal_mean_ms": 5.374701504499374,
+      "local_run_json": "build/perf411/final-benchmark/baseline_lossy-r3/run.json"
+    },
+    {
+      "variant": "optimized_exact",
+      "round": 3,
+      "profile": "exact",
+      "all": {
+        "count": 240,
+        "mean_ms": 6.413463367850151,
+        "median_ms": 6.55462500435533,
+        "min_ms": 5.638625007122755,
+        "max_ms": 8.012833321117796
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 6.972069444115429,
+        "median_ms": 6.9852500018896535,
+        "min_ms": 6.103000006987713,
+        "max_ms": 8.012833321117796
+      },
+      "full": {
+        "count": 210,
+        "mean_ms": 6.333662499812254,
+        "median_ms": 6.4822708372958004,
+        "min_ms": 5.638625007122755,
+        "max_ms": 7.216250000055879
+      },
+      "reuse": {
+        "count": 0
+      },
+      "local_run_json": "build/perf411/final-benchmark/optimized_exact-r3/run.json"
+    },
+    {
+      "variant": "optimized_lossy",
+      "round": 3,
+      "profile": "lossy",
+      "all": {
+        "count": 240,
+        "mean_ms": 4.556771180007975,
+        "median_ms": 4.628291666449513,
+        "min_ms": 2.31500000518281,
+        "max_ms": 7.722166657913476
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 6.901418054379367,
+        "median_ms": 7.010083332716022,
+        "min_ms": 6.1029166681692,
+        "max_ms": 7.722166657913476
+      },
+      "full": {
+        "count": 90,
+        "mean_ms": 6.36165694385353,
+        "median_ms": 6.476458336692303,
+        "min_ms": 5.6682499998714775,
+        "max_ms": 7.160749999457039
+      },
+      "reuse": {
+        "count": 120,
+        "mean_ms": 2.616945138530961,
+        "median_ms": 2.385979169048369,
+        "min_ms": 2.31500000518281,
+        "max_ms": 3.588333333027549
+      },
+      "steady_equal_mean_ms": 4.489301041192245,
+      "local_run_json": "build/perf411/final-benchmark/optimized_lossy-r3/run.json"
+    },
+    {
+      "variant": "optimized_lossy",
+      "round": 4,
+      "profile": "lossy",
+      "all": {
+        "count": 240,
+        "mean_ms": 4.502194965122423,
+        "median_ms": 4.495270834013354,
+        "min_ms": 2.3181666620075703,
+        "max_ms": 7.567499997094274
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 6.805023610650096,
+        "median_ms": 6.942416672245599,
+        "min_ms": 6.107249995693564,
+        "max_ms": 7.567499997094274
+      },
+      "full": {
+        "count": 90,
+        "mean_ms": 6.292824537538561,
+        "median_ms": 6.4255624965881,
+        "min_ms": 5.66275000164751,
+        "max_ms": 7.2092916670953855
+      },
+      "reuse": {
+        "count": 120,
+        "mean_ms": 2.5835156244284008,
+        "median_ms": 2.374854164372664,
+        "min_ms": 2.3181666620075703,
+        "max_ms": 3.3277916663791984
+      },
+      "steady_equal_mean_ms": 4.438170080983481,
+      "local_run_json": "build/perf411/final-benchmark/optimized_lossy-r4/run.json"
+    },
+    {
+      "variant": "optimized_exact",
+      "round": 4,
+      "profile": "exact",
+      "all": {
+        "count": 240,
+        "mean_ms": 6.389700868445895,
+        "median_ms": 6.509687504149042,
+        "min_ms": 5.645249999361113,
+        "max_ms": 7.621083335834555
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 7.027602778301419,
+        "median_ms": 7.00293749832781,
+        "min_ms": 6.667499998002313,
+        "max_ms": 7.621083335834555
+      },
+      "full": {
+        "count": 210,
+        "mean_ms": 6.29857202418082,
+        "median_ms": 6.3987499961513095,
+        "min_ms": 5.645249999361113,
+        "max_ms": 7.158124994020909
+      },
+      "reuse": {
+        "count": 0
+      },
+      "local_run_json": "build/perf411/final-benchmark/optimized_exact-r4/run.json"
+    },
+    {
+      "variant": "baseline_lossy",
+      "round": 4,
+      "profile": "lossy",
+      "all": {
+        "count": 240,
+        "mean_ms": 5.4398022572058835,
+        "median_ms": 5.3072708324179985,
+        "min_ms": 2.6557083328953013,
+        "max_ms": 9.077875001821667
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 8.335511110878238,
+        "median_ms": 8.300812500237953,
+        "min_ms": 7.350458326982334,
+        "max_ms": 9.077875001821667
+      },
+      "full": {
+        "count": 90,
+        "mean_ms": 7.755291204537368,
+        "median_ms": 7.831895833078306,
+        "min_ms": 6.924666668055579,
+        "max_ms": 8.786500009591691
+      },
+      "reuse": {
+        "count": 120,
+        "mean_ms": 2.979258333289181,
+        "median_ms": 2.759999995760154,
+        "min_ms": 2.6557083328953013,
+        "max_ms": 3.689874996780418
+      },
+      "steady_equal_mean_ms": 5.3672747689132745,
+      "local_run_json": "build/perf411/final-benchmark/baseline_lossy-r4/run.json"
+    },
+    {
+      "variant": "baseline_exact",
+      "round": 4,
+      "profile": "exact",
+      "all": {
+        "count": 240,
+        "mean_ms": 7.956201735396462,
+        "median_ms": 7.785479167068843,
+        "min_ms": 6.8433749984251335,
+        "max_ms": 12.61841667292174
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 8.640427778785428,
+        "median_ms": 8.530458333552815,
+        "min_ms": 7.288083332241513,
+        "max_ms": 12.61841667292174
+      },
+      "full": {
+        "count": 210,
+        "mean_ms": 7.858455157769467,
+        "median_ms": 7.774041660013609,
+        "min_ms": 6.8433749984251335,
+        "max_ms": 12.559791677631438
+      },
+      "reuse": {
+        "count": 0
+      },
+      "local_run_json": "build/perf411/final-benchmark/baseline_exact-r4/run.json"
+    },
+    {
+      "variant": "baseline_exact",
+      "round": 5,
+      "profile": "exact",
+      "all": {
+        "count": 240,
+        "mean_ms": 7.723727951088222,
+        "median_ms": 7.769875002850313,
+        "min_ms": 6.849375000456348,
+        "max_ms": 9.177500003715977
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 7.999412497641363,
+        "median_ms": 8.06791666400386,
+        "min_ms": 7.276541655301116,
+        "max_ms": 9.177500003715977
+      },
+      "full": {
+        "count": 210,
+        "mean_ms": 7.684344444437773,
+        "median_ms": 7.761145832773764,
+        "min_ms": 6.849375000456348,
+        "max_ms": 8.716124997590668
+      },
+      "reuse": {
+        "count": 0
+      },
+      "local_run_json": "build/perf411/final-benchmark/baseline_exact-r5/run.json"
+    },
+    {
+      "variant": "baseline_lossy",
+      "round": 5,
+      "profile": "lossy",
+      "all": {
+        "count": 240,
+        "mean_ms": 5.44285694516778,
+        "median_ms": 5.311062501277775,
+        "min_ms": 2.660499987541698,
+        "max_ms": 9.117124995100312
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 8.233430555749996,
+        "median_ms": 8.263083334895782,
+        "min_ms": 7.380666662356816,
+        "max_ms": 9.117124995100312
+      },
+      "full": {
+        "count": 90,
+        "mean_ms": 7.807034259248111,
+        "median_ms": 7.834041665773839,
+        "min_ms": 6.9262499891920015,
+        "max_ms": 8.666833324241452
+      },
+      "reuse": {
+        "count": 120,
+        "mean_ms": 2.9720805569619793,
+        "median_ms": 2.7600000030361116,
+        "min_ms": 2.660499987541698,
+        "max_ms": 3.6958750133635476
+      },
+      "steady_equal_mean_ms": 5.389557408105045,
+      "local_run_json": "build/perf411/final-benchmark/baseline_lossy-r5/run.json"
+    },
+    {
+      "variant": "optimized_exact",
+      "round": 5,
+      "profile": "exact",
+      "all": {
+        "count": 240,
+        "mean_ms": 6.408727951202309,
+        "median_ms": 6.527249999635387,
+        "min_ms": 5.6585000129416585,
+        "max_ms": 7.576000003609806
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 6.864604164244763,
+        "median_ms": 6.999812503636349,
+        "min_ms": 6.08704166370444,
+        "max_ms": 7.576000003609806
+      },
+      "full": {
+        "count": 210,
+        "mean_ms": 6.3436027779105295,
+        "median_ms": 6.455750000895932,
+        "min_ms": 5.6585000129416585,
+        "max_ms": 7.182083340012468
+      },
+      "reuse": {
+        "count": 0
+      },
+      "local_run_json": "build/perf411/final-benchmark/optimized_exact-r5/run.json"
+    },
+    {
+      "variant": "optimized_lossy",
+      "round": 5,
+      "profile": "lossy",
+      "all": {
+        "count": 240,
+        "mean_ms": 4.571189409701522,
+        "median_ms": 4.519645844993647,
+        "min_ms": 2.3180833377409726,
+        "max_ms": 8.011500001884997
+      },
+      "reset": {
+        "count": 30,
+        "mean_ms": 6.9072527781827375,
+        "median_ms": 7.02022916811984,
+        "min_ms": 6.129833331215195,
+        "max_ms": 8.011500001884997
+      },
+      "full": {
+        "count": 90,
+        "mean_ms": 6.384128703858652,
+        "median_ms": 6.5213124980800785,
+        "min_ms": 5.694083345588297,
+        "max_ms": 7.188333343947306
+      },
+      "reuse": {
+        "count": 120,
+        "mean_ms": 2.6274690969633716,
+        "median_ms": 2.391583337157499,
+        "min_ms": 2.3180833377409726,
+        "max_ms": 3.3452083443989977
+      },
+      "steady_equal_mean_ms": 4.505798900411012,
+      "local_run_json": "build/perf411/final-benchmark/optimized_lossy-r5/run.json"
+    }
+  ]
+}

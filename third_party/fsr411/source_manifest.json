@@ -1,0 +1,565 @@
+{
+  "schema": "fsr411_source_manifest_v1",
+  "upstream_url": "https://github.com/int3rrobang/fsr4-int8-reverse-engineering",
+  "upstream_commit": "f508ddecd46fb407d1be41c3102b54dddf57d220",
+  "files": [
+    {
+      "path": "shaders/reimpl411/README.md",
+      "upstream_path": "bench/shaders/reimpl411/README.md",
+      "sha256": "1889fdd9d95519222e85011a890c7fbfe5902aa3055f9c4663535176bcdb88d3",
+      "size": 4531
+    },
+    {
+      "path": "shaders/reimpl411/ffx_fsr4_gpu_colorspace_common.h",
+      "upstream_path": "bench/shaders/reimpl411/ffx_fsr4_gpu_colorspace_common.h",
+      "sha256": "74bd925b706f2d8a99079f92e6f733505783144abb811e68ce49e4c2baad95f7",
+      "size": 3698
+    },
+    {
+      "path": "shaders/reimpl411/ffx_fsr4_upscale_resources.h",
+      "upstream_path": "bench/shaders/reimpl411/ffx_fsr4_upscale_resources.h",
+      "sha256": "2f3a51a65dd13de337acd0aabb049657e86aed39819b6f7bb7162c8024cfc648",
+      "size": 7540
+    },
+    {
+      "path": "shaders/reimpl411/manifest_411_quality_p4.json",
+      "upstream_path": "bench/shaders/reimpl411/manifest_411_quality_p4.json",
+      "sha256": "a61de967ef060bb177eba2180bf93b71a82956314405054e2465a59258d58e57",
+      "size": 17770
+    },
+    {
+      "path": "shaders/reimpl411/mlsr_optimized_includes.hlsli",
+      "upstream_path": "bench/shaders/reimpl411/mlsr_optimized_includes.hlsli",
+      "sha256": "7d31f51dd22f7d718586bfbeb0ddf7575b770ef5e0bcbe644c1aabeeecc9eaaa",
+      "size": 6868
+    },
+    {
+      "path": "shaders/reimpl411/pass0_post.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pass0_post.hlsl",
+      "sha256": "36d9e7771a3beb03d142b20eec4b192c63e36a08a140db5a06094e6de83c81da",
+      "size": 1799
+    },
+    {
+      "path": "shaders/reimpl411/pass10_post.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pass10_post.hlsl",
+      "sha256": "e8d7a21d5cc3a5533bdbc0df04710dc9e0068ce49d33103b79907e23881bd38d",
+      "size": 1914
+    },
+    {
+      "path": "shaders/reimpl411/pass11_post.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pass11_post.hlsl",
+      "sha256": "d804f459e3fb340743f3a9adbc164cda0f0b4f12ebf87a5a3142485eb8349f96",
+      "size": 1809
+    },
+    {
+      "path": "shaders/reimpl411/pass12_post.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pass12_post.hlsl",
+      "sha256": "2a5ae91b29b2648fe62aaf6dac255fc5cf7d3e3642f7aaa68dd06d548b7569a4",
+      "size": 1802
+    },
+    {
+      "path": "shaders/reimpl411/pass1_post.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pass1_post.hlsl",
+      "sha256": "c12d6ce20303ffb179c5ab3c79ef3ac2d13eafec19550634797a72a10b3fbd2d",
+      "size": 1805
+    },
+    {
+      "path": "shaders/reimpl411/pass2_post.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pass2_post.hlsl",
+      "sha256": "624573a2d482d2e3c4e0f10d1f29c2ac807ba8a8e69a89f981e4350d99950159",
+      "size": 1799
+    },
+    {
+      "path": "shaders/reimpl411/pass3_post.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pass3_post.hlsl",
+      "sha256": "ef46fee96890c8c72efd48b15f984c1827d46265cb54cb623acaa8d03e896662",
+      "size": 1911
+    },
+    {
+      "path": "shaders/reimpl411/pass4_post.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pass4_post.hlsl",
+      "sha256": "226dc6b79c780b525c2b06f8e25565197492aeee9ef860f55e43f817a414e181",
+      "size": 1912
+    },
+    {
+      "path": "shaders/reimpl411/pass5_post.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pass5_post.hlsl",
+      "sha256": "e2a501d7c61190b8a804eb17c92d746f51942185a106c6c5840d3f0b7089d863",
+      "size": 1911
+    },
+    {
+      "path": "shaders/reimpl411/pass6_post.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pass6_post.hlsl",
+      "sha256": "ae76172c1dc982b8d9b9f4deef048ad2d40f80abb24b1260380ede3a381568bb",
+      "size": 2126
+    },
+    {
+      "path": "shaders/reimpl411/pass7_post.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pass7_post.hlsl",
+      "sha256": "79ff420cd76ab352545fad816495e1fdc7171933f3493200dac7d53dd367e6ca",
+      "size": 2126
+    },
+    {
+      "path": "shaders/reimpl411/pass8_post.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pass8_post.hlsl",
+      "sha256": "d0ec33708901da2bd021e2d85b72c20de2362d98a94172aae14fca1975e3dd03",
+      "size": 2126
+    },
+    {
+      "path": "shaders/reimpl411/pass9_post.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pass9_post.hlsl",
+      "sha256": "1e10b2ee3c4d127d1612608de9aeabca6501b0c9e1a29ebad6db55f6b1c32938",
+      "size": 1914
+    },
+    {
+      "path": "shaders/reimpl411/post_rev_411.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/post_rev_411.hlsl",
+      "sha256": "ac919ef5c251318b8ac3f9439e7c9a4edd7968288d993f0f12ec18fd5fe4a8e2",
+      "size": 11142
+    },
+    {
+      "path": "shaders/reimpl411/post_rev_411_tables.hlsli",
+      "upstream_path": "bench/shaders/reimpl411/post_rev_411_tables.hlsli",
+      "sha256": "3e60420ea2e5579a8d2fedca834beab13f0b95985e1d887c86a8ddff62a4dc34",
+      "size": 12010
+    },
+    {
+      "path": "shaders/reimpl411/pre_rev_411.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/pre_rev_411.hlsl",
+      "sha256": "c5a3ce8efade84bd7634fb1c7a28201cc1abece7129edecacfe1413d97bac2d4",
+      "size": 12691
+    },
+    {
+      "path": "shaders/reimpl411/reimpl_pass1.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/reimpl_pass1.hlsl",
+      "sha256": "4b34b1d019a5bfae8a65b474d9cafa13ce3cca98ec9dae8c9ea3069e1a766e24",
+      "size": 23708
+    },
+    {
+      "path": "shaders/reimpl411/reimpl_pass10.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/reimpl_pass10.hlsl",
+      "sha256": "66a170f62bbea06af65d8c680a00c205246b1820f07027d367538d2490d83fe0",
+      "size": 31951
+    },
+    {
+      "path": "shaders/reimpl411/reimpl_pass11.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/reimpl_pass11.hlsl",
+      "sha256": "e979b93e1a79c0fbae8aa73232e4ac0e9626bcc3a58ec309cdf31d10561179f1",
+      "size": 12340
+    },
+    {
+      "path": "shaders/reimpl411/reimpl_pass12.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/reimpl_pass12.hlsl",
+      "sha256": "3ee19a624bbe86aa12b7b7b281b360a81ca4c870b3836636382fa4e2049dd20e",
+      "size": 23744
+    },
+    {
+      "path": "shaders/reimpl411/reimpl_pass2.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/reimpl_pass2.hlsl",
+      "sha256": "2401fbff4a5eb62427db16cc51bd6727dead985df6ccadaa597ecc9f9ef11bba",
+      "size": 23514
+    },
+    {
+      "path": "shaders/reimpl411/reimpl_pass3.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/reimpl_pass3.hlsl",
+      "sha256": "2974afcd49beeb0e0ae534a5bf70596bc2611fc1985dd176d19c8b210608f5af",
+      "size": 4654
+    },
+    {
+      "path": "shaders/reimpl411/reimpl_pass4.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/reimpl_pass4.hlsl",
+      "sha256": "140aa7584fb8c7c99c4aa8d43a195ce11c7ca7bcce0816b08555784cbc82b459",
+      "size": 31901
+    },
+    {
+      "path": "shaders/reimpl411/reimpl_pass5.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/reimpl_pass5.hlsl",
+      "sha256": "441459843ecabc03e25dde6a10eb1d7c57db1d125c6b78011ccd2e866a040b99",
+      "size": 31989
+    },
+    {
+      "path": "shaders/reimpl411/reimpl_pass6.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/reimpl_pass6.hlsl",
+      "sha256": "51c7b0949c884167c17fc1e825cb8ac07f66c8277e853c6e5a5030ea3f449d98",
+      "size": 5134
+    },
+    {
+      "path": "shaders/reimpl411/reimpl_pass7.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/reimpl_pass7.hlsl",
+      "sha256": "6c3dccd3a5ee1b687a0db2564a91822090d464d6b07b9c4606698c224ccee6be",
+      "size": 8366
+    },
+    {
+      "path": "shaders/reimpl411/reimpl_pass8.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/reimpl_pass8.hlsl",
+      "sha256": "6e131c083e70b49af3ec749866b008e42c9c132cfb69bc06bf4a6e36b73a6847",
+      "size": 11142
+    },
+    {
+      "path": "shaders/reimpl411/reimpl_pass9.hlsl",
+      "upstream_path": "bench/shaders/reimpl411/reimpl_pass9.hlsl",
+      "sha256": "bb404fb9e132fd6a9191a51e77678be4dd9aac68a2923e41157b3e73e2d69e98",
+      "size": 12307
+    },
+    {
+      "path": "shaders/reimpl2160/manifest_411_2160.json",
+      "upstream_path": "bench/shaders/reimpl2160/manifest_411_2160.json",
+      "sha256": "78f135c1dcf7648270a0f6d739f77d82cfd627b043d93444319f72f99c22b690",
+      "size": 14103
+    },
+    {
+      "path": "shaders/reimpl2160/pass0_post_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pass0_post_2160.hlsl",
+      "sha256": "ac973242250d72194628da4894a4f551c7387711d7cd6d632ead4813a226ee0a",
+      "size": 1982
+    },
+    {
+      "path": "shaders/reimpl2160/pass10_post_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pass10_post_2160.hlsl",
+      "sha256": "4ed3399e4aea3bb925eaa42f15de33a11a4d3f2d84f0fd3e20f9580b26294f67",
+      "size": 2098
+    },
+    {
+      "path": "shaders/reimpl2160/pass11_post_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pass11_post_2160.hlsl",
+      "sha256": "7f1e639b757fae9b3039781d02c4c957617d032415345e1a45eaa20de25a9ce4",
+      "size": 1993
+    },
+    {
+      "path": "shaders/reimpl2160/pass12_post_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pass12_post_2160.hlsl",
+      "sha256": "baa665a8e5dea8667b3475b07143efea1da5d912a3124d5aa745318e6369d0c5",
+      "size": 1986
+    },
+    {
+      "path": "shaders/reimpl2160/pass1_post_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pass1_post_2160.hlsl",
+      "sha256": "9f1914e1b03e4e8c8fc3f506aaea1c6ccc85150b62de12b14c4f91e75fe46fbc",
+      "size": 1989
+    },
+    {
+      "path": "shaders/reimpl2160/pass2_post_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pass2_post_2160.hlsl",
+      "sha256": "df3d32e66f9e7380ddfc48085d8b41856a972324b841db26eb43db3cf1230dad",
+      "size": 1982
+    },
+    {
+      "path": "shaders/reimpl2160/pass3_post_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pass3_post_2160.hlsl",
+      "sha256": "8a051b44fad2c3047cd61bb35272082df3ded43a1b9d8424ae9e12727f3fb298",
+      "size": 2094
+    },
+    {
+      "path": "shaders/reimpl2160/pass4_post_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pass4_post_2160.hlsl",
+      "sha256": "f1f1de11ecb3a3e10bc41486aaea3ba6f1ade64ee0aa3786bf5afa7b3253af9e",
+      "size": 2094
+    },
+    {
+      "path": "shaders/reimpl2160/pass5_post_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pass5_post_2160.hlsl",
+      "sha256": "9a60b83f278649db66219af184b3017bc187843ca23209f27d3dac35e039ab2a",
+      "size": 2094
+    },
+    {
+      "path": "shaders/reimpl2160/pass6_post_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pass6_post_2160.hlsl",
+      "sha256": "e961abf7203b15890eb92a8cb79f47cc81029392eafd7014e31e67a0bc086fb9",
+      "size": 2307
+    },
+    {
+      "path": "shaders/reimpl2160/pass7_post_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pass7_post_2160.hlsl",
+      "sha256": "083aa1d62607fb62e137c297307bf23469931faad4b594fcb0d64b2fbd4f2979",
+      "size": 2307
+    },
+    {
+      "path": "shaders/reimpl2160/pass8_post_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pass8_post_2160.hlsl",
+      "sha256": "2e9cc6c8895b384b0d41b0428f48f19688906021e2848e6a875d39eafd9035ca",
+      "size": 2307
+    },
+    {
+      "path": "shaders/reimpl2160/pass9_post_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pass9_post_2160.hlsl",
+      "sha256": "bbfbf1ca627db9d32bd67c090c276fd9f699f7a21ffddd4c45618743780df9c6",
+      "size": 2096
+    },
+    {
+      "path": "shaders/reimpl2160/post_rev_411_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/post_rev_411_2160.hlsl",
+      "sha256": "dc1c785bf113089e3a1b97eaa64cbbbfa21a61bcd25a327c2dcd82b021d40942",
+      "size": 11867
+    },
+    {
+      "path": "shaders/reimpl2160/pre_rev_411_v15_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/pre_rev_411_v15_2160.hlsl",
+      "sha256": "90f579a09889165c9dcc05a8f8cb649d5682c10f123f534f205582585c7c7990",
+      "size": 13496
+    },
+    {
+      "path": "shaders/reimpl2160/reimpl_pass10_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/reimpl_pass10_2160.hlsl",
+      "sha256": "4a426ba07f450075a3c852e0e853a092960bc4755eeeaa736eb484c1d4bd1cc1",
+      "size": 31696
+    },
+    {
+      "path": "shaders/reimpl2160/reimpl_pass11_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/reimpl_pass11_2160.hlsl",
+      "sha256": "a344b8aee0884ae71560de788836fddc5cf781bd24e8cd50defa8c0320d3ae70",
+      "size": 11498
+    },
+    {
+      "path": "shaders/reimpl2160/reimpl_pass12_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/reimpl_pass12_2160.hlsl",
+      "sha256": "2ff149dc468194a81bfb53ce8e31d670da64c72a2ca802d5f40819a8c1e67527",
+      "size": 23787
+    },
+    {
+      "path": "shaders/reimpl2160/reimpl_pass1_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/reimpl_pass1_2160.hlsl",
+      "sha256": "35faab913e370a7f1b4a4db2a90058a0ae437235e8f4dcef95bd1ca85804d46a",
+      "size": 24488
+    },
+    {
+      "path": "shaders/reimpl2160/reimpl_pass2_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/reimpl_pass2_2160.hlsl",
+      "sha256": "359ffd9a3f176ffd42a2e4fa2d8cb6015b8da3334d7afb72263bcfcd9831fda6",
+      "size": 24293
+    },
+    {
+      "path": "shaders/reimpl2160/reimpl_pass3_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/reimpl_pass3_2160.hlsl",
+      "sha256": "0495c24bf3456fdc93e43b6fb90016a1f44979e049caac871ee6f618da57006c",
+      "size": 5494
+    },
+    {
+      "path": "shaders/reimpl2160/reimpl_pass4_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/reimpl_pass4_2160.hlsl",
+      "sha256": "ae03fe13fb2b8961d5118f976b811785565e24ff33a91d0268d5a2a4b6ab50f5",
+      "size": 32726
+    },
+    {
+      "path": "shaders/reimpl2160/reimpl_pass5_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/reimpl_pass5_2160.hlsl",
+      "sha256": "963bdd616340484098f317a6f246fed4bcde7a35e57b9c2b5d5332f5c58236ca",
+      "size": 32813
+    },
+    {
+      "path": "shaders/reimpl2160/reimpl_pass6_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/reimpl_pass6_2160.hlsl",
+      "sha256": "137fc8b15a0e0bf71a96543445faef417a654dd93e692c83c020de1d0f3b18c9",
+      "size": 5736
+    },
+    {
+      "path": "shaders/reimpl2160/reimpl_pass7_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/reimpl_pass7_2160.hlsl",
+      "sha256": "560361f5db44c753995f05e5c76892b45d5e9a32132ad0645863155dc285f08f",
+      "size": 8574
+    },
+    {
+      "path": "shaders/reimpl2160/reimpl_pass8_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/reimpl_pass8_2160.hlsl",
+      "sha256": "c5138c0abaaa8379e52edce8fc401bef8bfc0456d9a126e1a2d865a6e0074dce",
+      "size": 11318
+    },
+    {
+      "path": "shaders/reimpl2160/reimpl_pass9_2160.hlsl",
+      "upstream_path": "bench/shaders/reimpl2160/reimpl_pass9_2160.hlsl",
+      "sha256": "b15f2552e99b8042c3b2657e6678cddc663d41b7b7968431d2b6f46181d3f72c",
+      "size": 13360
+    },
+    {
+      "path": "shaders/reimpl4320/manifest_411_4320.json",
+      "upstream_path": "bench/shaders/reimpl4320/manifest_411_4320.json",
+      "sha256": "5a60d856791d07baf7ddacfae40ddfe9448fb0104e6f58e369a79031b49a27ba",
+      "size": 13893
+    },
+    {
+      "path": "shaders/reimpl4320/pass0_post_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pass0_post_4320.hlsl",
+      "sha256": "d110022526b79a3f37f8943777d21f6d8f6806e5b31c5747dc14df0b482ef758",
+      "size": 2102
+    },
+    {
+      "path": "shaders/reimpl4320/pass10_post_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pass10_post_4320.hlsl",
+      "sha256": "cea44904de4a0d293d82d72319f5c8ac7e3074aafbb744c6e9c950f9dbd61aa8",
+      "size": 2222
+    },
+    {
+      "path": "shaders/reimpl4320/pass11_post_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pass11_post_4320.hlsl",
+      "sha256": "5a5185ca0e3ee04bfb36470b17e36e6d1083415092a2e0b4e7b9f66763fa601a",
+      "size": 2114
+    },
+    {
+      "path": "shaders/reimpl4320/pass12_post_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pass12_post_4320.hlsl",
+      "sha256": "ddd99f7abcc5523edf1bdd7864ebaf3efe5774a6eee52c2b08755a2d26f165e0",
+      "size": 2106
+    },
+    {
+      "path": "shaders/reimpl4320/pass1_post_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pass1_post_4320.hlsl",
+      "sha256": "388153202bf06859c54723c1746d79297251da2b5c2345dc313b06d7a6bb5438",
+      "size": 2110
+    },
+    {
+      "path": "shaders/reimpl4320/pass2_post_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pass2_post_4320.hlsl",
+      "sha256": "1da9f4363b6aef3622c86dd3b91da7eddf835ea1f880bff29483c2957fd517de",
+      "size": 2102
+    },
+    {
+      "path": "shaders/reimpl4320/pass3_post_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pass3_post_4320.hlsl",
+      "sha256": "afdc781ab79d7aae3337190fe8244a6b2e2fe0545d81f00ab49b6707efacb9d9",
+      "size": 2218
+    },
+    {
+      "path": "shaders/reimpl4320/pass4_post_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pass4_post_4320.hlsl",
+      "sha256": "6b92223eb18075a56196c9e08d3c45ab579e2a73ac5343e2827fe9551afd8453",
+      "size": 2218
+    },
+    {
+      "path": "shaders/reimpl4320/pass5_post_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pass5_post_4320.hlsl",
+      "sha256": "94b407a3cabf499a536769cdb307734eb50e83064da7d6d593ba3a0b7dcac839",
+      "size": 2218
+    },
+    {
+      "path": "shaders/reimpl4320/pass6_post_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pass6_post_4320.hlsl",
+      "sha256": "4f58eca2a57f47e62924a5b13a3ed12d414f8a89b2be59f57fe900c11b55d9fc",
+      "size": 2432
+    },
+    {
+      "path": "shaders/reimpl4320/pass7_post_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pass7_post_4320.hlsl",
+      "sha256": "bab42641ee1eb099825fd420b27813b7aa116273dd25bdd92e4ee11e9c169277",
+      "size": 2432
+    },
+    {
+      "path": "shaders/reimpl4320/pass8_post_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pass8_post_4320.hlsl",
+      "sha256": "7d0b9d35342162a633b5750602844daa7207af78edc4d59fa911a89259cc04a8",
+      "size": 2432
+    },
+    {
+      "path": "shaders/reimpl4320/pass9_post_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pass9_post_4320.hlsl",
+      "sha256": "a5ac53570b3aa6cbe6606859c9671e8a5f6d9a8bd8002864e164882e33896261",
+      "size": 2220
+    },
+    {
+      "path": "shaders/reimpl4320/post_rev_411_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/post_rev_411_4320.hlsl",
+      "sha256": "03313d51bb71d024eaa616907e75471d132129c8f0c3b34937d40db1a274295b",
+      "size": 11866
+    },
+    {
+      "path": "shaders/reimpl4320/pre_rev_411_v15_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/pre_rev_411_v15_4320.hlsl",
+      "sha256": "647831febd766d863d02f4c3555db67a8076a205b8d04b5cb509f8e7bb416dd8",
+      "size": 13503
+    },
+    {
+      "path": "shaders/reimpl4320/reimpl_pass10_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/reimpl_pass10_4320.hlsl",
+      "sha256": "04ab948a04def7df6316d5b8ba402b686c3b7a8f1763e16e3c9ea0156f968cd4",
+      "size": 31805
+    },
+    {
+      "path": "shaders/reimpl4320/reimpl_pass11_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/reimpl_pass11_4320.hlsl",
+      "sha256": "45060e803d4a39486330076b960eb412fd3446cfa3b34364fce83e71bd174878",
+      "size": 11509
+    },
+    {
+      "path": "shaders/reimpl4320/reimpl_pass12_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/reimpl_pass12_4320.hlsl",
+      "sha256": "062c877430bdddfaca8d1eba916489ecf4cb07d076ab81250d90ee96b631db02",
+      "size": 23790
+    },
+    {
+      "path": "shaders/reimpl4320/reimpl_pass1_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/reimpl_pass1_4320.hlsl",
+      "sha256": "14e9bfef9d3b27a3bf548e7f84219cfbde8f66395610bf6969f55e90ca229eb0",
+      "size": 24490
+    },
+    {
+      "path": "shaders/reimpl4320/reimpl_pass2_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/reimpl_pass2_4320.hlsl",
+      "sha256": "840c126355b1b4b03a583b055c97447630f76288fa8207d59f0f1ba5f68ebc94",
+      "size": 24296
+    },
+    {
+      "path": "shaders/reimpl4320/reimpl_pass3_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/reimpl_pass3_4320.hlsl",
+      "sha256": "3415dd58835e4afe2bac5bfdf235c880e829900a60f980b3707106b68fab6ed2",
+      "size": 5508
+    },
+    {
+      "path": "shaders/reimpl4320/reimpl_pass4_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/reimpl_pass4_4320.hlsl",
+      "sha256": "50ad2d630dd588e1104e42b4d5d16ce7f89e969d463845c804957fee492e7cf9",
+      "size": 32797
+    },
+    {
+      "path": "shaders/reimpl4320/reimpl_pass5_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/reimpl_pass5_4320.hlsl",
+      "sha256": "9d0d7d1c61e6aecf7c0ffabf90941adb901ff3d4b992ea96f4aaf614255973bd",
+      "size": 32850
+    },
+    {
+      "path": "shaders/reimpl4320/reimpl_pass6_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/reimpl_pass6_4320.hlsl",
+      "sha256": "fc37a06661bed4c64e34fe02c2fd5866001ee8f6f9a7f560e5c545d7d5305e4d",
+      "size": 5690
+    },
+    {
+      "path": "shaders/reimpl4320/reimpl_pass7_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/reimpl_pass7_4320.hlsl",
+      "sha256": "640dd99c34b9b20d8583358e36d8ddd70d1b779ea3555c581b3fad5b71ba68c7",
+      "size": 8586
+    },
+    {
+      "path": "shaders/reimpl4320/reimpl_pass8_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/reimpl_pass8_4320.hlsl",
+      "sha256": "eb5fa9cd929b366c7df58fa7fbb4e98adecd4b55affedf64d6790ce44ed3989d",
+      "size": 11325
+    },
+    {
+      "path": "shaders/reimpl4320/reimpl_pass9_4320.hlsl",
+      "upstream_path": "bench/shaders/reimpl4320/reimpl_pass9_4320.hlsl",
+      "sha256": "b0dd66e394a5ee8002b44f8bd0a7a2cfd22a8f683ad12d008e2ba8237744cab0",
+      "size": 13384
+    },
+    {
+      "path": "shaders/ae_411_ours/ae_ours.hlsl",
+      "upstream_path": "bench/shaders/candidates/ae_411_ours/ae_ours.hlsl",
+      "sha256": "2454a167aea4025251f8ba2930f94ff8ff28a874fd614b760d7a29a363886ec0",
+      "size": 9123
+    },
+    {
+      "path": "LICENSE",
+      "upstream_path": "LICENSE",
+      "sha256": "af61f617d758292a208c2c9e4c14a7b9058c9f96b60f7f73da965864799934c2",
+      "size": 1114
+    },
+    {
+      "path": "NOTICE.upstream.md",
+      "upstream_path": "NOTICE.md",
+      "sha256": "152806e164fecb55510bbd9e66f7d949aeb50530406c51731a85a8b3d89294bf",
+      "size": 3630
+    },
+    {
+      "path": "README.upstream.md",
+      "upstream_path": "README.md",
+      "sha256": "522fdf9fae0c9e64060b2a7bb38730c77fdbd1d40a7058900b8a7d077c660db5",
+      "size": 11573
+    }
+  ]
+}

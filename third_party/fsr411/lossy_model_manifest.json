@@ -1,0 +1,172 @@
+{
+  "schema": 1,
+  "reference": {
+    "repository": "https://github.com/zgauthier2000/fsr4-shader-performance-overrides",
+    "commit": "8d72457ab6302dab8e4f918f6bf83a1af3900288",
+    "release": "dll-2026-10-07",
+    "asset_url": "https://github.com/zgauthier2000/fsr4-shader-performance-overrides/releases/download/dll-2026-10-07/test-lossy.zip",
+    "asset_sha256": "02b4e1a468962204345dd2195c58e764166f2a9b66526658d22d3bd5a2938a46",
+    "dll_sha256": "f9541e4f897e6eb029d470bac5338c8c62bb5988412bd31ae995e2531a236bd9",
+    "dll_bytes": 45273088,
+    "execution": "none; native DXC disassembly only"
+  },
+  "policy": {
+    "common_fold_words": {
+      "1": 4,
+      "5": 18,
+      "10": 18,
+      "12": 20
+    },
+    "common_intermediate_half_up_passes": [
+      1,
+      2,
+      4,
+      5,
+      7,
+      8,
+      9,
+      10,
+      12
+    ],
+    "ultraperformance_intermediate_half_up_passes": [
+      7,
+      8,
+      9
+    ],
+    "tail_rounding": "nearest, ties to even; unchanged",
+    "folding": "minimum squared int8x4 norm, nearest retained spatial tap in the same input quartet, saturating int8 addition"
+  },
+  "validation": "All baked weight tables in all twelve selected published shaders match the independent generated HLSL exactly. This is coefficient validation, not GPU output or temporal quality equivalence.",
+  "passes": [
+    {
+      "pass": 1,
+      "baked_word_count": 832,
+      "baked_weights_sha256": "780d5d7df9c4d182f3624276d26fe78d69bfb91b18146b89002172ccbe2c1029"
+    },
+    {
+      "pass": 5,
+      "baked_word_count": 1600,
+      "baked_weights_sha256": "f17bc796f494dc08cf73046133a3e302decc8847e49df2e5cc54d426f883d31b"
+    },
+    {
+      "pass": 10,
+      "baked_word_count": 1600,
+      "baked_weights_sha256": "1c693e7de8432f35ee936fbbf689991e8ecd7739c1c3dc96ea9b6584789f2895"
+    },
+    {
+      "pass": 12,
+      "baked_word_count": 832,
+      "baked_weights_sha256": "a7431251f7d3c091c450f56524bdfd4492840a932c4c9f07f7806fbe86ba4151"
+    }
+  ],
+  "shaders": [
+    {
+      "pass": 1,
+      "offset": 31412672,
+      "size": 39644,
+      "shader_sha256": "dddf3314b3a2b9835e5bb5ebe93b3a40033b91faef4befed282a249fa2c6581b",
+      "container_checksum": "8e603e5ddbeb7d884aa1fc715c395976",
+      "baked_word_count": 832,
+      "baked_weights_sha256": "780d5d7df9c4d182f3624276d26fe78d69bfb91b18146b89002172ccbe2c1029"
+    },
+    {
+      "pass": 1,
+      "offset": 34803712,
+      "size": 39644,
+      "shader_sha256": "0db54e4d4a747461ddfbf6f027ad1fffc85535f9900371789cf0cadc74578fbc",
+      "container_checksum": "bebee4e924ea459729024f928d643c67",
+      "baked_word_count": 832,
+      "baked_weights_sha256": "780d5d7df9c4d182f3624276d26fe78d69bfb91b18146b89002172ccbe2c1029"
+    },
+    {
+      "pass": 1,
+      "offset": 39702368,
+      "size": 39644,
+      "shader_sha256": "ba0ca229beed9051711efd34a6c68bb6aaf445cf502dd851fb2cf23d5e2a8f8f",
+      "container_checksum": "251ad30dccf6df60be84b77e67ba0c54",
+      "baked_word_count": 832,
+      "baked_weights_sha256": "780d5d7df9c4d182f3624276d26fe78d69bfb91b18146b89002172ccbe2c1029"
+    },
+    {
+      "pass": 5,
+      "offset": 33597136,
+      "size": 67988,
+      "shader_sha256": "a653befa477c8643bbee0c7c8a1a8bdd308ad9203e9744d7c555d5243a005a85",
+      "container_checksum": "8c2709af752d1a4012bc0900530ad14c",
+      "baked_word_count": 1600,
+      "baked_weights_sha256": "f17bc796f494dc08cf73046133a3e302decc8847e49df2e5cc54d426f883d31b"
+    },
+    {
+      "pass": 5,
+      "offset": 39392944,
+      "size": 67980,
+      "shader_sha256": "d8c9a14e5acf453d718577cddbcdbff94c47c639fd54d17143c8a02393dc6423",
+      "container_checksum": "877dd0592c0721287a347cda001d3122",
+      "baked_word_count": 1600,
+      "baked_weights_sha256": "f17bc796f494dc08cf73046133a3e302decc8847e49df2e5cc54d426f883d31b"
+    },
+    {
+      "pass": 5,
+      "offset": 44964512,
+      "size": 67980,
+      "shader_sha256": "85904857c474de12182a1a3b85ca31daa6d4dd52b62b07bc722c9e6d267b2c17",
+      "container_checksum": "376fcb866ac0ac8ba825dac1757ddf9a",
+      "baked_word_count": 1600,
+      "baked_weights_sha256": "f17bc796f494dc08cf73046133a3e302decc8847e49df2e5cc54d426f883d31b"
+    },
+    {
+      "pass": 10,
+      "offset": 34044064,
+      "size": 69428,
+      "shader_sha256": "870e593b9835e08bfcd502774bb907e1d42d00f0ca163f9b2e38f1c2b7c5bd13",
+      "container_checksum": "49934a62d6a0d507f651fbb569bd7b88",
+      "baked_word_count": 1600,
+      "baked_weights_sha256": "1c693e7de8432f35ee936fbbf689991e8ecd7739c1c3dc96ea9b6584789f2895"
+    },
+    {
+      "pass": 10,
+      "offset": 36664624,
+      "size": 69432,
+      "shader_sha256": "408bf191266db5b34097707b84f39fda7f51000d6cd93cc01a376f17206bdbdb",
+      "container_checksum": "2831a29bccaf0c3073a97af71bcd8235",
+      "baked_word_count": 1600,
+      "baked_weights_sha256": "1c693e7de8432f35ee936fbbf689991e8ecd7739c1c3dc96ea9b6584789f2895"
+    },
+    {
+      "pass": 10,
+      "offset": 43881024,
+      "size": 69440,
+      "shader_sha256": "f314316cd0212a55c44c1efa2835887fd78203830462d2d85ceae9288886e58c",
+      "container_checksum": "6068d9e6aa3c250923d914cff9166785",
+      "baked_word_count": 1600,
+      "baked_weights_sha256": "1c693e7de8432f35ee936fbbf689991e8ecd7739c1c3dc96ea9b6584789f2895"
+    },
+    {
+      "pass": 12,
+      "offset": 6586320,
+      "size": 38404,
+      "shader_sha256": "66786324b9ed21026e3c55cebe0617cdeda4840fe7e3486aca0fda6e39e5dace",
+      "container_checksum": "2847158f3a2c2a9e08700028a49263ab",
+      "baked_word_count": 832,
+      "baked_weights_sha256": "a7431251f7d3c091c450f56524bdfd4492840a932c4c9f07f7806fbe86ba4151"
+    },
+    {
+      "pass": 12,
+      "offset": 11456976,
+      "size": 38408,
+      "shader_sha256": "f416fded97736bc3bbc162ccbbad4398cfda544256dc4f5821788465cd7a7837",
+      "container_checksum": "e68f413c4328cb9233db7c3128563dec",
+      "baked_word_count": 832,
+      "baked_weights_sha256": "a7431251f7d3c091c450f56524bdfd4492840a932c4c9f07f7806fbe86ba4151"
+    },
+    {
+      "pass": 12,
+      "offset": 11616800,
+      "size": 38404,
+      "shader_sha256": "60168e93b447c536a57193a04b9fcf365ae66819a341195e74eabcb9a12d5b87",
+      "container_checksum": "6b3b5cabab4cf5bd5eece60247fcdcf9",
+      "baked_word_count": 832,
+      "baked_weights_sha256": "a7431251f7d3c091c450f56524bdfd4492840a932c4c9f07f7806fbe86ba4151"
+    }
+  ]
+}
