@@ -25,7 +25,8 @@ tools/bin/fsr4mac --backend-info
    python3 tools/crossover/crossover_fsr4.py install --panel --profile lossy
    ```
 
-   Для конкретной бутылки добавьте `--bottle "/path/to/cxbottle.conf"`.
+   Если бутылка одна, она выбирается сама. Если их несколько, добавьте
+   `--bottle "Имя бутылки"` (или путь к `cxbottle.conf`).
 3. Запустите игру и включите в настройках **DLSS**.
 4. Появится панель **FSR 4**. Выберите режим:
 

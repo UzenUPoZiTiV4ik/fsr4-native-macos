@@ -31,8 +31,9 @@ cd ~/fsr4-mac
 python3 tools/crossover/crossover_fsr4.py install --panel --bottle "Steam"
 ```
 
-Replace `Steam` with your bottle's name (as shown in CrossOver). A wrong name
-prints the list of bottles. The installer:
+Replace `Steam` with your bottle's name (as shown in CrossOver). With a single
+bottle `--bottle` can be omitted; with several the installer lists them and
+asks you to pick one. A wrong name prints the list of bottles. The installer:
 
 - builds the hook and the FSR 4 panel app;
 - copies D3DMetal.framework from CrossOver into `dist/crossover/` and patches

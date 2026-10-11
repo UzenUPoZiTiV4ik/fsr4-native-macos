@@ -167,6 +167,33 @@ class CrossoverReferenceTest(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, "available bottles: Steam"):
                     installer.resolve_bottle("Games")
 
+    def test_default_bottle_is_never_guessed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bottles = Path(directory)
+            with patch.object(installer, "BOTTLES", bottles):
+                with self.assertRaisesRegex(SystemExit, "no CrossOver bottles"):
+                    installer.default_bottle()
+                steam = bottles / "Steam" / "cxbottle.conf"
+                steam.parent.mkdir()
+                steam.write_text("[EnvironmentVariables]\n")
+                self.assertEqual(installer.default_bottle(), steam)
+                games = bottles / "Games" / "cxbottle.conf"
+                games.parent.mkdir()
+                games.write_text("[EnvironmentVariables]\n")
+                with self.assertRaisesRegex(SystemExit, "several bottles found: Games, Steam"):
+                    installer.default_bottle()
+                # restore picks the single bottle that carries our keys
+                with self.assertRaisesRegex(SystemExit, "nothing to restore"):
+                    installer.default_bottle(for_restore=True)
+                steam.write_text(f'[EnvironmentVariables]\n{installer.MARKER}\n"{installer.KEY}" = "/x"\n')
+                self.assertEqual(installer.default_bottle(for_restore=True), steam)
+
+    def test_installer_has_no_personal_defaults(self):
+        source = (Path(__file__).resolve().parents[1] / "tools/crossover/crossover_fsr4.py").read_text()
+        self.assertNotRegex(source, "[\u0400-\u04ff]")
+        self.assertNotIn("/Users/", source)
+        self.assertNotIn("version-min=14", source)
+
     def test_restore_keeps_metalfx_switch(self):
         with tempfile.TemporaryDirectory() as directory:
             conf = Path(directory) / "Steam" / "cxbottle.conf"
