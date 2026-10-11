@@ -7,8 +7,9 @@ the MetalFX upscaler that D3DMetal uses for DLSS. Русская инструк�
 
 ## Requirements
 
-- Apple Silicon Mac, macOS 26 or newer. Tested on M5; earlier Apple GPUs
-  use a slower portable path that has not been benchmarked yet.
+- Apple Silicon Mac, macOS 26 or newer. Tested on M5; M1–M4 use a
+  half-matrix (`simd`) path with identical output, not benchmarked on
+  those chips yet.
 - CrossOver 24+ (CrossOver.app or CrossOver Preview.app in /Applications)
   with a bottle where the game runs with D3DMetal and DLSS enabled.
 - Xcode 26+ with the Metal Toolchain, and Python 3 (ships with Xcode).

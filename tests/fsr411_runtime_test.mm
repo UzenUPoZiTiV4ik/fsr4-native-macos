@@ -81,8 +81,8 @@ static bool run_frame(fsr411::Runtime &runtime,fsr411::View &view,fsr411::Frame 
 static constexpr double kRelaxedMeanTolerance=1e-2;
 
 int main(int argc,char **argv) { @autoreleasepool {
-    if(argc<2) { std::fprintf(stderr,"usage: fsr411_runtime_test <repository> [--compile] [--optimize] [--lossy] [--scalar] [--ultra] [--tier N] [--colorspace N] [--inverted] [--high-mv] [--jittered] [--auto-exposure] [--rcas] [--odd] [--size RW RH UW UH] [--capture-pre] [--strict-math] [--relaxed-tolerance]\n"); return 2; }
-    const std::string root=argv[1]; bool smoke=false,compile=false,optimize=false,nativeSmoke=false,lossy=false,fast=false,scalar=false,ultra=false,capture=false;
+    if(argc<2) { std::fprintf(stderr,"usage: fsr411_runtime_test <repository> [--compile] [--optimize] [--lossy] [--scalar|--simd] [--ultra] [--tier N] [--colorspace N] [--inverted] [--high-mv] [--jittered] [--auto-exposure] [--rcas] [--odd] [--size RW RH UW UH] [--capture-pre] [--strict-math] [--relaxed-tolerance]\n"); return 2; }
+    const std::string root=argv[1]; bool smoke=false,compile=false,optimize=false,nativeSmoke=false,lossy=false,fast=false,scalar=false,simd=false,ultra=false,capture=false;
     bool highMotion=false,inverted=false,jittered=false,autoExposure=false,rcas=false,capturePre=false;
     // --strict-math: Exact Fast/Lossy with ordered PRE/POST, compared bit for bit.
     // --relaxed-tolerance: the production relaxed build against that strict reference.
@@ -92,6 +92,7 @@ int main(int argc,char **argv) { @autoreleasepool {
         if(!std::strcmp(argv[i],"--native-smoke"))smoke=nativeSmoke=true;
         if(!std::strcmp(argv[i],"--lossy"))lossy=true;if(!std::strcmp(argv[i],"--fast"))fast=true;if(!std::strcmp(argv[i],"--scalar"))scalar=true;if(!std::strcmp(argv[i],"--ultra"))ultra=true;
         if(!std::strcmp(argv[i],"--capture"))capture=true;
+        if(!std::strcmp(argv[i],"--simd"))simd=true;
         if(!std::strcmp(argv[i],"--strict-math"))strictMath=true;
         if(!std::strcmp(argv[i],"--relaxed-tolerance"))relaxedTolerance=true;
         if(!std::strcmp(argv[i],"--capture-pre"))capturePre=true;
@@ -123,8 +124,9 @@ int main(int argc,char **argv) { @autoreleasepool {
         o.optimize=nativeSmoke?int(optimize):0;o.strictMath=strictMath||relaxedTolerance;
         if(!run_frame(runtime,reference,a,o,queue,i)) return 1;
         if(smoke) break;
-        o.backend=scalar?fsr411::Backend::Scalar:fsr411::Backend::Native;o.optimize=optimize;o.strictMath=strictMath;
+        o.backend=simd?fsr411::Backend::Simd:scalar?fsr411::Backend::Scalar:fsr411::Backend::Native;o.optimize=optimize;o.strictMath=strictMath;
         if(!run_frame(runtime,native,b,o,queue,i)) return 1;
+        if(simd && native.backendLabel!="int8-simd") {std::fprintf(stderr,"expected int8-simd, ran %s\n",native.backendLabel.c_str());return 1;}
         if(!run_frame(runtime,cropped,c,o,queue,i)) return 1;
         const auto ar=read_output(a),br=read_output(b),cr=read_output(c);
         size_t differences=0,cropDifferences=0,nonFinite=0; float maxDifference=0; double sumDifference=0;

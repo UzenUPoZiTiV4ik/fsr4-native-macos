@@ -9,7 +9,9 @@ inline DeviceCaps device_caps(id<MTLDevice> dev) {
     if (!dev) return caps;
     // Feature families cover base/Pro/Max/Ultra without parsing model names.
     // Use enum values so an SDK need not name the newest family to query it.
-    for (int family = 11; family >= 7; --family) {
+    // Probe a few families past the newest known (M6 and later) so diagnostics
+    // report the real generation; selection only needs family >= 10.
+    for (int family = 15; family >= 7; --family) {
         if ([dev supportsFamily:static_cast<MTLGPUFamily>(1000 + family)]) {
             caps.appleFamily = family;
             break;

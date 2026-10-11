@@ -297,9 +297,9 @@ def build_reference(env):
     model = env.get("FSR4_MODEL", "auto")
     if version == "4.1.1":
         aliases = {"auto": "auto", "reference": "reference", "int8": "reference", "scalar": "scalar",
-                   "native": "i8mpp", "i8mpp": "i8mpp"}
+                   "simd": "simd", "fp16": "simd", "f16": "simd", "native": "i8mpp", "i8mpp": "i8mpp"}
         if model not in aliases:
-            raise SystemExit("FSR 4.1.1 requires FSR4_MODEL=auto, reference, scalar, or i8mpp; no FP16 model")
+            raise SystemExit("FSR 4.1.1 requires FSR4_MODEL=auto, reference, scalar, simd, or i8mpp")
         model = aliases[model]
         version_options = ["--fsr-version", version]
         profile = env.get(PROFILE_KEY, "lossy")
@@ -327,7 +327,7 @@ def build_reference(env):
              *version_options, "--profile", profile, "--" + model], cwd=ROOT, env=env)
         report = json.loads((refdir / "run.json").read_text())
         if (report.get("fsr_version") != version or report.get("profile") != profile
-                or report.get("backend") not in ("int8-mpp", "int8-reference", "int8-scalar")):
+                or report.get("backend") not in ("int8-mpp", "int8-simd", "int8-reference", "int8-scalar")):
             raise SystemExit("reference did not run the requested FSR 4.1.1 model/profile")
         print(f"reference verified: FSR {version} {profile} {report['backend']}")
     else:

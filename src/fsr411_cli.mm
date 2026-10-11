@@ -220,8 +220,9 @@ fsr411::Backend backend(const std::string &name) {
     if (name == "auto") return fsr411::Backend::Auto;
     if (name == "reference" || name == "int8") return fsr411::Backend::Reference;
     if (name == "scalar") return fsr411::Backend::Scalar;
+    if (name == "simd" || name == "fp16" || name == "f16") return fsr411::Backend::Simd;
     if (name == "native" || name == "i8mpp") return fsr411::Backend::Native;
-    fail("FSR 4.1.1 backend must be auto, reference, scalar, or i8mpp (no FP16 4.1.1 model)");
+    fail("FSR 4.1.1 backend must be auto, reference, scalar, simd, or i8mpp");
 }
 
 bool capture_stage(const std::string &name) {
@@ -240,10 +241,15 @@ void print_backend_info(id<MTLDevice> device, fsr411::Backend requested, const s
             && device.maxThreadsPerThreadgroup.width >= 128;
     if (requested == fsr411::Backend::Native && !native)
         fail("native FSR 4.1.1 requires Apple GPU family 10 and macOS 26");
+    const bool simdFamily = [device supportsFamily:MTLGPUFamilyApple7];
+    if (requested == fsr411::Backend::Simd && !simdFamily)
+        fail("simd FSR 4.1.1 requires Apple GPU family 7 (M1) or newer");
     const bool selected = native && (requested == fsr411::Backend::Auto || requested == fsr411::Backend::Native);
-    NSString *selectedBackend = selected ? @"int8-mpp"
+    const bool simd = !selected && (requested == fsr411::Backend::Simd || (requested == fsr411::Backend::Auto && simdFamily));
+    NSString *selectedBackend = selected ? @"int8-mpp" : simd ? @"int8-simd"
         : requested == fsr411::Backend::Reference ? @"int8-reference" : @"int8-scalar";
     NSString *reason = selected ? @"native INT8 tensor operations available; pipelines validated at encode"
+        : simd ? @"Apple7+ simdgroup half matrices, exact float accumulation; layout probed at encode (scalar fallback)"
         : requested == fsr411::Backend::Reference ? @"generic integer Metal implementation of the FSR 4.1.1 model"
         : @"portable scalar integer Metal implementation of the FSR 4.1.1 model";
     NSDictionary *info = @{@"fsr_version": @"4.1.1", @"device": device.name,
@@ -340,10 +346,11 @@ void write_preview(const std::string &path, const std::vector<uint8_t> &raw,
 void usage() {
     std::fprintf(stderr,
         "usage: fsr4mac --fsr-version 4.1.1 <testcase_dir> <out_dir>\n"
-        "       [--auto|--reference|--scalar|--i8mpp] [--profile exact|exact-fast|lossy] [--dump-passes|--dump-state]\n"
+        "       [--auto|--reference|--scalar|--simd|--i8mpp] [--profile exact|exact-fast|lossy] [--dump-passes|--dump-state]\n"
         "       [--capture-stages pre,pass1,...,post] [--bench N] [--profile-stages]\n"
         "       [--builddir dir] [--root dir] [--tier 1080|2160|4320] [--optimize 0|1] [--no-compile]\n"
-        "       fsr4mac --fsr-version 4.1.1 --backend-info [auto|reference|scalar|i8mpp]\n"
+        "       fsr4mac --fsr-version 4.1.1 --backend-info [auto|reference|scalar|simd|i8mpp]\n"
+        "--simd (alias --fp16): M1-M4 simdgroup half matrices; INT8 model, output identical to --scalar.\n"
         "--bench runs one warmup sequence and N measured sequences; only run.json is written.\n"
         "--profile-stages adds diagnostic GPU counters; on Apple GPUs it separates compute encoders.\n"
         "Use an ordinary --bench run for fused production timing; stage counters add overhead.\n"
@@ -377,8 +384,9 @@ int fsr411_main(int argc, char **argv) {
             else if(arg=="--reference" || arg=="--int8") options.backend=fsr411::Backend::Reference;
             else if(arg=="--scalar") options.backend=fsr411::Backend::Scalar;
             else if(arg=="--i8mpp" || arg=="--native") options.backend=fsr411::Backend::Native;
-            else if(arg=="--fp16" || arg=="--mpp" || arg=="--cnb")
-                fail("FSR 4.1.1 has no FP16 backend; select --reference, --scalar, or --i8mpp");
+            else if(arg=="--simd" || arg=="--fp16") options.backend=fsr411::Backend::Simd;
+            else if(arg=="--mpp" || arg=="--cnb")
+                fail("--mpp/--cnb are FSR 4.0.2 options; select --reference, --scalar, --simd, or --i8mpp");
             else if(arg=="--builddir") buildDir=value();
             else if(arg=="--root") root=value();
             else if(arg=="--profile") profile=value();

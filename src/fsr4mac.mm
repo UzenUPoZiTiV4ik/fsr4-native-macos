@@ -391,9 +391,11 @@ static void print_caps() {
         const auto choice = fsr4::choose_backend(caps);
         printf("automatic backend: %s (%s)\n", fsr4::backend_name(choice.backend), choice.reason);
         printf("GPU tensor acceleration: %s\n", caps.appleFamily >= 10 ? "yes" : "no (FP16 preferred)");
-        for (int f = MTLGPUFamilyApple7; f <= MTLGPUFamilyApple10; f++)
-            printf("gpuFamilyApple%d: %d\n", (int)(f - MTLGPUFamilyApple7 + 7),
-                   (int)[dev supportsFamily:(MTLGPUFamily)f]);
+        // Raw enum values so families newer than the SDK (M6+) are still listed.
+        printf("appleFamily: %d\n", caps.appleFamily);
+        for (int f = 7; f <= 15; f++)
+            printf("gpuFamilyApple%d: %d\n", f,
+                   (int)[dev supportsFamily:static_cast<MTLGPUFamily>(1000 + f)]);
         // Metal 4 tensor ops (mpp::tensor_ops / MTLTensor) need macOS 26+ and
         // hardware support; the paravirtual GPU does not expose them.
         printf("MTLTensorDescriptor class: %s\n",

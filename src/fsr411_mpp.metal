@@ -25,43 +25,8 @@ using namespace mpp::tensor_ops;
 #define FSR411_VECTOR_QUANTIZE 1
 #endif
 
-// Standalone native tests and older callers can keep the generic ABI. The
-// runtime enables specialization and supplies these values per logical pass.
-#ifndef FSR411_SPECIALIZE
-#define FSR411_SPECIALIZE 0
-#endif
-#if FSR411_SPECIALIZE
-#define FSR411_PARAMS_ADDRESS thread const
-#define FSR411_LOCAL_PARAMS const fsr411::PassParams p = fsr411_specialize(raw)
-constant uint4 fsr411Spec0 [[function_constant(0)]];
-constant uint4 fsr411Spec1 [[function_constant(1)]];
-constant uint4 fsr411Spec2 [[function_constant(2)]];
-constant uint4 fsr411Spec3 [[function_constant(3)]];
-constant uint4 fsr411Spec4 [[function_constant(4)]];
-constant uint4 fsr411Spec5 [[function_constant(5)]];
-constant uint4 fsr411Spec6 [[function_constant(6)]];
-constant uint4 fsr411Spec7 [[function_constant(7)]];
-constant uint4 fsr411Spec8 [[function_constant(8)]];
-constant uint4 fsr411Spec9 [[function_constant(9)]];
-constant uint4 fsr411Spec10 [[function_constant(10)]];
-constant uint4 fsr411Spec11 [[function_constant(11)]];
-
-__attribute__((always_inline)) inline fsr411::PassParams fsr411_specialize(constant fsr411::PassParams &r) {
-    // Widths/heights and the session-appended POST output stay dynamic.
-    return {
-        {fsr411Spec0.x,fsr411Spec0.y,fsr411Spec0.z,r.input.width,r.input.height,fsr411Spec0.w,fsr411Spec1.x},
-        {fsr411Spec3.w ? r.output.offset : fsr411Spec1.y,fsr411Spec1.z,fsr411Spec1.w,r.output.width,r.output.height,fsr411Spec2.x,fsr411Spec2.y},
-        {fsr411Spec2.z,fsr411Spec2.w,fsr411Spec3.x,r.skip.width,r.skip.height,fsr411Spec3.y,fsr411Spec3.z},
-        {fsr411Spec4.x,fsr411Spec4.y,fsr411Spec4.z,fsr411Spec4.w},
-        {fsr411Spec5.x,fsr411Spec5.y,fsr411Spec5.z,fsr411Spec5.w},
-        {{fsr411Spec6.x,fsr411Spec6.y,fsr411Spec6.z,fsr411Spec6.w},{fsr411Spec7.x,fsr411Spec7.y,fsr411Spec7.z,fsr411Spec7.w},{fsr411Spec8.x,fsr411Spec8.y,fsr411Spec8.z,fsr411Spec8.w},{fsr411Spec9.x,fsr411Spec9.y,fsr411Spec9.z,fsr411Spec9.w},{fsr411Spec10.x,fsr411Spec10.y,fsr411Spec10.z,fsr411Spec10.w},{fsr411Spec11.x,fsr411Spec11.y,fsr411Spec11.z,fsr411Spec11.w}}
-    };
-}
-
-#else
-#define FSR411_PARAMS_ADDRESS constant
-#define FSR411_LOCAL_PARAMS constant fsr411::PassParams &p = raw
-#endif
+// FSR411_SPECIALIZE, FSR411_PARAMS_ADDRESS and FSR411_LOCAL_PARAMS come from
+// fsr411_model.h.
 
 namespace fsr411_gpu {
 

@@ -47,6 +47,7 @@ test-fsr411-gpu:
 	$(MAKE) test-fsr411-native
 	$(MAKE) test-fsr411-runtime
 	$(MAKE) test-fsr411-scalar
+	$(MAKE) test-fsr411-simd
 	$(MAKE) test-fsr411-lossy
 	$(MAKE) test-fsr411-autoexposure
 	$(MAKE) test-fsr411-cadence
@@ -108,7 +109,17 @@ build/tests/fsr411_reference.metallib: src/fsr411_reference.metal src/fsr411_mod
 	xcrun metal -std=metal3.0 -O2 -I src -c $< -o build/tests/fsr411_reference.air
 	xcrun metallib build/tests/fsr411_reference.air -o $@
 
-test-fsr411-native: build/tests/fsr411_native_test build/tests/fsr411_mpp.metallib build/tests/fsr411_mpp_specialized.metallib build/tests/fsr411_mpp_fallback.metallib build/tests/fsr411_reference.metallib
+build/tests/fsr411_simd.metallib: src/fsr411_simd.metal src/fsr411_model.h Makefile
+	mkdir -p build/tests
+	xcrun metal -std=metal3.0 -O2 -I src -c $< -o build/tests/fsr411_simd.air
+	xcrun metallib build/tests/fsr411_simd.air -o $@
+
+build/tests/fsr411_simd_specialized.metallib: src/fsr411_simd.metal src/fsr411_model.h Makefile
+	mkdir -p build/tests
+	xcrun metal -std=metal3.0 -O2 -DFSR411_SPECIALIZE=1 -I src -c $< -o build/tests/fsr411_simd_specialized.air
+	xcrun metallib build/tests/fsr411_simd_specialized.air -o $@
+
+test-fsr411-native: build/tests/fsr411_native_test build/tests/fsr411_mpp.metallib build/tests/fsr411_mpp_specialized.metallib build/tests/fsr411_mpp_fallback.metallib build/tests/fsr411_reference.metallib build/tests/fsr411_simd.metallib build/tests/fsr411_simd_specialized.metallib
 	@set -e; \
 	for fsr411_profile in exact lossy; do \
 	  for fsr411_preset in normal ultraperformance; do \
@@ -117,6 +128,8 @@ test-fsr411-native: build/tests/fsr411_native_test build/tests/fsr411_mpp.metall
 	    build/tests/fsr411_native_test build/tests/fsr411_mpp_specialized.metallib build/tests/fsr411_native --specialized; \
 	    build/tests/fsr411_native_test build/tests/fsr411_mpp_fallback.metallib build/tests/fsr411_native --specialized; \
 	    build/tests/fsr411_native_test build/tests/fsr411_reference.metallib build/tests/fsr411_native --reference; \
+	    build/tests/fsr411_native_test build/tests/fsr411_simd.metallib build/tests/fsr411_native --simd; \
+	    build/tests/fsr411_native_test build/tests/fsr411_simd_specialized.metallib build/tests/fsr411_native --simd-specialized; \
 	  done; \
 	done
 
@@ -125,9 +138,22 @@ test-fsr411-runtime: build/tests/fsr411_runtime_test
 
 test-fsr411-scalar: build/tests/fsr411_runtime_test
 	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --scalar
-	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --scalar --lossy
+	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --scalar --lossy --strict-math
 	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --scalar --ultra
-	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --scalar --ultra --lossy
+	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --scalar --ultra --lossy --strict-math
+
+# Apple7+ simdgroup kernels: same exact parity as scalar, plus odd sizes,
+# a multi-tile frame and the 2160 tier. Lossy compares against ordered
+# PRE/POST math (--strict-math), like the scalar and runtime suites.
+test-fsr411-simd: build/tests/fsr411_runtime_test
+	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --simd
+	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --simd --lossy --strict-math
+	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --simd --ultra
+	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --simd --ultra --lossy --strict-math
+	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --simd --odd --high-mv --jittered --inverted
+	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --simd --lossy --strict-math --size 301 173 603 347
+	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --simd --tier 2160 --lossy --strict-math --odd
+	build/tests/fsr411_runtime_test "$(CURDIR)" --compile --optimize --simd --fast --relaxed-tolerance
 
 test-fsr411-lossy:
 	python3 tests/run_fsr411_lossy.py

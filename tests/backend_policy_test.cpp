@@ -6,7 +6,7 @@ int main() {
     using fsr4::Backend;
     // Pro/Max/Ultra share their generation's feature family. Names, CPU
     // architecture and GPU core counts must not affect backend selection.
-    const int families[] = {0, 7, 8, 9, 10, 11}; // unknown, M1, M2, M3/M4, M5, later
+    const int families[] = {0, 7, 8, 9, 10, 11, 12, 15}; // unknown, M1, M2, M3/M4, M5, M6, later
     const bool runtimes[] = {false, true};
     int checks = 0;
     for (int family : families) {

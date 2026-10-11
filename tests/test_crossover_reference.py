@@ -71,9 +71,34 @@ class CrossoverReferenceTest(unittest.TestCase):
                 self.assertEqual(query.call_args.args[0][-4:],
                                  ["--fsr-version", "4.1.1", "--backend-info", "reference"])
 
-    def test_411_rejects_old_fp16_model(self):
-        with self.assertRaisesRegex(SystemExit, "no FP16 model"), patch.object(installer, "run") as run:
-            installer.build_reference({"FSR4_VERSION": "4.1.1", "FSR4_MODEL": "f16"})
+    def test_411_fp16_alias_selects_simd_backend(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            testcase = root / "testcases/testcase_quality_720to1080"
+            testcase.mkdir(parents=True)
+            (testcase / "meta.json").write_text("{}")
+            info = {"device": "Apple M1", "backend": "int8-simd", "reason": "simdgroup half matrices"}
+
+            def run(command, **kwargs):
+                if command[0] == str(root / "tools/bin/fsr4mac"):
+                    self.assertEqual(command[-3:], ["--profile", "lossy", "--simd"])
+                    destination = Path(command[2])
+                    destination.mkdir(parents=True)
+                    (destination / "f00_out.bin").write_bytes(b"simd frame")
+                    (destination / "run.json").write_text(json.dumps(
+                        {"fsr_version": "4.1.1", "profile": "lossy", "backend": "int8-simd"}))
+
+            with patch.object(installer, "ROOT", root), \
+                 patch.object(installer, "DIST", root / "dist/crossover"), \
+                 patch.object(installer, "run", side_effect=run), \
+                 patch.object(installer.subprocess, "check_output", return_value=json.dumps(info)) as query:
+                reference = installer.build_reference({"FSR4_VERSION": "4.1.1", "FSR4_MODEL": "f16"})
+                self.assertEqual(reference.read_bytes(), b"simd frame")
+                self.assertEqual(query.call_args.args[0][-1], "simd")
+
+    def test_411_rejects_unknown_model(self):
+        with self.assertRaisesRegex(SystemExit, "FSR4_MODEL"), patch.object(installer, "run") as run:
+            installer.build_reference({"FSR4_VERSION": "4.1.1", "FSR4_MODEL": "half"})
         run.assert_not_called()
 
     def test_411_scalar_reference_preserves_exact_profile(self):

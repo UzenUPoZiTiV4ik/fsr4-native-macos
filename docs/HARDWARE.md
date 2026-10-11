@@ -1,27 +1,42 @@
 # Apple Silicon backends
 
 FSR **4.1.1 + Lossy** is the current default. Profile selection (Exact/Lossy)
-is independent of backend selection. Both accelerated and scalar backends
-execute the actual INT8 model, including its separate Ultra Performance
-initializer.
+is independent of backend selection. All backends execute the actual INT8
+model, including its separate Ultra Performance initializer.
 
 | GPU family | Automatic FSR 4.1.1 backend |
 | --- | --- |
-| M1 / family 7 | Scalar INT8 Metal compute. |
-| M2 / family 8 | Scalar INT8 Metal compute. |
-| M3–M4 / family 9 | Scalar INT8 Metal compute. |
-| M5 / family 10+, macOS 26+ | Native INT8 tensor operations. |
+| M1 / family 7 | `simd`: simdgroup half matrices, exact INT8 result. |
+| M2 / family 8 | `simd` |
+| M3–M4 / family 9 | `simd` |
+| M5 / family 10+, macOS 26+ | Native INT8 tensor operations (`i8mpp`). |
+| Non-Apple7 GPU | Scalar INT8 Metal compute. |
 
 Selection uses Metal feature families and device limits. Rosetta does not
 change GPU capabilities. Native kernels use 128 threads and 20 KiB of
-threadgroup memory. Scalar kernels use Metal 3 and do not require the M5
-tensor instructions. This project builds for macOS 26+ with Xcode 26+ and
+threadgroup memory. This project builds for macOS 26+ with Xcode 26+ and
 the Metal Toolchain.
 
-Physical validation is on Apple M5, including scalar kernels and both
-classic Metal and Metal 4 live encoding under Rosetta. M1–M4 driver behavior
-and performance remain unmeasured. Scalar support should not be interpreted
-as a real-time performance claim on those GPUs.
+The `simd` backend (`--simd`, alias `--fp16`; `FSR4_MODEL=simd`) runs the
+INT8 convolutions as 8×8 `simdgroup_half8x8` products. INT8 activations and
+weights are exact in half, each 8×8 product is exact, and accumulation is in
+float: every model accumulator stays below 2^24 (max 474,880), so the sum is
+exact and the integer epilogue is unchanged. Output is byte-identical to
+`--scalar` (runtime parity suite `make test-fsr411-simd`, native block
+tests, CLI frames). Half weights are a widened copy of the INT8 blob; the
+simdgroup lane layout is probed once per device, with scalar fallback if
+it differs.
+
+Measured on Apple M5, `tc_game_balanced`, `--bench 5`, mean GPU frame:
+
+| Profile | scalar | simd | i8mpp |
+| --- | ---: | ---: | ---: |
+| Lossy | 71.7 ms | 6.13 ms | 3.12 ms |
+| Exact Fast | 140.4 ms | 10.3 ms | — |
+
+Physical validation is on Apple M5 only, including classic Metal and Metal 4
+live encoding under Rosetta. M1–M4 timings are not measured; those GPUs have
+lower half-matrix throughput than M5, so expect proportionally slower frames.
 
 ```sh
 make -B
