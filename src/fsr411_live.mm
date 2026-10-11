@@ -66,7 +66,8 @@ bool options_for(const Fsr4LiveFrameV2 &f,fsr411::Frame &frame,fsr411::Options &
         else if(!std::strcmp(model,"reference") || !std::strcmp(model,"int8")) o.backend=fsr411::Backend::Reference;
         else if(!std::strcmp(model,"native") || !std::strcmp(model,"i8mpp")) o.backend=fsr411::Backend::Native;
         else if(!std::strcmp(model,"scalar")) o.backend=fsr411::Backend::Scalar;
-        else {error="FSR 4.1.1 model must be auto, reference/int8, scalar or native/i8mpp";return false;}
+        else if(!std::strcmp(model,"simd") || !std::strcmp(model,"fp16") || !std::strcmp(model,"f16")) o.backend=fsr411::Backend::Simd;
+        else {error="FSR 4.1.1 model must be auto, reference/int8, scalar, simd/fp16 or native/i8mpp";return false;}
     }
     const std::string p=preset(f);
     o.ultraPerformance=p=="ultraperf" || p=="ultraperformance" || p=="ultra_performance";
@@ -186,7 +187,8 @@ extern "C" int fsr411_encode_live_frame(const Fsr4LiveFrameV2 *input) {
         status.active=1; status.reason[0]=0; ++status.encodes; ++status.replaced;
         status.rw=f.rw;status.rh=f.rh;status.uw=f.uw;status.uh=f.uh;
         status.uwA=owner->prepared.alignedUW;status.uhA=owner->prepared.alignedUH;status.sharpness=options.rcas?options.sharpness:0;
-        std::snprintf(status.model,sizeof(status.model),"%s",owner->backendLabel=="int8-mpp"?"i8mpp":owner->backendLabel=="int8-scalar"?"scalar":"i8-ref");
+        std::snprintf(status.model,sizeof(status.model),"%s",owner->backendLabel=="int8-mpp"?"i8mpp":owner->backendLabel=="int8-simd"?"simd"
+            :owner->backendLabel=="int8-scalar"?"scalar":"i8-ref");
         std::snprintf(status.preset,sizeof(status.preset),"%s",preset(*input));
         std::snprintf(status.variant,sizeof(status.variant),"%s",owner->variantKey.c_str());
         fsr4_live_set_status(&status);

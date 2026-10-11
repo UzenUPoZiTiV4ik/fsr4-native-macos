@@ -69,7 +69,7 @@ python3 tools/crossover/crossover_fsr4.py restore --bottle "/path/to/cxbottle.co
 | --- | --- |
 | `FSR4_PROFILE` | `lossy` (по умолчанию), `exact-fast`, `exact`, `fsr4` |
 | `FSR4_VERSION` | `4.1.1` (по умолчанию) или `4.0.2` |
-| `FSR4_MODEL` | `auto`, `i8mpp`, `scalar`, `reference` |
+| `FSR4_MODEL` | `auto`, `i8mpp`, `simd` (M1–M4, по умолчанию там), `scalar`, `reference` |
 | `FSR4_SHARPNESS`, `FSR4_RCAS` | Резкость (по умолчанию RCAS 0.4) |
 | `FSR4_OPTIMIZE` | `1` по умолчанию, `0` отключает оптимизации |
 | `FSR4_COMPILE` | `0` запрещает компиляцию недостающих шейдеров |

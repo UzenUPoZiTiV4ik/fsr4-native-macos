@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-// Usage: fsr411_native_test <metallib> <native-dir> [--reference|--specialized]
+// Usage: fsr411_native_test <metallib> <native-dir> [--reference|--specialized|--simd|--simd-specialized]
 // Correctness only: tiny odd-sized inputs, all bytes including padding checked.
+// --simd runs the Apple7+ simdgroup kernels with the half weight copy at index 3.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include "../src/fsr411_model.h"
@@ -131,13 +132,16 @@ static void reference_fnb(std::vector<unsigned char> &scratch,
 }
 
 int main(int argc, char **argv) {
-    const bool reference = argc == 4 && !std::strcmp(argv[3], "--reference");
-    const bool specialized = argc == 4 && !std::strcmp(argv[3], "--specialized");
-    if (argc != 3 && !reference && !specialized) { std::fprintf(stderr, "Usage: %s <metallib> <native-dir> [--reference|--specialized]\n", argv[0]); return 2; }
+    const char *mode = argc == 4 ? argv[3] : "";
+    const bool reference = !std::strcmp(mode, "--reference");
+    const bool simd = !std::strcmp(mode, "--simd") || !std::strcmp(mode, "--simd-specialized");
+    const bool specialized = !std::strcmp(mode, "--specialized") || !std::strcmp(mode, "--simd-specialized");
+    if (argc != 3 && !reference && !specialized && !simd) { std::fprintf(stderr, "Usage: %s <metallib> <native-dir> [--reference|--specialized|--simd|--simd-specialized]\n", argv[0]); return 2; }
     @autoreleasepool {
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-        if (!device || (!reference && ![device supportsFamily:MTLGPUFamilyApple10])) {
-            std::fprintf(stderr, "The native backend requires Apple10; --reference runs on earlier Metal GPUs\n");
+        if (!device || (!reference && !simd && ![device supportsFamily:MTLGPUFamilyApple10])
+            || (simd && ![device supportsFamily:MTLGPUFamilyApple7])) {
+            std::fprintf(stderr, "The native backend requires Apple10 and --simd Apple7; --reference runs on earlier Metal GPUs\n");
             return 2;
         }
         NSError *error = nil;
@@ -150,13 +154,17 @@ int main(int argc, char **argv) {
         NSDictionary *manifest = [NSJSONSerialization JSONObjectWithData:json options:0 error:&error];
         if (!manifest || [manifest[@"parameter_size"] unsignedIntValue] != sizeof(fsr411::PassParams)) return 1;
         id<MTLBuffer> weights = [device newBufferWithBytes:weight_bytes.data() length:weight_bytes.size() options:MTLResourceStorageModeShared];
+        std::vector<__fp16> half_bytes(weight_bytes.size());
+        for (size_t i = 0; i < weight_bytes.size(); ++i) half_bytes[i] = __fp16(signed_byte(weight_bytes[i]));
+        id<MTLBuffer> half_weights = [device newBufferWithBytes:half_bytes.data() length:half_bytes.size() * 2 options:MTLResourceStorageModeShared];
         id<MTLCommandQueue> queue = [device newCommandQueue];
         const unsigned cases[][3] = {{1, 1, 0}, {3, 5, 3}, {33, 7, 128}, {65, 5, 128}};
         unsigned tests = 0;
         for (NSString *pass in @[@"1", @"2", @"3", @"4", @"5", @"6", @"7", @"8", @"9", @"10", @"11", @"12", @"post_cnb"]) {
             NSDictionary *entry = [pass isEqual:@"post_cnb"] ? manifest[@"auxiliary_passes"][pass] : manifest[@"passes"][pass];
             if (!entry) continue;
-            NSDictionary *schedule = reference ? entry[@"reference"] : entry;
+            NSDictionary *schedule = reference ? entry[@"reference"] : simd ? entry[@"simd"] : entry;
+            if (!schedule) { std::fprintf(stderr, "pass %s: manifest has no schedule for %s\n", pass.UTF8String, mode); return 1; }
             const unsigned offset = [entry[@"parameter_offset"] unsignedIntValue];
             fsr411::PassParams original;
             std::memcpy(&original, parameter_bytes.data() + offset, sizeof(original));
@@ -216,6 +224,7 @@ int main(int argc, char **argv) {
                 [encoder setComputePipelineState:pipeline];
                 [encoder setBuffer:scratch offset:0 atIndex:0];
                 [encoder setBuffer:weights offset:0 atIndex:1];
+                if (simd) [encoder setBuffer:half_weights offset:0 atIndex:3];
                 [encoder setBytes:&p length:sizeof(p) atIndex:2];
                 const unsigned tw = [schedule[@"tile"][0] unsignedIntValue], th = [schedule[@"tile"][1] unsignedIntValue];
                 const unsigned gridw = ct ? p.input.width : p.output.width, gridh = ct ? p.input.height : p.output.height;

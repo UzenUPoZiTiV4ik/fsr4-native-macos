@@ -39,7 +39,10 @@ def main():
     assert info["selection_only"] is True
     legacy = json.loads(cli("--fsr-version", "4.0.2", "--backend-info").stdout)
     assert legacy["backend"] in ("f16", "i8mpp")
-    assert "no FP16 backend" in cli("--fp16", success=False).stderr
+    # --fp16 now selects the Apple7+ simdgroup backend of the same INT8 model.
+    simd = json.loads(cli("--backend-info", "fp16").stdout)
+    assert simd["backend"] == "int8-simd", simd
+    assert "backend must be" in cli("--backend-info", "half", success=False).stderr
 
     with tempfile.TemporaryDirectory(prefix="fsr411-cli-") as folder:
         base = Path(folder)

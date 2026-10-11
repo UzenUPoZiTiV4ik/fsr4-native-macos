@@ -19,7 +19,14 @@
 
 namespace fsr411 {
 
-enum class Backend { Auto, Reference, Native, Scalar };
+// Simd: Apple7+ (M1–M4) simdgroup half matrices with exact float accumulation;
+// byte-identical to Scalar. Auto: Native on Apple10, else Simd, else Scalar.
+enum class Backend { Auto, Reference, Native, Scalar, Simd };
+// Integer network implementation chosen for one session.
+enum class Kernels { Reference, Scalar, Simd, Mpp };
+inline const char *kernels_label(Kernels k) {
+    return k==Kernels::Mpp?"int8-mpp":k==Kernels::Simd?"int8-simd":k==Kernels::Scalar?"int8-scalar":"int8-reference";
+}
 // Exact: original coefficients, IEEE PRE/POST math, inference every frame.
 // ExactFast: Exact's network with reciprocal division and fast exp/log in
 // PRE/POST. Lossy: folded coefficients, half-up rounding and inference reuse.
@@ -156,7 +163,8 @@ struct Session {
     size_t scratchBytes = 0;
     bool ultraPerformance = false, externalPostCnb = false;
     Profile profile = Profile::Exact;
-    id<MTLBuffer> initializer = nil, nativeWeights = nil;
+    // halfWeights: Simd only, nativeWeights widened element-wise to half.
+    id<MTLBuffer> initializer = nil, nativeWeights = nil, halfWeights = nil;
     std::map<std::string, Kernel> kernels;
     std::map<int, NativePass> native;
     std::vector<std::string> order;
@@ -248,12 +256,22 @@ public:
         if ((tier != 1080 && tier != 2160 && tier != 4320) || !required_tier(p.alignedUW, p.alignedUH)
             || p.alignedUW > uint32_t(tier * 16 / 9) || p.alignedUH > uint32_t(tier))
             return fail("output content exceeds FSR 4.1.1 tensor tier");
-        bool native = (options.backend==Backend::Auto || options.backend==Backend::Native) && native_capable();
-        bool scalar = options.backend==Backend::Scalar || (options.backend==Backend::Auto && !native);
+        const bool native = (options.backend==Backend::Auto || options.backend==Backend::Native) && native_capable();
         if (options.backend == Backend::Native && !native) return fail("native FSR 4.1.1 requires Apple GPU family 10 and macOS 26");
+        if (options.backend == Backend::Simd && !simd_family()) return fail("simd FSR 4.1.1 requires Apple GPU family 7 (M1) or newer");
+        Kernels kind = native ? Kernels::Mpp : options.backend==Backend::Reference ? Kernels::Reference
+            : options.backend==Backend::Scalar ? Kernels::Scalar
+            : (options.backend==Backend::Simd || (simd_family() && !simdFailed_)) ? Kernels::Simd : Kernels::Scalar;
         if (!ensure_helpers(error)) return fail(error);
-        Session *session = ensure_session(tier, p, options, native, scalar, error);
+        Session *session = ensure_session(tier, p, options, kind, error);
+        if (!session && kind==Kernels::Simd && options.backend==Backend::Auto) {
+            // Never retry a failed simd setup on this device; scalar is exact too.
+            fsr4_logf("FSR 4.1.1 simd backend unavailable (%s); using scalar", error.c_str());
+            simdFailed_ = true; kind = Kernels::Scalar; error.clear();
+            session = ensure_session(tier, p, options, kind, error);
+        }
         if (!session) return fail(error);
+        const bool native_or_portable = kind != Kernels::Reference;
         status = fsr4_input_prepare(&frame.input, &view.inputHistory, view.variantKey != session->key, &p);
         if (!fsr4_input_status_ok(status)) return fail(fsr4_input_status_reason(status));
         if (!ensure_targets(view, *session, p, frame, options, error)) return fail(error);
@@ -353,7 +371,7 @@ public:
                 if (name=="post" && session->externalPostCnb && !skip)
                     dispatch_native(enc,m4,*slot,*session,13,view,sizes);
                 const int pass = name.rfind("pass",0) == 0 ? std::atoi(name.c_str()+4) : 0;
-                if ((native || scalar) && pass && session->native.count(pass)) {
+                if (native_or_portable && pass && session->native.count(pass)) {
                     dispatch_native(enc, m4, *slot, *session, pass, view, sizes);
                 } else {
                     MTLSize groups;
@@ -395,7 +413,7 @@ public:
         fsr4_input_commit(&view.inputHistory,&p);
         view.prepared = p;
         view.variantKey = session->key;
-        view.backendLabel = native ? "int8-mpp" : scalar?"int8-scalar":"int8-reference";
+        view.backendLabel = kernels_label(kind);
         view.cacheValid=session->externalPostCnb;
         view.skippedInference=skip;
         if(skip) ++view.reusedFrames;else ++view.neuralRuns;
@@ -418,11 +436,53 @@ private:
     std::map<std::string,id<MTLComputePipelineState>> helpers_;
     id<MTLSamplerState> sampler_ = nil;
     id<MTLTexture> exposureOne_ = nil;
+    // Simd probe result per Runtime (one device): -1 unknown, 0 failed, 1 ok.
+    int simdVerified_ = -1;
+    bool simdFailed_ = false;
 
     bool native_capable() const {
         if (@available(macOS 26.0,*)) return [device_ supportsFamily:static_cast<MTLGPUFamily>(1010)]
             && device_.maxThreadgroupMemoryLength >= 20480 && device_.maxThreadsPerThreadgroup.width >= 128;
         return false;
+    }
+    bool simd_family() const { return [device_ supportsFamily:MTLGPUFamilyApple7]; }
+    // Confirms the lane ownership the simd epilogue relies on and that half
+    // products of INT8 extremes accumulate exactly in float on this GPU.
+    bool verify_simd(id<MTLLibrary> lib, std::string &error) {
+        if (simdVerified_ >= 0) { if (!simdVerified_) error = "simdgroup probe failed on this GPU"; return simdVerified_ == 1; }
+        simdVerified_ = 0;
+        NSError *e = nil;
+        id<MTLFunction> fn = [lib newFunctionWithName:@"fsr411_simd_probe"];
+        id<MTLComputePipelineState> pso = fn ? [device_ newComputePipelineStateWithFunction:fn error:&e] : nil;
+        if (!pso || pso.maxTotalThreadsPerThreadgroup < 32 || pso.threadExecutionWidth != 32) {
+            error = "simdgroup probe pipeline: " + (e ? metal_error(e) : std::string("needs SIMD32")); return false;
+        }
+        _Float16 a[64], b[64]; int ai[64], bi[64]; uint32_t r = 0x4117u;
+        for (int i = 0; i < 64; ++i) {
+            r = r * 1664525u + 1013904223u;
+            ai[i] = i % 3 == 0 ? -128 : i % 3 == 1 ? 127 : int(r >> 24) - 128;
+            bi[i] = i % 5 == 0 ? 127 : -128;
+            a[i] = (_Float16)ai[i]; b[i] = (_Float16)bi[i];
+        }
+        id<MTLBuffer> A = [device_ newBufferWithBytes:a length:sizeof a options:MTLResourceStorageModeShared];
+        id<MTLBuffer> B = [device_ newBufferWithBytes:b length:sizeof b options:MTLResourceStorageModeShared];
+        id<MTLBuffer> out = [device_ newBufferWithLength:96 * sizeof(int) options:MTLResourceStorageModeShared];
+        id<MTLCommandQueue> queue = [device_ newCommandQueue];
+        id<MTLCommandBuffer> cb = [queue commandBuffer];
+        id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
+        [enc setComputePipelineState:pso]; [enc setBuffer:A offset:0 atIndex:0];
+        [enc setBuffer:B offset:0 atIndex:1]; [enc setBuffer:out offset:0 atIndex:2];
+        [enc dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+        [enc endEncoding]; [cb commit]; [cb waitUntilCompleted];
+        if (cb.status != MTLCommandBufferStatusCompleted) { error = "simdgroup probe did not complete"; return false; }
+        const int *v = (const int *)out.contents;
+        for (int i = 0; i < 8; ++i) for (int j = 0; j < 8; ++j) {
+            int s = 0; for (int k = 0; k < 8; ++k) s += ai[i*8+k] * bi[k*8+j];
+            if (v[i*8+j] != 2 * s) { error = "simdgroup half products do not accumulate exactly in float"; return false; }
+        }
+        for (int lane = 0; lane < 32; ++lane)
+            if (v[64+lane] != 1) { error = "simdgroup element layout differs from the verified Apple7+ layout"; return false; }
+        simdVerified_ = 1; return true;
     }
     static bool depth_format(MTLPixelFormat format) {
         return format == MTLPixelFormatDepth16Unorm || format == MTLPixelFormatDepth32Float
@@ -573,7 +633,8 @@ private:
         if (![result isKindOfClass:[NSDictionary class]]) { error="invalid FSR 4.1.1 manifest: "+path+": "+metal_error(e); return nil; }
         return result;
     }
-    bool load_native(Session &s, bool compile, bool useMpp, std::string &error) {
+    bool load_native(Session &s, bool compile, Kernels kind, std::string &error) {
+        const bool useMpp=kind==Kernels::Mpp, useSimd=kind==Kernels::Simd;
         const std::string dir=buildDir_+"/fsr411_native_"+std::to_string(s.tier)+(s.ultraPerformance?"_ultraperformance":"")
             +(s.profile==Profile::Lossy?"_lossy":"");
         // ExactFast differs only in PRE/POST math and shares Exact's network.
@@ -593,19 +654,31 @@ private:
             error="native 4.1.1 parameter cache is incomplete; regenerate this model";return false;
         }
         s.nativeWeights=[device_ newBufferWithBytes:weights.bytes length:weights.length options:MTLResourceStorageModeShared];
+        if (useSimd) {
+            // Same element indices as the INT8 blob; bias words become unused
+            // halves (biases are read as int32 from nativeWeights).
+            std::vector<_Float16> widened(weights.length);
+            const int8_t *bytes=(const int8_t *)weights.bytes;
+            for (size_t i=0;i<widened.size();++i) widened[i]=(_Float16)bytes[i];
+            s.halfWeights=[device_ newBufferWithBytes:widened.data() length:widened.size()*sizeof(_Float16) options:MTLResourceStorageModeShared];
+            if (!s.halfWeights) { error="cannot allocate simd half weights"; return false; }
+        }
         // Native sources include only the ABI header. Compile the saved source
-        // as a real Metal 4 library; no half-network substitution is possible.
-        NSString *source=[NSString stringWithContentsOfFile:ns(root_+(useMpp?"/src/fsr411_mpp.metal":"/src/fsr411_reference.metal")) encoding:NSUTF8StringEncoding error:nil];
+        // as a real Metal library; no half-network substitution is possible.
+        const char *file=useMpp?"/src/fsr411_mpp.metal":useSimd?"/src/fsr411_simd.metal":"/src/fsr411_reference.metal";
+        NSString *source=[NSString stringWithContentsOfFile:ns(root_+file) encoding:NSUTF8StringEncoding error:nil];
         NSString *header=[NSString stringWithContentsOfFile:ns(root_+"/src/fsr411_model.h") encoding:NSUTF8StringEncoding error:nil];
         if (!source || !header) { error="missing native 4.1.1 Metal source"; return false; }
         source=[source stringByReplacingOccurrencesOfString:@"#include \"fsr411_model.h\"" withString:header];
         NSError *e=nil; MTLCompileOptions *co=[MTLCompileOptions new];
         co.languageVersion=MTLLanguageVersion3_0;
         if(useMpp) if (@available(macOS 26.0,*)) co.languageVersion=MTLLanguageVersion4_0;
+        const bool specialize=useMpp||useSimd;
         co.preprocessorMacros=@{@"FSR411_MAXW":@(s.tier*8/9),@"FSR411_MAXH":@(s.tier/2),
-                               @"FSR411_SPECIALIZE":@(useMpp)};
+                               @"FSR411_SPECIALIZE":@(specialize)};
         id<MTLLibrary> lib=[device_ newLibraryWithSource:source options:co error:&e];
         if (!lib) { error=metal_error(e); return false; }
+        if (useSimd && !verify_simd(lib,error)) return false;
         std::map<std::string,id<MTLComputePipelineState>> states;
         NSMutableDictionary *passes=[manifest[@"passes"] mutableCopy];
         const size_t appendBase=(s.scratchBytes+255)&~size_t(255);
@@ -617,17 +690,18 @@ private:
         }
         for (NSString *key in passes) {
             NSDictionary *entry=passes[key]; NativePass np;
-            NSDictionary *dispatch=useMpp?entry:entry[@"reference"];
+            NSDictionary *dispatch=useMpp?entry:useSimd?entry[@"simd"]:entry[@"reference"];
+            if (!dispatch) { error="native 4.1.1 manifest predates the simd kernels; regenerate this model"; return false; }
             const std::string name=utf8(useMpp?entry[@"kernel"]:dispatch[@"function"]);
             np.offset=[entry[@"parameter_offset"] unsignedIntValue];
             if (np.offset+sizeof(PassParams)>params.length || kNative+np.offset+sizeof(PassParams)>8192) { error="native parameter region overflow"; return false; }
             memcpy(&np.parameters,(const uint8_t *)params.bytes+np.offset,sizeof(PassParams));
             // Shared entry names have different weights, strides and epilogues
             // for each logical pass. Dimensions remain per-frame parameters.
-            const std::string pipelineKey=name+(useMpp?"/"+utf8(key):"");
+            const std::string pipelineKey=name+(specialize?"/"+utf8(key):"");
             if (!states.count(pipelineKey)) {
                 id<MTLFunction> fn=nil;
-                if (useMpp) {
+                if (specialize) {
                     const auto metadata=specialize_metadata(np.parameters,[key intValue]==13);
                     MTLFunctionConstantValues *values=[MTLFunctionConstantValues new];
                     [values setConstantValues:metadata.values type:MTLDataTypeUInt4
@@ -636,6 +710,9 @@ private:
                 } else fn=[lib newFunctionWithName:ns(name)];
                 auto pso=fn?[device_ newComputePipelineStateWithFunction:fn error:&e]:nil;
                 if (!pso) { error=metal_error(e); return false; }
+                if (pso.maxTotalThreadsPerThreadgroup < [dispatch[@"threads"] unsignedIntValue]) {
+                    error="pipeline "+name+" supports fewer threads than its tile needs"; return false;
+                }
                 states.emplace(pipelineKey,pso);
             }
             np.pso=states.at(pipelineKey);
@@ -649,14 +726,15 @@ private:
         }
         return s.nativeWeights && !s.native.empty();
     }
-    Session *ensure_session(int tier, const Fsr4InputPrepared &p, const Options &o, bool native, bool scalar, std::string &error) {
-        const bool externalPost=native || scalar || o.profile==Profile::Lossy;
+    Session *ensure_session(int tier, const Fsr4InputPrepared &p, const Options &o, Kernels kind, std::string &error) {
+        const bool portable=kind!=Kernels::Reference;
+        const bool externalPost=portable || o.profile==Profile::Lossy;
         const std::string key="fsr411_"+std::to_string(tier)+"_di"+std::to_string(p.depthReversed)
             +"_lm"+std::to_string(p.lowResMV)+"_jm"+std::to_string(p.jitteredMV)+"_cs"+std::to_string(o.colorspace)
             +"_ae"+std::to_string(p.autoExposure)+"_o"+std::to_string(o.optimize)
             +(o.ultraPerformance?"_up1":"")+(o.profile==Profile::Lossy?"_lossy":o.profile==Profile::ExactFast?"_fast":"")
             +(externalPost?"_pc1":"")+(o.strictMath&&o.profile!=Profile::Exact?"_sm1":"");
-        const std::string cacheKey=key+(native?"_mpp":scalar?"_scalar":"_ref");
+        const std::string cacheKey=key+(kind==Kernels::Mpp?"_mpp":kind==Kernels::Simd?"_simd":kind==Kernels::Scalar?"_scalar":"_ref");
         auto existing=sessions_.find(cacheKey); if(existing!=sessions_.end()) return existing->second.get();
         if (o.allowCompile && !run(@[@"python3",ns(root_+"/tools/compile_fsr411.py"),@"--root",ns(root_),@"--builddir",ns(buildDir_),
             @"--res",ns(std::to_string(tier)),@"--depth-inverted",ns(std::to_string(p.depthReversed)),
@@ -679,7 +757,7 @@ private:
         s->initializer=[device_ newBufferWithBytes:init.bytes length:init.length options:MTLResourceStorageModeShared];
         if (!s->initializer) { error="cannot allocate FSR 4.1.1 initializer"; return nullptr; }
         for (NSString *stage in manifest[@"order"]) s->order.push_back(utf8(stage));
-        if (externalPost && !load_native(*s,o.allowCompile,native,error)) return nullptr;
+        if (externalPost && !load_native(*s,o.allowCompile,kind,error)) return nullptr;
         NSDictionary *entries=manifest[@"kernels"];
         for (NSString *name in entries) {
             NSDictionary *entry=entries[name]; NSError *e=nil;
@@ -687,7 +765,7 @@ private:
             // compiling unused PSOs (and their large constant-folding graphs).
             const std::string stage=utf8(name);
             const int logical=stage.rfind("pass",0)==0?std::atoi(stage.c_str()+4):0;
-            if((native||scalar) && logical && s->native.count(logical)) {s->kernels.emplace(stage,Kernel{});continue;}
+            if(portable && logical && s->native.count(logical)) {s->kernels.emplace(stage,Kernel{});continue;}
             auto url=[NSURL fileURLWithPath:ns(buildDir_+"/"+key+"/"+utf8(entry[@"library"]))];
             auto lib=[device_ newLibraryWithURL:url error:&e];
             if (!lib) { error=metal_error(e); return nullptr; }
@@ -784,7 +862,7 @@ private:
     void retain_resources(FrameSlot &slot,const Session &s,const View &v,const Frame &f) {
         // The owner may resize on the next CPU encode while this frame is on
         // the GPU. Keep the old resources alive until its retirement token.
-        const id resources[]={slot.constants,s.initializer,s.nativeWeights,v.history,v.reprojected,v.recurrent,v.autoExposure,
+        const id resources[]={slot.constants,s.initializer,s.nativeWeights,s.halfWeights,v.history,v.reprojected,v.recurrent,v.autoExposure,
             v.scratch,v.spdAtomic,v.spdAtomicTexture,v.luma,v.colorCopy,v.depthCopy,v.motionCopy,v.outputCopy,v.rcasTemp,v.lossyMotion,v.lossyPlane,
             f.color,f.depth,f.motion,f.output,f.exposure,exposureOne_};
         for (id resource:resources) if(resource && ![slot.resources containsObject:resource]) [slot.resources addObject:resource];
@@ -903,11 +981,14 @@ private:
         if(m4) {
             id<MTL4ArgumentTable> t=slot.tables[ns("native"+std::to_string(pass))];
             [t setAddress:v.scratch.gpuAddress atIndex:0]; [t setAddress:s.nativeWeights.gpuAddress atIndex:1];
-            [t setAddress:slot.constants.gpuAddress+kNative+n.offset atIndex:2]; [enc setArgumentTable:t];
+            [t setAddress:slot.constants.gpuAddress+kNative+n.offset atIndex:2];
+            if (s.halfWeights) [t setAddress:s.halfWeights.gpuAddress atIndex:3];
+            [enc setArgumentTable:t];
         } else {
             auto ce=(id<MTLComputeCommandEncoder>)enc;
             [ce setBuffer:v.scratch offset:0 atIndex:0]; [ce setBuffer:s.nativeWeights offset:0 atIndex:1];
             [ce setBuffer:slot.constants offset:kNative+n.offset atIndex:2];
+            if (s.halfWeights) [ce setBuffer:s.halfWeights offset:0 atIndex:3];
         }
         [enc setComputePipelineState:n.pso];
         [enc dispatchThreadgroups:MTLSizeMake(ceil_div(sizes.v[shape][0],n.tileX),ceil_div(sizes.v[shape][1],n.tileY),1)

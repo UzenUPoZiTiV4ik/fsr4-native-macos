@@ -1,6 +1,15 @@
 # FSR4-Metal — project state & handoff
 
-Last updated: **2026-10-11**, optimization of **FSR 4.1.1.2740 INT8**.
+Last updated: **2026-10-12**, optimization of **FSR 4.1.1.2740 INT8**.
+
+2026-10-12 (M1–M4 backend, latest): new `simd` backend (`--simd`/`--fp16`,
+`FSR4_MODEL=simd`), auto-selected on Apple7–9 GPUs instead of scalar. INT8
+convolutions run as `simdgroup_half8x8` products with float accumulation;
+all accumulators are below 2^24, so output is byte-identical to scalar
+(`make test-fsr411-simd`, native block tests, CLI frames). M5 means on
+`tc_game_balanced`: Lossy scalar 71.7 → simd 6.13 ms (i8mpp 3.12), Exact
+Fast 140.4 → 10.3 ms. M1–M4 not physically measured. Lossy runtime parity
+suites now pass `--strict-math` (relaxed PRE/POST is not bit-exact).
 
 2026-10-11 (FSR 4.0 comparison, latest): same-session means on the recorded
 sequence: FSR 4.0.2 4.47, Exact 5.01, Exact Fast 4.30, Lossy 3.00 ms.

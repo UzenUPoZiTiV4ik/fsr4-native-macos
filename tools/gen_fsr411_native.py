@@ -444,6 +444,31 @@ def encode_model(source_dir, initializer_path, tier, output_dir, preset="normal"
         blob.extend(data)
         return offset
 
+    def simd_schedule(model):
+        # Apple7+ simdgroup kernels (src/fsr411_simd.metal): tile 8*MB x 4,
+        # four SIMD32 groups. NF64/DS32 use MB=2 to bound register use.
+        kind, nf = model["kind"], model["input"][5]
+        name = "fsr411_simd_" + (kind if kind == "cnb" else kind + str(nf))
+        return {"function": name, "tile": [32 if nf == 16 or (nf == 32 and kind != "ds") else 16, 4], "threads": 128}
+
+    def require_float_exact(model):
+        # The simd backend accumulates INT8 products in float. Every partial
+        # sum, in any order, is bounded by 128 * sum|w| per output column.
+        limit = 0
+        for layer, matrix in enumerate(model["weights"]):
+            if layer == 0 and model["kind"] != "ds":
+                column = lambda i: (i // 2304, i % 16)
+            else:
+                n = len(model["bias"][layer]) * (4 if layer == 3 else 1)
+                column = lambda i, n=n: i % n
+            sums = {}
+            for i, w in enumerate(matrix):
+                sums[column(i)] = sums.get(column(i), 0) + abs(w)
+            limit = max(limit, 128 * max(sums.values()))
+        if limit >= 1 << 24:
+            raise ValueError("INT8 dot products exceed the exact float range")
+        return limit
+
     def pack_model(model, input_slot):
         weights = [append(bytes(x & 255 for x in matrix)) for matrix in model["weights"]]
         biases = [append(struct.pack("<" + str(len(a)) + "i", *a)) for a in model["bias"]]
@@ -460,6 +485,7 @@ def encode_model(source_dir, initializer_path, tier, output_dir, preset="normal"
             "kernel": model["kernel"], "tile": model["tile"], "kind": model["kind"], "threads": model.get("threads", 128),
             "function": model["kernel"],
             "reference": {"function": "fsr411_ref_" + model["kind"], "tile": [32, 1], "threads": 32},
+            "simd": dict(simd_schedule(model), float_accumulator_bound=require_float_exact(model)),
             "dispatch_space": "input" if model["kind"] == "ct" else "output",
             "parameter_offset": parameter_offset, "input_slot": input_slot,
             "output_slot": model["output_slot"], "input": model["input"], "output": model["output"],
@@ -506,7 +532,7 @@ def encode_model(source_dir, initializer_path, tier, output_dir, preset="normal"
                 "initializer_sha256": expected_hash, "model": preset, "profile": profile,
                 "presets": ["ultraperformance"] if ultra else ["native", "quality", "balanced", "performance", "drs"],
                 "kernel_source": "src/fsr411_mpp.metal", "header_source": "src/fsr411_model.h",
-                "reference_source": "src/fsr411_reference.metal",
+                "reference_source": "src/fsr411_reference.metal", "simd_source": "src/fsr411_simd.metal",
                 "defines": {"FSR411_MAXW": tier * 16 // 9 // 2, "FSR411_MAXH": tier // 2},
                 "dynamic_sizes": "Replace input/output widths and heights from tensor constant slots. Preserve physical pitches. Keep graph border stages. For post_cnb, relocate output.offset to aligned end of original scratch and dispatch before the split imported POST."}
     if profile == "lossy":
