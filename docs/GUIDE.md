@@ -1,17 +1,12 @@
-# Запуск FSR 4.1.1 для Mac
+# Инструкция: FSR 4.1.1 на Mac
 
-По умолчанию используются **FSR 4.1.1 и Lossy**. Exact (эталонная
-математика) и Exact Fast (та же сеть, быстрая математика PRE/POST, примерно
-на 0,6 мс быстрее, разница с Exact глазом не видна) доступны в CLI,
-параметрах запуска и панели. После переключения профиля история обновляется
-с полного прохода сети.
+## 1. Что нужно
 
-## Требования и сборка
+- Mac на Apple Silicon (быстрее всего на M5, подробнее: [HARDWARE.md](HARDWARE.md))
+- macOS 26+, Xcode 26+, Python 3
+- CrossOver, если хотите запускать игры
 
-Нужны Apple Silicon, macOS 26+, Xcode 26+ с Metal Toolchain и Python 3.
-Нативные INT8 tensor operations используются на M5 / Apple GPU family 10.
-На более ранних Apple GPU выбирается scalar INT8; скорость на этих машинах
-ещё не измерена. Подробности: [HARDWARE.md](HARDWARE.md).
+## 2. Сборка
 
 ```sh
 xcodebuild -downloadComponent MetalToolchain
@@ -19,114 +14,81 @@ make -B
 tools/bin/fsr4mac --backend-info
 ```
 
-`--backend-info` сообщает выбранный по возможностям GPU путь. Реальная
-компиляция модели выполняется при первом запуске кадров.
+Последняя команда показывает, какой режим GPU будет использован.
 
-## Проверка на записи кадров
+## 3. Установка в CrossOver
 
-Формат `meta.json`, цвета, глубины и движения описан в
-[TESTDATA.md](../TESTDATA.md), дополнения 4.1.1 — в
-[FSR411_INPUT_CONTRACT.md](FSR411_INPUT_CONTRACT.md).
+1. Полностью закройте игру и её бутылку.
+2. Выполните:
 
-```sh
-tools/bin/gen_testcase testcases/quality411 quality 1280 720 1920 1080 8
-tools/bin/fsr4mac testcases/quality411 out/lossy --profile lossy
-tools/bin/fsr4mac testcases/quality411 out/exact --profile exact
-```
+   ```sh
+   python3 tools/crossover/crossover_fsr4.py install --panel --profile lossy
+   ```
 
-На выходе: `fNN_out.bin` (RGBA16F), `fNN_out.png` и `run.json`. В JSON
-записаны модель, профиль, фактический backend, сбросы истории и число полных
-проходов/повторно использованных результатов сети.
+   Для конкретной бутылки добавьте `--bottle "/path/to/cxbottle.conf"`.
+3. Запустите игру и включите в настройках **DLSS**.
+4. Появится панель **FSR 4**. Выберите режим:
 
-Для поиска ошибки можно выбрать `--reference` (импортированные HLSL),
-`--scalar` (обычные целочисленные Metal-ядра) или `--i8mpp` (M5 tensor
-operations). `--optimize 0` отключает оптимизации PRE и POST.
-`--capture-stages pre,pass1,post` сохраняет выбранные промежуточные буферы,
-`--dump-state` — историю, recurrent, scratch и экспозицию. Такие копии
-замедляют прогон; для измерения скорости запускайте отдельно:
-
-```sh
-tools/bin/fsr4mac testcases/quality411 out/bench --profile lossy --bench 10
-```
-
-Одна последовательность прогревает GPU, следующие десять измеряются.
-Каждая начинается с новой истории. Смотрите `effective_reset`, `skipped_inference` и
-`gpu_ms` у каждого кадра: стоимость первого кадра и кадра с повторным
-использованием сети различается. Параметр старого раннера `--reps` к 4.1.1
-не относится. Методика и результаты — в [BENCHMARK.md](../BENCHMARK.md).
-
-## CrossOver и переключение профилей
-
-Полностью закройте игру и процессы её бутылки перед обновлением хука.
-Установщик собирает локальную копию D3DMetal, хук и панель, проверяет их
-на записи кадров и указывает бутылке путь к копии фреймворка.
-
-```sh
-python3 tools/crossover/crossover_fsr4.py install --panel --profile lossy
-# Для конкретной бутылки:
-python3 tools/crossover/crossover_fsr4.py install --panel --profile lossy --bottle "/path/to/cxbottle.conf"
-# Только сборка и проверка dist/, без изменения бутылки:
-python3 tools/crossover/crossover_fsr4.py install --no-bottle --profile lossy
-```
-
-Затем запустите игру и включите DLSS. В панели **FSR 4** выберите режим
-**FSR 4** (прежняя модель 4.0.2), **FSR 4.1** (Exact Fast) или
-**FSR 4.1 Lite** (Lossy, самый быстрый); переключение сбрасывает историю.
-Битово-точный Exact задаётся только через `FSR4_PROFILE=exact`. Панель на
-английском. Профиль сохраняется в `dist/crossover/panel.conf` и применяется
-на следующем кадре; файл настроек перечитывается во время работы.
-
-Для разбора шлейфа кнопка **Record diagnostics** через 1,5 секунды
-сохраняет восемь последовательных кадров одного скейлера. Во время записи
-подвигайте камеру и дождитесь сообщения «Done». В `dist/crossover/captures/`
-появятся `capture.json`, входные color/depth/motion и выход FSR в float32.
-Запись ограничена 512 MiB; при больших разрешениях число кадров уменьшается.
-Без нажатия кнопки копии текстур не выполняются. Анализ движения:
-
-```sh
-python3 tools/diagnostics/analyze_motion_capture.py dist/crossover/captures/<каталог> --json motion-analysis.json
-```
-
-`dist/crossover/hook.log` записывает входные масштабы и jitter, активные
-области текстур, отдельные скейлеры и заглушки, сбросы истории, профиль,
-полные/повторно использованные результаты сети и длительность подготовки.
-Подробные строки ограничены первыми 16 вызовами каждого скейлера,
-сменой профиля и одним срезом каждые пять секунд.
-
-Для запуска без файловых настроек задайте `FSR4_SETTINGS=none` и
-`FSR4_PROFILE=lossy`, `exact-fast`, `exact` или `fsr4` в окружении бутылки. Иначе сохранённое
-значение панели имеет приоритет над первоначальным значением окружения.
-
-| Настройка | Значение |
+| Режим | Что это |
 | --- | --- |
-| `FSR4_VERSION` | `4.1.1` по умолчанию; `4.0.2` закрепляет старую модель, режимы панели тогда не действуют. |
-| `FSR4_PROFILE` | `lossy` по умолчанию, `exact-fast`, `exact` или `fsr4` (модель 4.0.2). |
-| `FSR4_MODEL` | `auto`, `i8mpp`, `scalar`, `reference`. |
-| `FSR4_PANEL` | `1` открывает панель; устанавливается через `--panel`. |
-| `FSR4_SHARPNESS`, `FSR4_RCAS` | Настройки резкости; игровой путь по умолчанию включает RCAS с резкостью 0.4. |
-| `FSR4_OPTIMIZE` | `1` по умолчанию; `0` для сравнения PRE/POST. |
-| `FSR4_COMPILE` | `0` запрещает компиляцию отсутствующих вариантов. |
+| FSR 4.1 Lite | Самый быстрый (по умолчанию) |
+| FSR 4.1 | Полное качество |
+| FSR 4 | Старая модель 4.0.2, для сравнения |
 
-Режим Lossy изменяет модель и может влиять на мелкие детали и движение.
-Он переиспользует результат сети только при подходящем jitter, масштабе и
-валидном кэше, с полным обновлением после каждого такого кадра. Ultra
-Performance имеет отдельную модель и выполняет сеть каждый кадр.
+Режим меняется сразу, перезапуск не нужен.
 
-Входы уже преобразованы D3DMetal из DLSS в MetalFX. Хук не меняет знак
-motion/jitter повторно; он учитывает размеры активных областей, exposure и
-флаги дескриптора. Детали и диагностические сообщения — в
-[CROSSOVER.md](CROSSOVER.md) и [FSR411_INPUT_CONTRACT.md](FSR411_INPUT_CONTRACT.md).
-
-Откат настройки бутылки:
+## 4. Как всё вернуть
 
 ```sh
 python3 tools/crossover/crossover_fsr4.py restore --bottle "/path/to/cxbottle.conf"
 ```
 
-После этого перезапустите процессы бутылки. Исходный CrossOver.app
-установщик не изменяет.
+Затем перезапустите бутылку. Сам CrossOver.app установщик не изменяет.
 
-## Проверки и старый эталон
+## 5. Если что-то не так
+
+- Лог: `dist/crossover/hook.log`.
+- Шлейфы при движении: нажмите в панели **Record diagnostics**, подвигайте
+  камеру до сообщения «Done». Запись появится в `dist/crossover/captures/`.
+  Анализ:
+
+  ```sh
+  python3 tools/diagnostics/analyze_motion_capture.py dist/crossover/captures/<каталог> --json motion-analysis.json
+  ```
+
+- Подробности: [CROSSOVER.md](CROSSOVER.md).
+
+## Для продвинутых
+
+### Настройки через окружение бутылки
+
+Сохранённый выбор в панели важнее переменных. Чтобы использовать только
+переменные, задайте `FSR4_SETTINGS=none`.
+
+| Переменная | Значения |
+| --- | --- |
+| `FSR4_PROFILE` | `lossy` (по умолчанию), `exact-fast`, `exact`, `fsr4` |
+| `FSR4_VERSION` | `4.1.1` (по умолчанию) или `4.0.2` |
+| `FSR4_MODEL` | `auto`, `i8mpp`, `scalar`, `reference` |
+| `FSR4_SHARPNESS`, `FSR4_RCAS` | Резкость (по умолчанию RCAS 0.4) |
+| `FSR4_OPTIMIZE` | `1` по умолчанию, `0` отключает оптимизации |
+| `FSR4_COMPILE` | `0` запрещает компиляцию недостающих шейдеров |
+
+`exact` (битово-точный эталон) доступен только через `FSR4_PROFILE`.
+
+### Запуск без игры
+
+```sh
+tools/bin/gen_testcase testcases/quality411 quality 1280 720 1920 1080 8
+tools/bin/fsr4mac testcases/quality411 out/lossy --profile lossy
+tools/bin/fsr4mac testcases/quality411 out/bench --profile lossy --bench 10
+```
+
+Результат: PNG, `.bin` и `run.json`. Формат входа:
+[TESTDATA.md](../TESTDATA.md), [FSR411_INPUT_CONTRACT.md](FSR411_INPUT_CONTRACT.md).
+Методика замеров: [BENCHMARK.md](../BENCHMARK.md).
+
+### Тесты
 
 ```sh
 make test
@@ -134,14 +96,4 @@ make build-fsr411-tests
 make test-fsr411-gpu
 ```
 
-Проверяются арифметика INT8, Exact/Lossy, общая и UP-модель, преобразование
-входов, прямые HLSL против Metal tensor/scalar, кэш и игровой мост.
-Измерения на M5 не заменяют тестирование других Apple GPU и конкретной игры.
-
-Windows-эталон FSR 4.0 относится к прежней модели и не используется для
-подтверждения 4.1.1. Для старой модели передайте `--fsr-version 4.0.2`;
-её команды и FP16 сохранены в [GUIDE_FSR402.md](GUIDE_FSR402.md).
-
-Ошибка шлейфа из-за знаковой цветовой разности в Metal PRE описана в
-[FSR411_GHOSTING_FIX.md](FSR411_GHOSTING_FIX.md). Её регрессионная проверка
-`make test-fsr411-chroma` также входит в набор GPU-тестов.
+Старая модель 4.0.2: [GUIDE_FSR402.md](GUIDE_FSR402.md).
