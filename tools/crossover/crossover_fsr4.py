@@ -9,6 +9,8 @@ only that key from the bottle config.
 import argparse
 import json
 import os
+import re
+import shlex
 import shutil
 import struct
 import subprocess
@@ -279,8 +281,61 @@ def find_framework(app: str = "") -> Path:
                      "or pass --crossover /path/to/CrossOver.app")
 
 
-def bottle_names() -> list:
-    return sorted(p.parent.name for p in BOTTLES.glob("*/cxbottle.conf"))
+def bottle_roots(crossover=None) -> list:
+    """Read CrossOver's configured search path, including external volumes."""
+    environment = dict(os.environ)
+    bottle_path = ""
+    # CrossOver's user config overrides the app config. Preview shares the
+    # CrossOver cellar, and --crossover may select an app outside /Applications.
+    apps = [Path(crossover).expanduser()] if crossover else crossover_apps()
+    configs = [p / "Contents/SharedSupport/CrossOver/etc/CrossOver.conf" for p in apps[:1]]
+    configs.append(BOTTLES.parent / "CrossOver.conf")
+    for config in configs:
+        try:
+            lines = config.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        section = ""
+        for line in lines:
+            line = line.strip()
+            if line.startswith(";"):
+                continue
+            header = re.fullmatch(r"\[([^]]+)\]\s*(?:;.*)?", line)
+            if header:
+                section = header[1].lower()
+                continue
+            field = re.fullmatch(r'"((?:[^"\\]|\\.)*)"\s*=\s*"((?:[^"\\]|\\.)*)"\s*(?:;.*)?', line)
+            if not field:
+                continue
+            key, value = (re.sub(r'\\(["\\])', r'\1', part) for part in field.groups())
+            if section == "crossover" and key.lower() == "bottlepath":
+                bottle_path = value
+            elif section == "environmentvariables":
+                environment[key] = re.sub(r"\$\{([^}]+)\}", lambda m: environment.get(m[1], ""), value)
+    # CX_BOTTLE_PATH takes precedence, as in CXBottle::get_crossover_config.
+    search = environment.get("CX_BOTTLE_PATH") or bottle_path
+    roots = []
+    for value in search.split(os.pathsep) if search else [str(BOTTLES)]:
+        value = re.sub(r"\$\{([^}]+)\}", lambda m: environment.get(m[1], ""), value)
+        path = Path(value).expanduser()
+        if value and path.is_absolute() and path not in roots:
+            roots.append(path)
+    return roots
+
+
+def discover_bottles(crossover=None) -> list:
+    # A symlink to an external bottle can also live in the default directory.
+    # Resolve configs to avoid listing the same bottle through two roots.
+    confs = {}
+    for root in bottle_roots(crossover):
+        for conf in root.glob("*/cxbottle.conf"):
+            if conf.is_file():
+                confs.setdefault(conf.resolve(), conf)
+    return sorted(confs.values(), key=lambda p: (p.parent.name, str(p)))
+
+
+def bottle_names(crossover=None) -> list:
+    return sorted({p.parent.name for p in discover_bottles(crossover)})
 
 
 def has_install(conf: Path) -> bool:
@@ -288,34 +343,43 @@ def has_install(conf: Path) -> bool:
     return MARKER in text or f'"{KEY}"' in text
 
 
-def default_bottle(for_restore: bool = False) -> Path:
+def default_bottle(for_restore: bool = False, crossover=None) -> Path:
     """The bottle to use when --bottle is omitted: the only bottle, or (for
     restore) the only bottle that carries our keys. Never guesses between
     several."""
-    confs = sorted(BOTTLES.glob("*/cxbottle.conf"))
+    confs = discover_bottles(crossover)
     if for_restore:
         installed = [c for c in confs if has_install(c)]
         if len(installed) == 1:
             return installed[0]
         if not installed:
-            raise SystemExit(f"no bottle in {BOTTLES} has fsr4-mac keys; nothing to restore")
+            raise SystemExit("no discovered bottle has fsr4-mac keys; nothing to restore")
         confs = installed
     if len(confs) == 1:
         return confs[0]
     if not confs:
-        raise SystemExit(f"no CrossOver bottles in {BOTTLES}\n"
+        raise SystemExit("no CrossOver bottles in " + ", ".join(map(str, bottle_roots(crossover))) + "\n"
                          "pass --bottle /path/to/cxbottle.conf, or --no-bottle to only build and test")
     raise SystemExit("several bottles found: " + ", ".join(c.parent.name for c in confs)
-                     + '\npick one with --bottle <name>, e.g. --bottle "' + confs[0].parent.name + '"')
+                     + "\n" + "\n".join(str(c) for c in confs)
+                     + "\npick one with --bottle <name> or the full config path")
 
 
-def resolve_bottle(value: str) -> Path:
+def resolve_bottle(value: str, crossover=None) -> Path:
     """A bottle name or a path to the bottle directory or its cxbottle.conf."""
     path = Path(value).expanduser()
+    if path.name != "cxbottle.conf" and not path.is_dir() and len(path.parts) == 1:
+        matches = [conf for conf in discover_bottles(crossover) if conf.parent.name == value]
+        if len(matches) > 1:
+            raise SystemExit("ambiguous bottle name: " + value + "\nuse --bottle with a full path:\n"
+                             + "\n".join(str(conf) for conf in matches))
+        if matches:
+            return matches[0]
+        path = BOTTLES / value
     if path.name != "cxbottle.conf":
-        path = (path if path.is_dir() else BOTTLES / value) / "cxbottle.conf"
+        path = path / "cxbottle.conf"
     if not path.is_file():
-        names = bottle_names()
+        names = bottle_names(crossover)
         raise SystemExit(f"bottle config not found: {path}\navailable bottles: "
                          + (", ".join(names) if names else f"none in {BOTTLES}")
                          + "\nuse --bottle <name>, or --no-bottle to only build and test")
@@ -439,7 +503,7 @@ def cmd_install(args):
     if args.no_bottle:
         bottle = None
     else:
-        bottle = resolve_bottle(args.bottle) if args.bottle else default_bottle()
+        bottle = resolve_bottle(args.bottle, args.crossover) if args.bottle else default_bottle(crossover=args.crossover)
         print(f"bottle: {bottle}")
     framework = find_framework(args.crossover)
     print(f"D3DMetal: {framework}")
@@ -494,7 +558,7 @@ def cmd_install(args):
     print("original CrossOver.app was not modified")
     restore = f"python3 {Path(__file__)} restore"
     if bottle:
-        restore += f' --bottle "{bottle.parent.name}"'
+        restore += " --bottle " + shlex.quote(str(bottle))
     print(f"restore: {restore}")
 
 

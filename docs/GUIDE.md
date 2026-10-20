@@ -10,7 +10,7 @@
 
 ![FSR4 Installer](images/installer.png)
 
-1. Скачайте **FSR4-Installer-v1.7.dmg** из
+1. Скачайте **FSR4-Installer-v1.8.dmg** из
    [последнего релиза](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/releases/latest),
    откройте его и перетащите **FSR4 Installer** в «Программы».
 2. Первый запуск. Приложение не нотаризовано Apple, поэтому macOS его

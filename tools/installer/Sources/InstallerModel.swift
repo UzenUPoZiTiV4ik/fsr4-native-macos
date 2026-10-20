@@ -38,6 +38,7 @@ final class InstallerModel {
     let payload: BundledPayload?
     private var command: StreamingCommand?
     private var runStart: String.Index?
+    private var extraBottleConfigs: [URL] = []
 
     init(payload: BundledPayload? = Payload.bundled()) {
         self.payload = payload
@@ -70,9 +71,11 @@ final class InstallerModel {
 
     private func apply(_ list: [Bottle]) {
         let previous = selectedID
-        bottles = list
+        let added = extraBottleConfigs.compactMap(Bottles.bottle(conf:))
+        var seen: Set<String> = []
+        bottles = (list + added).filter { seen.insert($0.conf.resolvingSymlinksInPath().path).inserted }
         if selected == nil {
-            selectedID = (list.first(where: \.installed) ?? list.first)?.id
+            selectedID = (bottles.first(where: \.installed) ?? bottles.first)?.id
         }
         if selectedID != previous { syncOptions() }
     }
@@ -189,6 +192,26 @@ final class InstallerModel {
         }
         SystemCheck.chosenCrossOver = app
         refresh()
+    }
+
+    func chooseBottle() {
+        let panel = NSOpenPanel()
+        panel.message = String(localized: "Choose the bottle folder containing cxbottle.conf, including on an external disk.")
+        panel.prompt = String(localized: "Choose")
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.directoryURL = URL(fileURLWithPath: "/Volumes")
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        let conf = folder.appendingPathComponent("cxbottle.conf")
+        guard let bottle = Bottles.bottle(conf: conf) else {
+            banner = Banner(style: .failure, title: String(localized: "Not a CrossOver bottle"),
+                            message: String(localized: "The selected folder has no readable cxbottle.conf."))
+            return
+        }
+        extraBottleConfigs.append(conf)
+        reloadBottles()
+        selectedID = bottles.first { $0.conf.resolvingSymlinksInPath() == bottle.conf.resolvingSymlinksInPath() }?.id
+        syncOptions()
     }
 
     func openPanel() { NSWorkspace.shared.open(panelApp) }

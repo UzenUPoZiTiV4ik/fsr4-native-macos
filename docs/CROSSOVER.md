@@ -36,11 +36,19 @@ Wine в CrossOver — x86_64 под Rosetta, с hardened runtime. Флага `al
 5. Прогоняет smoke (свизл создаётся, FSR4 ещё не подменяет кадр), `dlopen` копии и `live_test` по `testcases/testcase_quality_720to1080`.
 6. Если указана бутылка, дописывает переменные в конец `cxbottle.conf` и один раз сохраняет копию конфига.
 
-По умолчанию бутылка:
+Установщик читает `BottlePath` из `CrossOver.conf` и `CX_BOTTLE_PATH`,
+поэтому обнаруживает и бутылки на внешнем диске. Без этих настроек ищет в
+`~/Library/Application Support/CrossOver/Bottles`. Если найдена одна бутылка,
+выбирает её автоматически; при нескольких нужен `--bottle Steam` или полный
+путь. Одинаковые имена в разных папках требуют полного пути:
 
 ```
-~/Library/Application Support/CrossOver/Bottles/Игры/cxbottle.conf
+python3 tools/crossover/crossover_fsr4.py install --bottle "/Volumes/SSD/Bottles/Steam"
+CX_BOTTLE_PATH="/Volumes/SSD/Bottles" python3 tools/crossover/crossover_fsr4.py install
 ```
+
+В графическом установщике кнопка **«Выбрать папку бутылки…»** позволяет
+выбрать папку с `cxbottle.conf`, даже если её нет в настройках CrossOver.
 
 Резервная копия конфига, снятая до первой записи:
 

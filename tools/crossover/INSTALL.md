@@ -55,6 +55,15 @@ asks you to pick one. A wrong name prints the list of bottles. The installer:
   MetalFX) and a few `FSR4_*` keys to the bottle's `cxbottle.conf`, backing
   it up to `dist/crossover/backups/` first.
 
+Bottles on an external disk are discovered from CrossOver's `BottlePath`
+setting or `CX_BOTTLE_PATH`. In the app, **Choose bottle folder…** also lets
+you select any folder containing `cxbottle.conf`. In Terminal, use the full
+path if the bottle is not configured in CrossOver's search path:
+
+```sh
+python3 tools/crossover/crossover_fsr4.py install --panel --bottle "/Volumes/SSD/Bottles/Steam"
+```
+
 The first run takes a few minutes. The first game launch also compiles
 shaders for the game's resolution (tens of seconds); later launches use the
 cache in `build/`.

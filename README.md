@@ -15,7 +15,7 @@ Works as a standalone tool and inside games via CrossOver (DLSS → FSR 4).
 
 ## Easiest: the FSR4 Installer app
 
-1. Download **FSR4-Installer-v1.7.dmg** from the
+1. Download **FSR4-Installer-v1.8.dmg** from the
    [latest release](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/releases/latest)
    and drag **FSR4 Installer** to Applications.
 2. First launch: the app is not notarized, so macOS blocks it. Open
@@ -82,8 +82,8 @@ make build-fsr411-tests
 make test-fsr411-gpu
 ```
 
-Build the installer app and DMG: `make installer INSTALLER_VERSION=v1.7`
-(or `python3 tools/installer/build_app.py v1.7 --dmg`).
+Build the installer app and DMG: `make installer INSTALLER_VERSION=v1.8`
+(or `python3 tools/installer/build_app.py v1.8 --dmg`).
 
 ## Documentation
 

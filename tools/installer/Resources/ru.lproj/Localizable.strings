@@ -112,3 +112,7 @@
 "Game Log" = "Лог игры";
 "Show Files" = "Показать файлы";
 "Dismiss" = "Закрыть";
+"Choose bottle folder…" = "Выбрать папку бутылки…";
+"Choose the bottle folder containing cxbottle.conf, including on an external disk." = "Выберите папку бутылки с файлом cxbottle.conf, в том числе на внешнем диске.";
+"Not a CrossOver bottle" = "Это не бутылка CrossOver";
+"The selected folder has no readable cxbottle.conf." = "В выбранной папке нет доступного для чтения файла cxbottle.conf.";

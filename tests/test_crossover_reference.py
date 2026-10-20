@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -12,6 +13,70 @@ spec.loader.exec_module(installer)
 
 
 class CrossoverReferenceTest(unittest.TestCase):
+    def test_external_bottles_follow_config_and_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bottles = root / "CrossOver/Bottles"
+            bottles.mkdir(parents=True)
+            external = root / "External SSD/My Bottles"
+            conf = external / "Steam/cxbottle.conf"
+            conf.parent.mkdir(parents=True)
+            conf.write_text("[EnvironmentVariables]\n")
+            config = bottles.parent / "CrossOver.conf"
+            config.write_text('[Other]\n"BottlePath" = "/ignored"\n'
+                              '[CrossOver]\n;"BottlePath" = "/ignored"\n'
+                              '"BottlePath" = "${TEST_BOTTLE_ROOT}" ; external disk\n')
+            with patch.object(installer, "BOTTLES", bottles), \
+                 patch.object(installer, "crossover_apps", return_value=[]), \
+                 patch.dict(os.environ, {"TEST_BOTTLE_ROOT": str(external)}, clear=True):
+                self.assertEqual(installer.default_bottle(), conf)
+                self.assertEqual(installer.resolve_bottle("Steam"), conf)
+                conf.write_text(installer.MARKER)
+                self.assertEqual(installer.default_bottle(for_restore=True), conf)
+                other = root / "Other/Steam/cxbottle.conf"
+                other.parent.mkdir(parents=True)
+                other.write_text("")
+                with patch.dict(os.environ, {"CX_BOTTLE_PATH": str(other.parent.parent)}):
+                    self.assertEqual(installer.default_bottle(), other)
+                with patch.dict(os.environ, {"CX_BOTTLE_PATH": os.pathsep.join((str(external), str(other.parent.parent)))}):
+                    with self.assertRaisesRegex(SystemExit, "ambiguous bottle name"):
+                        installer.resolve_bottle("Steam")
+                    self.assertEqual(installer.resolve_bottle(str(conf)), conf)
+                    with self.assertRaisesRegex(SystemExit, "several bottles found"):
+                        installer.default_bottle()
+
+    def test_external_symlink_is_not_listed_twice(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            conf = root / "external/Steam/cxbottle.conf"
+            conf.parent.mkdir(parents=True)
+            conf.write_text("")
+            bottles = root / "default"
+            bottles.mkdir()
+            (bottles / "Steam").symlink_to(conf.parent, target_is_directory=True)
+            with patch.object(installer, "BOTTLES", bottles), \
+                 patch.object(installer, "crossover_apps", return_value=[]), \
+                 patch.dict(os.environ, {"CX_BOTTLE_PATH": os.pathsep.join((str(bottles), str(conf.parent.parent)))}, clear=True):
+                self.assertEqual(len(installer.discover_bottles()), 1)
+                self.assertEqual(installer.default_bottle().resolve(), conf.resolve())
+
+    def test_custom_app_bottle_config_and_user_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = root / "CrossOver.app"
+            config = app / "Contents/SharedSupport/CrossOver/etc/CrossOver.conf"
+            config.parent.mkdir(parents=True)
+            config.write_text('[CrossOver]\n"BottlePath" = "' + str(root / "external") + '"\n')
+            conf = root / "external/Steam/cxbottle.conf"
+            conf.parent.mkdir(parents=True)
+            conf.write_text("")
+            bottles = root / "user/Bottles"
+            bottles.mkdir(parents=True)
+            with patch.object(installer, "BOTTLES", bottles), patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(installer.default_bottle(crossover=str(app)), conf)
+                (bottles.parent / "CrossOver.conf").write_text('[CrossOver]\n"BottlePath" = ""\n')
+                self.assertEqual(installer.bottle_roots(str(app)), [bottles])
+
     def test_install_defaults_to_411_lossy(self):
         with patch("sys.argv", ["crossover_fsr4.py", "install", "--no-bottle"]), \
              patch.object(installer, "cmd_install") as install:

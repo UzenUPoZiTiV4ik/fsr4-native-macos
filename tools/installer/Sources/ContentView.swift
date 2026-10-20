@@ -144,6 +144,9 @@ struct ContentView: View {
                     ForEach(model.bottles) { bottle in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(bottle.name)
+                            Text(bottle.conf.deletingLastPathComponent().path)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             Text(status(of: bottle))
                                 .font(.caption)
                                 .foregroundStyle(bottle.installed ? (model.ownsInstall(bottle) ? .green : .orange) : .secondary)
@@ -155,6 +158,8 @@ struct ContentView: View {
                 .labelsHidden()
                 .disabled(model.busy)
             }
+            Button("Choose bottle folder…") { model.chooseBottle() }
+                .disabled(model.busy)
         }
     }
 

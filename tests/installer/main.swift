@@ -74,6 +74,33 @@ do {
           "installed bottle: \(String(describing: games))")
 }
 
+// MARK: External bottle discovery (issue #11)
+
+do {
+    let base = scratch.appendingPathComponent("config/Bottles")
+    let external = scratch.appendingPathComponent("External SSD/My Bottles")
+    let other = scratch.appendingPathComponent("Other Bottles")
+    let app = scratch.appendingPathComponent("Custom CrossOver.app")
+    let userConfig = base.deletingLastPathComponent().appendingPathComponent("CrossOver.conf")
+    write("[CrossOver]\n\"BottlePath\" = \"\(external.path)\"\n",
+          app.appendingPathComponent("Contents/SharedSupport/CrossOver/etc/CrossOver.conf"))
+    write("", external.appendingPathComponent("Steam/cxbottle.conf"))
+    write("", other.appendingPathComponent("Steam/cxbottle.conf"))
+    check(Bottles.searchDirectories(base: base, apps: [app], environment: [:]).map(\.path) == [external.path], "app-config external root")
+    write("[Other]\n\"BottlePath\" = \"/ignored\"\n[CrossOver]\n;\"BottlePath\" = \"/ignored\"\n\"BottlePath\" = \"${TEST_ROOT}\" ; SSD\n", userConfig)
+    check(Bottles.searchDirectories(base: base, apps: [app], environment: ["TEST_ROOT": other.path]).map(\.path) == [other.path], "user overrides app, expands path, ignores comments/other sections")
+    check(Bottles.searchDirectories(base: base, apps: [app], environment: ["CX_BOTTLE_PATH": external.path]).map(\.path) == [external.path], "environment overrides BottlePath")
+    write("[CrossOver]\n\"BottlePath\" = \"\"\n", userConfig)
+    check(Bottles.searchDirectories(base: base, apps: [app], environment: [:]).map(\.path) == [base.path], "empty config restores default root")
+    let roots = Bottles.searchDirectories(base: base, apps: [], environment: ["CX_BOTTLE_PATH": "\(external.path):\(other.path):\(external.path)"])
+    check(roots.map(\.path) == [external.path, other.path], "multiple search roots deduplicated")
+    let list = Bottles.list(in: roots)
+    check(list.count == 2 && Set(list.map(\.id)).count == 2, "same bottle name has distinct config IDs")
+    try! FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+    try! FileManager.default.createSymbolicLink(at: base.appendingPathComponent("Steam"), withDestinationURL: external.appendingPathComponent("Steam"))
+    check(Bottles.list(in: [base, external]).count == 1, "external symlink is listed once")
+}
+
 // MARK: Payload unpack and update
 
 @MainActor
