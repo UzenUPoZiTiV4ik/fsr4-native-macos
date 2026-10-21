@@ -1,0 +1,169 @@
+{
+  "reference": "8x8 analytic integration; unit SDR peak; all RGB channels",
+  "measured_frames_per_scene": 24,
+  "border_excluded": 12,
+  "scenes": {
+    "wire_static": {
+      "before": {
+        "psnr_db": 25.199184382054284,
+        "mae": 0.016730600968003273,
+        "reuse_psnr_db": 25.624579016954353,
+        "temporal_error": 0.011041530407965183,
+        "neural_runs": 16,
+        "reused_frames": 16
+      },
+      "after": {
+        "psnr_db": 26.504199499516055,
+        "mae": 0.013774842023849487,
+        "reuse_psnr_db": 26.995802846087933,
+        "temporal_error": 0.006758601870387793,
+        "neural_runs": 16,
+        "reused_frames": 16
+      }
+    },
+    "wire_pan": {
+      "before": {
+        "psnr_db": 23.813595437035882,
+        "mae": 0.020132388919591904,
+        "reuse_psnr_db": 24.158523045785554,
+        "temporal_error": 0.03341686725616455,
+        "neural_runs": 16,
+        "reused_frames": 16
+      },
+      "after": {
+        "psnr_db": 24.597895560172347,
+        "mae": 0.017835313454270363,
+        "reuse_psnr_db": 24.96629374853702,
+        "temporal_error": 0.02928398922085762,
+        "neural_runs": 16,
+        "reused_frames": 16
+      }
+    },
+    "particles": {
+      "before": {
+        "psnr_db": 56.787421831930445,
+        "mae": 0.0005590853397734463,
+        "reuse_psnr_db": 54.87953860332532,
+        "temporal_error": 0.00011704856297001243,
+        "neural_runs": 16,
+        "reused_frames": 16
+      },
+      "after": {
+        "psnr_db": 56.57250123737057,
+        "mae": 0.0005815790500491858,
+        "reuse_psnr_db": 54.548182411391856,
+        "temporal_error": 0.0001114426413550973,
+        "neural_runs": 16,
+        "reused_frames": 16
+      }
+    },
+    "dark_particles": {
+      "before": {
+        "psnr_db": 61.82939986885934,
+        "mae": 0.0005309103871695697,
+        "reuse_psnr_db": 60.46131975073664,
+        "temporal_error": 6.210629362612963e-05,
+        "neural_runs": 16,
+        "reused_frames": 16
+      },
+      "after": {
+        "psnr_db": 61.18274064369771,
+        "mae": 0.0005604519392363727,
+        "reuse_psnr_db": 59.60541096642974,
+        "temporal_error": 5.660867100232281e-05,
+        "neural_runs": 16,
+        "reused_frames": 16
+      }
+    },
+    "static": {
+      "before": {
+        "psnr_db": 54.69613289391426,
+        "mae": 0.0014741800259798765,
+        "reuse_psnr_db": 54.75840198338119,
+        "temporal_error": 0.00021242795628495514,
+        "neural_runs": 16,
+        "reused_frames": 16
+      },
+      "after": {
+        "psnr_db": 54.43493319239454,
+        "mae": 0.0015284167602658272,
+        "reuse_psnr_db": 54.482815972146916,
+        "temporal_error": 0.000198673180420883,
+        "neural_runs": 16,
+        "reused_frames": 16
+      }
+    },
+    "grain6": {
+      "before": {
+        "psnr_db": 43.562902259093754,
+        "mae": 0.005222553852945566,
+        "reuse_psnr_db": 43.65243621758353,
+        "temporal_error": 0.0008494192734360695,
+        "neural_runs": 16,
+        "reused_frames": 16
+      },
+      "after": {
+        "psnr_db": 43.518200156990034,
+        "mae": 0.00525007164105773,
+        "reuse_psnr_db": 43.6020134411371,
+        "temporal_error": 0.0008973266230896115,
+        "neural_runs": 16,
+        "reused_frames": 16
+      }
+    },
+    "grain15": {
+      "before": {
+        "psnr_db": 36.54061702677715,
+        "mae": 0.011785633862018585,
+        "reuse_psnr_db": 36.61597851462418,
+        "temporal_error": 0.0019885452929884195,
+        "neural_runs": 16,
+        "reused_frames": 16
+      },
+      "after": {
+        "psnr_db": 37.23140443293704,
+        "mae": 0.010814693756401539,
+        "reuse_psnr_db": 37.28799811079074,
+        "temporal_error": 0.002281847642734647,
+        "neural_runs": 16,
+        "reused_frames": 16
+      }
+    },
+    "screen_bar": {
+      "before": {
+        "psnr_db": 33.74923398691318,
+        "mae": 0.002992689609527588,
+        "reuse_psnr_db": 32.71288789661323,
+        "temporal_error": 0.004013036843389273,
+        "neural_runs": 16,
+        "reused_frames": 16
+      },
+      "after": {
+        "psnr_db": 33.63790073798563,
+        "mae": 0.003168977564200759,
+        "reuse_psnr_db": 32.226216573763146,
+        "temporal_error": 0.00425192853435874,
+        "neural_runs": 16,
+        "reused_frames": 16
+      }
+    },
+    "moving_object": {
+      "before": {
+        "psnr_db": 43.64220949750424,
+        "mae": 0.0007507319678552449,
+        "reuse_psnr_db": 42.64740040865614,
+        "temporal_error": 0.00049882399616763,
+        "neural_runs": 16,
+        "reused_frames": 16
+      },
+      "after": {
+        "psnr_db": 44.48712753137575,
+        "mae": 0.0007432579295709729,
+        "reuse_psnr_db": 43.44023604997172,
+        "temporal_error": 0.0004514642932917923,
+        "neural_runs": 16,
+        "reused_frames": 16
+      }
+    }
+  }
+}

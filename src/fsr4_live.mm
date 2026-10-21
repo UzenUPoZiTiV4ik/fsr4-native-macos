@@ -260,7 +260,7 @@ struct Settings {
     bool loaded = false;
     float sharpness = 0.4f;
     bool rcas = true;
-    int profile = 1; // 0 Exact, 1 Lossy, 2 Exact-fast, 3 FSR 4.0.2 model
+    int profile = 1; // 0 Exact, 1 Lossy, 2 Exact-fast, 3 FSR 4.0.2 model, 4 Lossy2
     std::string path;
     time_t mtime = 0;
     long mtimeNs = 0;
@@ -278,10 +278,12 @@ static int profile_from_name(const char *name) {
     if (!strcmp(name, "lossy") || !strcmp(name, "1")) return 1;
     if (!strcmp(name, "exact-fast") || !strcmp(name, "2")) return 2;
     if (!strcmp(name, "fsr4") || !strcmp(name, "3")) return 3;
+    if (!strcmp(name, "lossy2") || !strcmp(name, "4")) return 4;
     return -1;
 }
 static const char *profile_label(int profile) {
-    return profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4" : "exact";
+    return profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
+         : profile == 4 ? "lossy2" : "exact";
 }
 
 static void settings_load_locked() {
@@ -294,7 +296,7 @@ static void settings_load_locked() {
     if (const char *e = getenv("FSR4_PROFILE")) {
         const int profile = profile_from_name(e);
         if (profile >= 0) g_set.profile = profile;
-        else if (*e) flog("FSR4_PROFILE must be exact, exact-fast, lossy or fsr4; using lossy");
+        else if (*e) flog("FSR4_PROFILE must be exact, exact-fast, lossy, lossy2 or fsr4; using lossy");
     }
     const char *sp = getenv("FSR4_SETTINGS");
     if (sp && !strcmp(sp, "none")) return;
@@ -391,7 +393,7 @@ extern "C" const char *fsr4_live_model_version(void) {
 }
 
 extern "C" void fsr4_live_set_profile(int profile) {
-    if (profile < 0 || profile > 3) return;
+    if (profile < 0 || profile > 4) return;
     std::lock_guard<std::mutex> lk(g_set_mu);
     settings_load_locked();
     settings_read_file_locked();

@@ -208,7 +208,9 @@ float3 Fsr411LossyResolve(float3 current, float3 history, float3 minimum, float3
     // current samples. Only a motion boundary needs the tight history limit.
     if (otherMotion)
         result += (clamp(history, minimum, maximum) - history) * historyWeight;
-    bool darkEdge = all(history <= max(current * 0.1f, 0.0f));
+    // Nothing scrolls in where the picture does not move, so the dark-band
+    // guard only applies beside motion (dll-2026-10-15 change 2).
+    bool darkEdge = !atRest && all(history <= max(current * 0.1f, 0.0f));
     return (darkEdge || uncovered) ? current : result;
 }
 """

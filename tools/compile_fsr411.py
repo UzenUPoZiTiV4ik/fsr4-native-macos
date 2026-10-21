@@ -23,6 +23,7 @@ from compile_variant import build_shadow_tree, parse_signature, patch_spv, wgsiz
 from fsr411.portability import apply_portability_fixes
 from fsr411_msl import buffer_integer_constants
 from fsr411.lossy import apply_hlsl_lossy
+from fsr411.lossy2 import apply_source as apply_lossy2_source, load as load_lossy2_weights
 from fsr411.lossy_shaders import apply_lossy_pre, apply_lossy_post, apply_lossy_post_cells, reuse_only_pre
 from fsr411.post_optimization import apply_post_optimization, POST_PIXELS_PER_GROUP
 from fsr411.autoexposure import split_autoexposure
@@ -117,7 +118,8 @@ def external_post_cnb(text: str, tier: int) -> str:
     return text[:start] + replacement + text[end:]
 
 
-FAST_MATH_PROFILES = ("exact-fast", "lossy")
+LOSSY_PROFILES = ("lossy", "lossy2")
+FAST_MATH_PROFILES = ("exact-fast", "lossy", "lossy2")
 
 
 def math_flags(name: str, profile: str, strict: bool = False) -> list[str]:
@@ -149,7 +151,7 @@ def math_flags(name: str, profile: str, strict: bool = False) -> list[str]:
 def input_hash(root: Path, options: dict) -> str:
     digest = hashlib.sha256(json.dumps(options, sort_keys=True).encode())
     paths = [Path(__file__).resolve(), root / "tools/compile_variant.py", root / "tools/fsr411/portability.py", root / "tools/fsr411_msl.py",
-             root / "tools/fsr411/lossy.py", root / "tools/fsr411/lossy_shaders.py",
+             root / "tools/fsr411/lossy.py", root / "tools/fsr411/lossy2.py", root / "tools/fsr411/lossy_shaders.py",
              root / "tools/fsr411/post_optimization.py", root / "tools/fsr411/autoexposure.py"]
     paths.append(root / "tools/fsr411/scratch_alias.py")
     for directory in ("third_party/fsr411/shaders", "third_party/fsr411/ultraperformance", "third_party/fsr4/dx12",
@@ -176,8 +178,13 @@ def build(args) -> dict:
     root = Path(args.root).resolve()
     builddir = Path(args.builddir).resolve()
     tier = int(args.res)
-    if args.profile == "lossy":
+    if args.profile in LOSSY_PROFILES:
         args.external_post_cnb = 1
+    lossy2_weights = None
+    if args.profile == "lossy2" and not args.ultra_performance:
+        # Upstream lossy2 has no trained Ultra Performance weights: that preset
+        # keeps the lossy network unchanged.
+        lossy2_weights = load_lossy2_weights(root, getattr(args, "lossy2_weights", None))
     alias_post_cnb = bool(getattr(args, "post_cnb_alias", 0))
     if alias_post_cnb and not args.external_post_cnb:
         raise ValueError("POST-CNB alias requires the external POST-CNB pipeline")
@@ -188,6 +195,8 @@ def build(args) -> dict:
                "colorspace": args.colorspace, "auto_exposure": args.auto_exposure,
                "optimize": args.optimize, "ultra_performance": args.ultra_performance,
                "external_post_cnb": args.external_post_cnb, "profile": args.profile}
+    if lossy2_weights:
+        options["lossy2_weights"] = lossy2_weights.sha256
     if strict:
         options["strict_math"] = 1
     if alias_post_cnb:
@@ -195,7 +204,7 @@ def build(args) -> dict:
     key = (f"fsr411_{tier}_di{args.depth_inverted}_lm{args.low_res_mv}"
            f"_jm{args.jittered_mv}_cs{args.colorspace}_ae{args.auto_exposure}_o{args.optimize}"
            + ("_up1" if args.ultra_performance else "")
-           + {"lossy": "_lossy", "exact-fast": "_fast"}.get(args.profile, "")
+           + {"lossy": "_lossy", "lossy2": "_lossy2", "exact-fast": "_fast"}.get(args.profile, "")
            + ("_pc1" if args.external_post_cnb else "")
            + ("_sm1" if strict else "") + ("_ca1" if alias_post_cnb else ""))
     output = builddir / key
@@ -221,13 +230,16 @@ def build(args) -> dict:
         for path in directory.glob("*"):
             if path.suffix in (".h", ".hlsl", ".hlsli"):
                 source = path.read_text()
-                if args.profile == "lossy" and (match := re.match(r"reimpl_pass(\d+)(?:_\d+)?\.hlsl$", path.name)):
-                    source = apply_hlsl_lossy(source, int(match[1]), "ultraperformance" if args.ultra_performance else "normal")
+                if args.profile in LOSSY_PROFILES and (match := re.match(r"reimpl_pass(\d+)(?:_\d+)?\.hlsl$", path.name)):
+                    logical = int(match[1])
+                    source = apply_hlsl_lossy(source, logical, "ultraperformance" if args.ultra_performance else "normal")
+                    if lossy2_weights and logical in lossy2_weights.layers:
+                        source = apply_lossy2_source(source, logical, lossy2_weights.layers[logical])
                 if path.name.startswith("pre_rev_") and path.suffix == ".hlsl" and args.optimize:
                     source = quad_routing(source, tier)
                 if path.name.startswith("post_rev_") and path.suffix == ".hlsl" and args.external_post_cnb:
                     source = external_post_cnb(source, tier)
-                if args.profile == "lossy" and path.suffix == ".hlsl":
+                if args.profile in LOSSY_PROFILES and path.suffix == ".hlsl":
                     if path.name.startswith("pre_rev_"):
                         source = apply_lossy_pre(source, tier)
                     elif path.name.startswith("post_rev_"):
@@ -235,7 +247,7 @@ def build(args) -> dict:
                 if (path.name.startswith("post_rev_") and path.suffix == ".hlsl"
                         and args.external_post_cnb and args.optimize):
                     source = apply_post_optimization(source)
-                    if args.profile == "lossy":
+                    if args.profile in LOSSY_PROFILES:
                         source = apply_lossy_post_cells(source)
                 if alias_post_cnb and path.name.startswith("post_rev_") and path.suffix == ".hlsl":
                     source = alias_post_cnb_cache(source, tier)
@@ -271,7 +283,7 @@ def build(args) -> dict:
                {"name": "rcas", "index": 27, "source": "rcas.hlsl"}]
     # Ultra Performance never reuses inference. Keep optimize=0 as the
     # original shared PRE for numerical and timing comparisons.
-    separate_reuse_pre = args.profile == "lossy" and args.optimize and not args.ultra_performance
+    separate_reuse_pre = args.profile in LOSSY_PROFILES and args.optimize and not args.ultra_performance
     if separate_reuse_pre:
         (hlsl / "pre_reuse.hlsl").write_text(reuse_only_pre((hlsl / stages[0]["source"]).read_text()))
         stages.append({"name": "pre_reuse", "index": -1, "source": "pre_reuse.hlsl"})
@@ -414,7 +426,8 @@ def main():
     parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--builddir", default="build")
     parser.add_argument("--res", type=int, choices=TIERS, default=1080)
-    parser.add_argument("--profile", choices=("exact", "exact-fast", "lossy"), default="exact")
+    parser.add_argument("--profile", choices=("exact", "exact-fast", "lossy", "lossy2"), default="exact")
+    parser.add_argument("--lossy2-weights", type=Path, help="weights_lossy2.npz (default: FSR4_LOSSY2_WEIGHTS or build/fsr411_lossy2)")
     for flag, default in (("depth-inverted", 0), ("low-res-mv", 1), ("jittered-mv", 0),
                           ("auto-exposure", 0), ("optimize", 0), ("ultra-performance", 0),
                           ("external-post-cnb", 0), ("strict-math", 0), ("post-cnb-alias", 0)):

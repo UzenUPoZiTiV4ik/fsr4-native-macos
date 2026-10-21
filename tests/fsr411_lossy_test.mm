@@ -305,6 +305,7 @@ struct Fixture {
             {"confident network verdict", .41f,.4f,.2f,.6f,1.f,1,.41f},
             {"uncovered surface uses current", .55f,.2f,.1f,.7f,0.f,4,.55f},
             {"invalid dark edge uses current", .5f,.01f,.1f,.7f,.5f,0,.5f},
+            {"dark edge at rest keeps history", .5f,.01f,.1f,.7f,.5f,1,.1325f},
         };
         std::vector<Input> input;
         for(const auto &e:examples)

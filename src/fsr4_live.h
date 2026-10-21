@@ -116,7 +116,8 @@ void fsr4_live_set_inactive(const char *reason);
 void fsr4_live_get_sharpness(float *sharpness, int *rcas);
 void fsr4_live_set_sharpness(float sharpness, int rcas);
 // Upscaler profile: 0 = Exact, 1 = Lossy (default), 2 = Exact-fast
-// (exact-fast in FSR4_PROFILE/panel.conf), 3 = the FSR 4.0.2 model ("fsr4").
+// (exact-fast in FSR4_PROFILE/panel.conf), 3 = the FSR 4.0.2 model ("fsr4"),
+// 4 = Lossy2 ("lossy2", lossy with the six trained layers).
 // FSR4_PROFILE sets the initial preference; panel.conf overrides it unless
 // FSR4_SETTINGS=none. The 4.1.1 bridge includes 0-2 in its session/history
 // identity; switching to or from 3 changes the model and resets history.

@@ -32,6 +32,15 @@ LOSSY_FOLD_WORDS = {1: 4, 5: 18, 10: 18, 12: 20}
 PUBLICATION_LOCK = ".fsr411_native.lock"
 
 
+def _load_tool(filename, name):
+    """Load a sibling fsr411 helper without relying on the caller's sys.path."""
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("fsr411") / filename)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _write_changed_atomic(path, data):
     """Keep a cached file's inode/mtime; publish changed bytes in one rename."""
     try:
@@ -118,8 +127,8 @@ def tensor_at(tier, level, base, channels):
     return [base + row + 16, 16, row, width, height, channels, bank if channels > 16 else 0]
 
 
-def source_identity(path):
-    original = path.read_text()
+def source_identity(path, text=None):
+    original = path.read_text() if text is None else text
     return original, {"source": path.name, "source_sha256": hashlib.sha256(original.encode()).hexdigest()}
 
 
@@ -179,8 +188,8 @@ def parse_post_cnb(path, tables_path, tier):
     return result
 
 
-def parse_cnb(path, initializer):
-    original = path.read_text()
+def parse_cnb(path, initializer, text=None):
+    original, result = source_identity(path, text)
     text = re.sub(r"//[^\n]*|/\*.*?\*/", "", original, flags=re.S)
     w1, w2, w3 = table(text, "W1", 36), table(text, "W2", 8), table(text, "W3", 8)
     offsets = require(r"static const uint2 OFF\[9\]\s*=\s*\{(.*?)\};", text, "3x3 offsets", re.S)[1]
@@ -308,8 +317,8 @@ FNB_CONTRACTS = {
 }
 
 
-def parse_fnb(path, initializer, tier, logical, ultraperformance=False):
-    original, result = source_identity(path)
+def parse_fnb(path, initializer, tier, logical, ultraperformance=False, text=None):
+    original, result = source_identity(path, text)
     text = re.sub(r"//[^\n]*|/\*.*?\*/", "", original, flags=re.S)
     spec = dict(FNB_CONTRACTS[logical])
     if ultraperformance:
@@ -415,16 +424,24 @@ def parse_fnb(path, initializer, tier, logical, ultraperformance=False):
     return result
 
 
-def encode_model(source_dir, initializer_path, tier, output_dir, preset="normal", ultraperformance_dir=None, profile="exact"):
+def encode_model(source_dir, initializer_path, tier, output_dir, preset="normal", ultraperformance_dir=None, profile="exact",
+                 lossy2_weights=None):
     if preset not in ("normal", "ultraperformance"):
         raise ValueError("expected normal or ultraperformance preset")
-    if profile not in ("exact", "lossy"):
-        raise ValueError("expected exact or lossy profile")
+    if profile not in ("exact", "lossy", "lossy2"):
+        raise ValueError("expected exact, lossy or lossy2 profile")
     ultra = preset == "ultraperformance"
     expected_hash = UP_INITIALIZER_SHA256 if ultra else INITIALIZER_SHA256
     initializer = initializer_path.read_bytes()
     if len(initializer) != 131072 or hashlib.sha256(initializer).hexdigest() != expected_hash:
         raise ValueError("expected the verified 131072-byte AMD 4.1.1 " + preset + " initializer")
+    trained, lossy2_module = None, None
+    if profile == "lossy2" and not ultra:
+        # lossy2 replaces six layers' weights and their biases; Ultra
+        # Performance has no trained weights and keeps the lossy network.
+        lossy2_module = _load_tool("lossy2.py", "fsr411_native_lossy2")
+        trained = lossy2_module.load(Path(__file__).resolve().parents[1], lossy2_weights)
+        initializer = lossy2_module.patched_initializer(initializer, trained.layers)
     ultraperformance_dir = ultraperformance_dir or source_dir.parent / "ultraperformance"
     dirname = "reimpl411" if tier == 1080 else "reimpl" + str(tier)
     suffix = "" if tier == 1080 else "_" + str(tier)
@@ -546,10 +563,15 @@ def encode_model(source_dir, initializer_path, tier, output_dir, preset="normal"
         # baked tables would combine two different models.
         stage_dir = ultraperformance_dir if ultra and logical in (1, 2, 3, 4, 5, 10, 11, 12) else source_dir
         path = stage_dir / dirname / ("reimpl_pass" + str(logical) + suffix + ".hlsl")
-        if logical in (1, 2, 12): model = parse_cnb(path, initializer)
+        text = None
+        if trained and logical in trained.layers:
+            # The native blob is packed from these tables, so the same
+            # independent mapping feeds both the generated and native paths.
+            text = lossy2_module.apply_source(path.read_text(), logical, trained.layers[logical], bias_literals=False)
+        if logical in (1, 2, 12): model = parse_cnb(path, initializer, text=text)
         elif logical in (3, 6): model = parse_ds(path, initializer, tier, logical, ultra)
-        else: model = parse_fnb(path, initializer, tier, logical, ultra)
-        if profile == "lossy" and logical in lossy_rounding:
+        else: model = parse_fnb(path, initializer, tier, logical, ultra, text=text)
+        if profile in ("lossy", "lossy2") and logical in lossy_rounding:
             model["q"][0][3] |= 4
             model["q"][1][3] |= 4
             model["lossy_transform"] = {"intermediate_rounding": "nearest_ties_toward_positive"}
@@ -574,11 +596,19 @@ def encode_model(source_dir, initializer_path, tier, output_dir, preset="normal"
                 "reference_source": "src/fsr411_reference.metal", "simd_source": "src/fsr411_simd.metal",
                 "defines": {"FSR411_MAXW": tier * 16 // 9 // 2, "FSR411_MAXH": tier // 2},
                 "dynamic_sizes": "Replace input/output widths and heights from tensor constant slots. Preserve physical pitches. Keep graph border stages. For post_cnb, relocate output.offset to aligned end of original scratch and dispatch before the split imported POST."}
-    if profile == "lossy":
+    if profile in ("lossy", "lossy2"):
         manifest["lossy_rules"] = {"rounding_passes": list(lossy_rounding),
-                                   "fold_drop_words_per_channel": {} if ultra else LOSSY_FOLD_WORDS,
+                                   "fold_drop_words_per_channel": {}
+                                   if ultra or profile == "lossy2" else LOSSY_FOLD_WORDS,
                                    "tails": "nearest_even_unchanged", "post_cnb": "exact",
                                    "folding_speed_note": "Dense MPP still executes zero MACs; folding alone does not reduce its work."}
+    if profile == "lossy2":
+        manifest["lossy2_rules"] = {
+            "trained_passes": sorted(trained.layers) if trained else [],
+            "weights_sha256": trained.sha256 if trained else None,
+            "biases": "literal tables in the generated shaders, patched initializer for the native blob",
+            "conv3x3_folding": "not applied: the trained tables are final",
+            "ultra_performance": "unchanged lossy network" if not ultra else "this manifest"}
     return _publish_native(output_dir, manifest, blob, param_blob)
 
 
@@ -588,13 +618,15 @@ def main():
     parser.add_argument("--source-dir", type=Path, default=root / "third_party/fsr411/shaders")
     parser.add_argument("--initializer", type=Path)
     parser.add_argument("--preset", choices=("normal", "ultraperformance"), default="normal")
-    parser.add_argument("--profile", choices=("exact", "lossy"), default="exact")
+    parser.add_argument("--profile", choices=("exact", "lossy", "lossy2"), default="exact")
+    parser.add_argument("--lossy2-weights", type=Path, help="weights_lossy2.npz (default: FSR4_LOSSY2_WEIGHTS or build/fsr411_lossy2)")
     parser.add_argument("--ultraperformance-dir", type=Path, default=root / "third_party/fsr411/ultraperformance")
     parser.add_argument("--tier", type=int, choices=(1080, 2160, 4320), default=1080)
     parser.add_argument("--outdir", type=Path, required=True)
     args = parser.parse_args()
     initializer = args.initializer or root / ("third_party/fsr411/initializers-ultraperformance.bin" if args.preset == "ultraperformance" else "third_party/fsr411/initializers.bin")
-    print(encode_model(args.source_dir, initializer, args.tier, args.outdir, args.preset, args.ultraperformance_dir, args.profile))
+    print(encode_model(args.source_dir, initializer, args.tier, args.outdir, args.preset, args.ultraperformance_dir,
+                       args.profile, args.lossy2_weights))
 
 
 if __name__ == "__main__":

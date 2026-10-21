@@ -31,21 +31,24 @@ inline const char *kernels_label(Kernels k) {
 // Exact: original coefficients, IEEE PRE/POST math, inference every frame.
 // ExactFast: Exact's network with reciprocal division and fast exp/log in
 // PRE/POST. Lossy: folded coefficients, half-up rounding and inference reuse.
-enum class Profile { Exact, Lossy, ExactFast };
+// Lossy2: Lossy's network with the six layers trained in upstream dll-2026-10-19.
+enum class Profile { Exact, Lossy, ExactFast, Lossy2 };
+inline bool profile_is_lossy(Profile p) { return p==Profile::Lossy || p==Profile::Lossy2; }
 inline const char *profile_name(Profile p) {
-    return p==Profile::Lossy?"lossy":p==Profile::ExactFast?"exact-fast":"exact";
+    return p==Profile::Lossy?"lossy":p==Profile::Lossy2?"lossy2":p==Profile::ExactFast?"exact-fast":"exact";
 }
 inline bool parse_profile(const std::string &name, Profile &p) {
     if(name=="exact") p=Profile::Exact;
     else if(name=="exact-fast") p=Profile::ExactFast;
     else if(name=="lossy") p=Profile::Lossy;
+    else if(name=="lossy2") p=Profile::Lossy2;
     else return false;
     return true;
 }
 // Live settings encoding (panel.conf, fsr4_live_get_profile): 0/1 keep their
 // original meaning so older settings files still load.
-inline Profile profile_from_int(int v) { return v==1?Profile::Lossy:v==2?Profile::ExactFast:Profile::Exact; }
-inline int profile_to_int(Profile p) { return p==Profile::Lossy?1:p==Profile::ExactFast?2:0; }
+inline Profile profile_from_int(int v) { return v==1?Profile::Lossy:v==2?Profile::ExactFast:v==4?Profile::Lossy2:Profile::Exact; }
+inline int profile_to_int(Profile p) { return p==Profile::Lossy?1:p==Profile::ExactFast?2:p==Profile::Lossy2?4:0; }
 // Synchronous, opt-in CLI instrumentation. A profiler may replace the classic
 // compute encoder to attach stage-boundary counters. Ordinary/live encodes do
 // not install one, retain their single encoder, and record no counter samples.
@@ -339,7 +342,7 @@ public:
         slot->snapshot = options.snapshot;
         slot->stageProfiler = options.stageProfiler;
         const bool rcas = options.rcas && options.sharpness > 0;
-        const bool lossy = options.profile==Profile::Lossy;
+        const bool lossy = profile_is_lossy(options.profile);
         // The supplied vectors describe one frame of motion. Never apply
         // them directly to a cache older than one frame (unusual jitter can
         // have consecutive negatives). Refresh after every reused frame.
@@ -632,7 +635,7 @@ private:
         }
         if (!v.autoExposure) v.autoExposure=texture(MTLPixelFormatR32Float,2,1);
         bool ok = v.scratch && v.history && v.reprojected && v.recurrent && v.autoExposure;
-        if(o.profile==Profile::Lossy) {
+        if(profile_is_lossy(o.profile)) {
             const size_t blocks=size_t(p.alignedUW/4u)*(p.alignedUH/4u);
             if(!v.lossyMotion || v.lossyMotion.length!=blocks*16u)
                 v.lossyMotion=[device_ newBufferWithLength:blocks*16u options:MTLResourceStorageModePrivate];
@@ -725,10 +728,10 @@ private:
     bool load_native(Session &s, bool compile, Kernels kind, std::string &error) {
         const bool useMpp=kind==Kernels::Mpp, useSimd=kind==Kernels::Simd;
         const std::string dir=buildDir_+"/fsr411_native_"+std::to_string(s.tier)+(s.ultraPerformance?"_ultraperformance":"")
-            +(s.profile==Profile::Lossy?"_lossy":"");
+            +(s.profile==Profile::Lossy?"_lossy":s.profile==Profile::Lossy2?"_lossy2":"");
         // ExactFast differs only in PRE/POST math and shares Exact's network.
         if (compile && !run(@[@"python3",ns(root_+"/tools/gen_fsr411_native.py"),@"--tier",ns(std::to_string(s.tier)),
-            @"--preset",s.ultraPerformance?@"ultraperformance":@"normal",@"--profile",s.profile==Profile::Lossy?@"lossy":@"exact",
+            @"--preset",s.ultraPerformance?@"ultraperformance":@"normal",@"--profile",s.profile==Profile::Lossy?@"lossy":s.profile==Profile::Lossy2?@"lossy2":@"exact",
             @"--outdir",ns(dir)],error)) return false;
         auto manifest=json(dir+"/fsr411_native_manifest.json",error);
         if (!manifest || [manifest[@"abi_version"] unsignedIntValue]!=kAbiVersion
@@ -839,11 +842,11 @@ private:
     }
     Session *ensure_session(int tier, const Fsr4InputPrepared &p, const Options &o, Kernels kind, std::string &error) {
         const bool portable=kind!=Kernels::Reference;
-        const bool externalPost=portable || o.profile==Profile::Lossy;
+        const bool externalPost=portable || profile_is_lossy(o.profile);
         const std::string legacyKey="fsr411_"+std::to_string(tier)+"_di"+std::to_string(p.depthReversed)
             +"_lm"+std::to_string(p.lowResMV)+"_jm"+std::to_string(p.jitteredMV)+"_cs"+std::to_string(o.colorspace)
             +"_ae"+std::to_string(p.autoExposure)+"_o"+std::to_string(o.optimize)
-            +(o.ultraPerformance?"_up1":"")+(o.profile==Profile::Lossy?"_lossy":o.profile==Profile::ExactFast?"_fast":"")
+            +(o.ultraPerformance?"_up1":"")+(o.profile==Profile::Lossy?"_lossy":o.profile==Profile::Lossy2?"_lossy2":o.profile==Profile::ExactFast?"_fast":"")
             +(externalPost?"_pc1":"")+(o.strictMath&&o.profile!=Profile::Exact?"_sm1":"");
         // Keep reference captures and existing no-compile bundles on their
         // appended-cache ABI. A separate key prevents mixing POST addresses.

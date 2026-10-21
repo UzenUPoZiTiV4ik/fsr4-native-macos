@@ -52,8 +52,8 @@ PANEL_KEY = "FSR4_PANEL"
 VERSION_KEY = "FSR4_VERSION"
 PROFILE_KEY = "FSR4_PROFILE"
 METALFX_KEY = "D3DM_ENABLE_METALFX"
-# "fsr4": the FSR 4.0.2 model under a 4.1.1 install (FSR4_PROFILE only, not in the panel).
-PROFILES = ("exact", "exact-fast", "lossy", "fsr4")
+# "fsr4" is the panel's fourth mode: the FSR 4.0.2 model under a 4.1.1 install.
+PROFILES = ("exact", "exact-fast", "lossy", "lossy2", "fsr4")
 OURS = (KEY, LOG_KEY, ROOT_KEY, REPLACE_KEY, PANEL_KEY, VERSION_KEY, PROFILE_KEY)
 
 
@@ -463,7 +463,7 @@ def build_reference(env):
         version_options = ["--fsr-version", version]
         profile = env.get(PROFILE_KEY, "lossy")
         if profile not in PROFILES:
-            raise SystemExit("FSR4_PROFILE must be exact, exact-fast, lossy or fsr4")
+            raise SystemExit("FSR4_PROFILE must be exact, exact-fast, lossy, lossy2 or fsr4")
     else:
         if model == "int8":
             model = "i8mpp"  # historic 4.0.2 live alias
@@ -499,7 +499,10 @@ def build_reference(env):
 def cmd_install(args):
     if (args.profile == "fsr4" or args.fsr_version == "4.0.2") and not FSR402_WEIGHTS.is_file():
         raise SystemExit("this copy has no FSR 4.0.2 weights (FSR 4.1-only release); "
-                         "use --profile exact-fast or lossy")
+                         "use --profile exact-fast, lossy or lossy2")
+    if args.profile == "lossy2" and not (ROOT / "build/fsr411_lossy2/weights_lossy2.npz").is_file():
+        raise SystemExit("lossy2 needs its trained weights: run python3 "
+                         "tools/fsr411/fetch_lossy2_weights.py first")
     if args.no_bottle:
         bottle = None
     else:
@@ -581,8 +584,8 @@ def main():
     i.add_argument("--fsr-version", choices=("4.0.2", "4.1.1"), default="4.1.1",
                    help="FSR model version for the live bridge and installation test (default: 4.1.1)")
     i.add_argument("--profile", choices=PROFILES, default="lossy",
-                   help="initial panel mode: FSR 4.1.1 exact/exact-fast/lossy, or fsr4 for the "
-                        "FSR 4.0.2 model (default: lossy)")
+                   help="initial panel mode: FSR 4.1.1 exact/exact-fast/lossy/lossy2, or fsr4 for the "
+                        "FSR 4.0.2 model (lossy2 also needs the fetched weights; default: lossy)")
     i.add_argument("--panel", action="store_true",
                    help="also set FSR4_PANEL=1 in the bottle (status/sharpness panel)")
     i.set_defaults(func=cmd_install)

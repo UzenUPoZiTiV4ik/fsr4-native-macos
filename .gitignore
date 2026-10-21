@@ -9,3 +9,4 @@ build_prec/
 1080
 __pycache__/
 *.pyc
+Scanned_cropped.*

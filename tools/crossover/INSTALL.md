@@ -74,6 +74,9 @@ Start the game and select **DLSS** in its graphics settings. The **FSR 4**
 panel opens next to the game:
 
 - **FSR 4.1**: the full network every frame, best quality.
+- **FSR 4.1 Lite 2**: Lite with six trained layers, shown once
+  `make lossy2-weights` has fetched its weights; closer to FSR 4 on thin
+  detail, a little slower to follow brightness changes.
 - **FSR 4.1 Lite**: reuses network output on suitable frames, about 30%
   less GPU time.
 - **Sharpness** and **RCAS** apply immediately.
@@ -83,7 +86,8 @@ inactive, the reason is shown in the panel and in `dist/crossover/hook.log`.
 The panel can be reopened with `open "dist/crossover/FSR4 Panel.app"`.
 
 Without the panel: drop `--panel`, and pick the mode with `--profile
-exact-fast` (FSR 4.1) or `--profile lossy` (FSR 4.1 Lite, default).
+exact-fast` (FSR 4.1), `--profile lossy` (FSR 4.1 Lite, default) or
+`--profile lossy2` (Lite 2, after `make lossy2-weights`).
 
 ## Update or remove
 

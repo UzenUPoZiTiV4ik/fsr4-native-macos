@@ -1,6 +1,18 @@
 # FSR4-Metal — project state & handoff
 
-Last updated: **2026-10-14**, optimization of **FSR 4.1.1.2740 INT8**.
+Last updated: **2026-10-19**, optimization of **FSR 4.1.1.2740 INT8**.
+
+2026-10-19 (Lite 2): new opt-in `lossy2` profile ports release
+`dll-2026-10-19`: the Lite network with trained integer weights in passes 1, 2,
+4, 5, 10 and 12, everything else unchanged. The weights are not vendored (the
+upstream archive is GPL, this port is MIT): `make lossy2-weights` fetches one
+pinned file into `build/`. The native manifest and the generated HLSL apply the
+same mapping; on `testcase_quality_720to1080` both backends give byte-identical
+frames. Nine analytic scenes: thin wires +0.8 to +1.3 dB, just-uncovered
++0.8 dB, strong grain +0.7 dB, stills -0.3 dB, dark particles -0.65 dB; speed
+within noise. Also ports the at-rest dark-band guard from `dll-2026-10-15`.
+Ultra Performance keeps the plain Lite network (no trained UP weights).
+See [FSR411_LOSSY2.md](FSR411_LOSSY2.md).
 
 2026-10-14 (Lite quality): selected upstream history rules preserve thin
 detail at rest/in uniform motion and update changed effects without motion

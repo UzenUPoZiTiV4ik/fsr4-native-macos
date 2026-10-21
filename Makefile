@@ -37,6 +37,7 @@ test-settings:
 	build/tests/fsr4_settings_test default
 	build/tests/fsr4_settings_test environment
 	build/tests/fsr4_settings_test environment-fast
+	build/tests/fsr4_settings_test environment-lossy2
 	build/tests/fsr4_settings_test environment-fsr4
 	build/tests/fsr4_settings_test model
 	build/tests/fsr4_settings_test file
@@ -234,6 +235,8 @@ $(BINDIR)/bilin: src/bilin.cpp src/pngio.h
 
 $(BINDIR)/bin2png: src/bin2png.cpp src/pngio.h
 	$(CXX) $(CXXFLAGS) $(ZLIB) -o $@ src/bin2png.cpp
+lossy2-weights:
+	python3 tools/fsr411/fetch_lossy2_weights.py
 
 clean:
 	rm -f $(BINDIR)/fsr4mac $(BINDIR)/gen_testcase $(BINDIR)/compare $(BINDIR)/bilin $(BINDIR)/bin2png
@@ -253,7 +256,7 @@ test-installer:
 	python3 tests/installer/check_strings.py
 
 .PHONY: installer test-installer
-.PHONY: all clean test test-gpu test-input test-settings test-fsr411-math test-fsr411-layout build-fsr411-tests test-fsr411-gpu test-fsr411-native test-fsr411-runtime test-fsr411-scalar test-fsr411-lossy test-fsr411-autoexposure test-fsr411-cadence test-fsr411-live test-fsr411-cli
+.PHONY: all clean lossy2-weights test test-gpu test-input test-settings test-fsr411-math test-fsr411-layout build-fsr411-tests test-fsr411-gpu test-fsr411-native test-fsr411-runtime test-fsr411-scalar test-fsr411-lossy test-fsr411-autoexposure test-fsr411-cadence test-fsr411-live test-fsr411-cli
 
 # Run the signed-chroma regression before the remaining sequential GPU suites.
 test-fsr411-gpu: test-fsr411-chroma

@@ -104,9 +104,9 @@ readback are outside the GPU duration.
 
 ## CrossOver profile control and checks
 
-The installer accepts `--fsr-version 4.1.1 --profile exact|exact-fast|lossy`. Its smoke
+The installer accepts `--fsr-version 4.1.1 --profile exact|exact-fast|lossy|lossy2`. Its smoke
 reference is generated from the same model/profile; a stale 4.0.2 output
-cannot satisfy the check. The panel writes `profile=exact`, `profile=exact-fast` or `profile=lossy`
+cannot satisfy the check. The panel writes `profile=exact`, `profile=exact-fast`, `profile=lossy` or `profile=lossy2`
 alongside existing sharpness and RCAS preferences. The live encoder polls
 these settings; `FSR4_SETTINGS=none` disables file overrides. `FSR4_PROFILE`
 sets the initial profile, with Lossy as the 4.1.1 default. Profile switches

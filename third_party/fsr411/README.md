@@ -144,3 +144,16 @@ increased error on the local moving-object scene and was excluded.
 Source HLSL, initializers and native network parameters stay unchanged.
 See [quality measurements](../../docs/FSR411_QUALITY_UPDATE.md) for gains,
 remaining tradeoffs, performance conditions and reproducible checks.
+
+### Lossy2 profile, 2026-10-19
+
+`lossy2` is the lossy network with trained integer weights in passes 1, 2, 4, 5,
+10 and 12 (`research/lossy2` of the pinned upstream revision). Those weights are
+not vendored here: the upstream archive is GPL-2.0-or-later while this port is
+MIT. `tools/fsr411/fetch_lossy2_weights.py` (or `make lossy2-weights`) fetches
+one pinned file into `build/fsr411_lossy2/`, and `tools/fsr411/lossy2.py` maps it
+onto AMD's MIT literal tables. The trained tables are final, so the October 7
+folding is not applied to them; rounding and the frame rules stay lossy's.
+Ultra Performance has no trained weights and keeps the lossy network. The
+at-rest dark-band guard follows `dll-2026-10-15` change 2. Measurements:
+[docs/FSR411_LOSSY2.md](../../docs/FSR411_LOSSY2.md).

@@ -364,7 +364,7 @@ void write_preview(const std::string &path, const std::vector<uint8_t> &raw,
 void usage() {
     std::fprintf(stderr,
         "usage: fsr4mac --fsr-version 4.1.1 <testcase_dir> <out_dir>\n"
-        "       [--auto|--reference|--scalar|--simd|--i8mpp] [--profile exact|exact-fast|lossy] [--dump-passes|--dump-state]\n"
+        "       [--auto|--reference|--scalar|--simd|--i8mpp] [--profile exact|exact-fast|lossy|lossy2] [--dump-passes|--dump-state]\n"
         "       [--capture-stages pre,pass1,...,post] [--bench N] [--profile-stages]\n"
         "       [--builddir dir] [--root dir] [--tier 1080|2160|4320] [--optimize 0|1] [--no-compile]\n"
         "       fsr4mac --fsr-version 4.1.1 --backend-info [auto|reference|scalar|simd|i8mpp]\n"
@@ -374,6 +374,7 @@ void usage() {
         "Use an ordinary --bench run for fused production timing; stage counters add overhead.\n"
         "FSR 4.1.1 and the lossy profile are the defaults; use --profile exact for exact-reference validation.\n"
         "exact-fast keeps Exact's network but uses approximate division and exp/log in PRE/POST.\n"
+        "lossy2 is lossy with six trained layers (upstream dll-2026-10-19); it needs the fetched weights.\n"
         "Use --fsr-version 4.0.2 to select the legacy model and its FP16 backend.\n"
         "GPU timings cover the full frame command buffer; diagnostic copies are labelled separately.\n");
 }
@@ -449,7 +450,7 @@ int fsr411_main(int argc, char **argv) {
         if (bench && (dumpState || !options.captureStages.empty()))
             fail("diagnostic snapshots change GPU work; use --bench separately from dumps");
         if(!fsr411::parse_profile(profile,options.profile))
-            fail("--profile / FSR4_PROFILE must be exact, exact-fast or lossy");
+            fail("--profile / FSR4_PROFILE must be exact, exact-fast, lossy or lossy2");
         id<MTLDevice> device=MTLCreateSystemDefaultDevice();
         if(!device) fail("no Metal device");
         if(info) { if(!positional.empty()) fail("--backend-info takes no testcase paths");

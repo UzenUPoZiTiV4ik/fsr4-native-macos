@@ -56,8 +56,8 @@ def load_plan(path):
         if name in names:
             raise ValueError("duplicate variant: " + name)
         names.add(name)
-        if variant.get("profile") not in ("exact", "exact-fast", "lossy"):
-            raise ValueError(name + ": profile must be exact, exact-fast or lossy")
+        if variant.get("profile") not in ("exact", "exact-fast", "lossy", "lossy2"):
+            raise ValueError(name + ": profile must be exact, exact-fast, lossy or lossy2")
         for key in ("root", "builddir", "binary", "input"):
             value = variant.get(key, plan.get(key) if key in ("binary", "input") else None)
             if not isinstance(value, str) or not value:

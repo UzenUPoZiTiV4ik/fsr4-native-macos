@@ -45,6 +45,8 @@ int main(int argc,char **argv) {try {
         setenv("FSR4_VERSION","4.0.2",1);check(!std::strcmp(fsr4_live_model_version(),"4.0.2"),"FSR4_VERSION=4.0.2 was not honoured");
     } else if(!std::strcmp(argv[1],"environment-fsr4")) {
         setenv("FSR4_PROFILE","fsr4",1);check(profile()==3,"environment FSR 4.0 preference was ignored");
+    } else if(!std::strcmp(argv[1],"environment-lossy2")) {
+        setenv("FSR4_PROFILE","lossy2",1);check(profile()==4,"environment Lite 2 preference was ignored");
     } else if(!std::strcmp(argv[1],"file")) {
         char temporary[]="/tmp/fsr4-settings-XXXXXX";
         check(mkdtemp(temporary),"cannot create fixture directory");
@@ -73,6 +75,9 @@ int main(int argc,char **argv) {try {
         write(path,"sharpness=0.300\nrcas=1\nprofile=fsr4\n");times[1].tv_nsec=4000000;
         check(!utimensat(AT_FDCWD,path.c_str(),times,0),"cannot update fixture timestamp");poll();
         check(profile()==3,"saved FSR 4.0 mode was not loaded");
+        write(path,"sharpness=0.300\nrcas=1\nprofile=lossy2\n");times[1].tv_nsec=5000000;
+        check(!utimensat(AT_FDCWD,path.c_str(),times,0),"cannot update fixture timestamp");poll();
+        check(profile()==4,"saved Lite 2 profile was not loaded");
         fsr4_live_set_profile(1);
         FILE *saved=std::fopen(path.c_str(),"r");check(saved,"cannot reopen fixture");
         char text[128]={};std::fread(text,1,sizeof text-1,saved);std::fclose(saved);

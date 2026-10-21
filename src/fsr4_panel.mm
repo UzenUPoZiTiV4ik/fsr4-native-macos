@@ -81,7 +81,8 @@ void fsr4_panel_publish(void) {
             st.rw, st.rh, st.uw, st.uh, st.uwA, st.uhA, st.frameMs,
             (unsigned long long)st.encodes, (unsigned long long)st.replaced, (unsigned long long)st.stubs,
             st.sharpness, version,
-            profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4" : "exact");
+            profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
+                         : profile == 4 ? "lossy2" : "exact");
     fclose(f);
     rename(tmp.c_str(), path.c_str());
 }

@@ -44,25 +44,51 @@ static std::map<std::string, std::string> read_kv(const std::string &path) {
     return kv;
 }
 
-// Profile values match fsr4_live: 0 Exact, 1 Lossy, 2 Exact Fast, 3 FSR 4.0.2.
+// Profile values match fsr4_live: 0 Exact, 1 Lossy, 2 Exact Fast, 3 FSR 4.0.2, 4 Lossy2.
 static int profile_from_name(const std::string &name, int fallback) {
     if (name == "exact" || name == "0") return 0;
     if (name == "lossy" || name == "1") return 1;
     if (name == "exact-fast" || name == "2") return 2;
+    if (name == "lossy2" || name == "4") return 4;
     if (name == "fsr4" || name == "3") return 3;
     return fallback;
 }
 static const char *profile_label(int profile) {
-    return profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4" : "exact";
+    return profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
+         : profile == 4 ? "lossy2" : "exact";
 }
-// Panel modes: FSR 4.1 (Exact Fast) and FSR 4.1 Lite (Lossy). Exact and the
-// old FSR 4.0.2 model ("fsr4") stay available through FSR4_PROFILE or
-// panel.conf and then show no selected segment.
+// Panel modes: FSR 4 (4.0.2 model), FSR 4.1 (Exact Fast), FSR 4.1 Lite
+// (Lossy), and Lite 2 (Lossy2) once its weights are fetched. Exact stays
+// available through FSR4_PROFILE/panel.conf and then shows no selected segment.
+// FSR 4 is offered only when the 4.0.2 weights are present (the 4.1-only
+// release omits them).
+static bool g_has402 = true, g_has_lossy2 = false;
+static bool has_fsr402() {
+    struct stat st = {};
+    return stat((g_root + "/third_party/fsr4/internal/shaders/fsr4_model_v07_i8_quality/initializers.bin").c_str(), &st) == 0;
+}
+static bool has_lossy2() {
+    const char *env = getenv("FSR4_LOSSY2_WEIGHTS");
+    const std::string path = env && *env ? std::string(env) : g_root + "/build/fsr411_lossy2/weights_lossy2.npz";
+    struct stat st = {};
+    return stat(path.c_str(), &st) == 0;
+}
+static int panel_modes(int *modes) {
+    int count = 0;
+    if (g_has402) modes[count++] = 3;
+    modes[count++] = 2;
+    modes[count++] = 1;
+    if (g_has_lossy2) modes[count++] = 4;
+    return count;
+}
 static int segment_profile(NSInteger segment) {
-    return segment == 0 ? 2 : 1;
+    int modes[4], count = panel_modes(modes);
+    return segment >= 0 && segment < count ? modes[segment] : 1;
 }
 static NSInteger segment_for_profile(int profile) {
-    return profile == 2 ? 0 : profile == 1 ? 1 : -1;
+    int modes[4], count = panel_modes(modes);
+    for (int i = 0; i < count; ++i) if (modes[i] == profile) return i;
+    return -1;
 }
 
 static Status read_status() {
@@ -175,12 +201,22 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     float sharp; bool rc; int profile;
     read_settings(sharp, rc, profile);
     [v addSubview:label(@"Mode", 12, y, 50, NO)];
-    self.profile = [NSSegmentedControl segmentedControlWithLabels:@[@"FSR 4.1", @"FSR 4.1 Lite"]
+    g_has402 = has_fsr402();
+    g_has_lossy2 = has_lossy2();
+    NSMutableArray *modes = [NSMutableArray arrayWithCapacity:4];
+    if (g_has402) [modes addObject:@"FSR 4"];
+    [modes addObject:@"FSR 4.1"];
+    [modes addObject:@"FSR 4.1 Lite"];
+    if (g_has_lossy2) [modes addObject:@"FSR 4.1 Lite 2"];
+    self.profile = [NSSegmentedControl segmentedControlWithLabels:modes
         trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(changed:)];
     self.profile.frame = NSMakeRect(62, y - 4, W - 74, 26);
     self.profile.selectedSegment = segment_for_profile(profile);
-    self.profile.toolTip = @"FSR 4.1: the 4.1.1 network with fast PRE/POST math. "
-                           @"FSR 4.1 Lite: reuses inference on eligible frames, fastest. Switching resets history.";
+    self.profile.toolTip = [NSString stringWithFormat:@"%@FSR 4.1: the 4.1.1 network with fast PRE/POST math. "
+                           @"FSR 4.1 Lite: reuses inference on eligible frames, fastest. "
+                           @"%@Switching resets history.",
+                           g_has402 ? @"FSR 4: the previous 4.0.2 model. " : @"",
+                           g_has_lossy2 ? @"Lite 2: Lite with six layers trained to match FSR 4 more closely. " : @""];
     self.profile.accessibilityLabel = @"FSR mode";
     [v addSubview:self.profile]; y -= 34;
     [v addSubview:label(@"Sharpness", 12, y, 70, NO)];
@@ -300,8 +336,9 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     self.profile.enabled = !pinned;
     self.profileHint.stringValue = self.settingsError ?: (pinned
         ? @"The bottle pins FSR 4.0.2 (FSR4_VERSION); modes need 4.1.1."
-        : profile == 3 ? @"FSR 4 (4.0.2 model), set by FSR4_PROFILE."
-        : profile == 2 ? @"FSR 4.1: full network every frame, best quality."
+        : profile == 3 ? @"FSR 4: previous model (4.0.2)."
+        : profile == 2 ? @"FSR 4.1: newer model, about as fast as FSR 4."
+        : profile == 4 ? @"FSR 4.1 Lite 2: Lite with six trained layers (upstream lossy2)."
         : profile == 1 ? @"FSR 4.1 Lite: fastest, skips the network on some frames."
         : @"FSR 4.1 Exact (bit-exact reference), set by FSR4_PROFILE.");
     self.sharpVal.stringValue = [NSString stringWithFormat:@"%.2f", s];

@@ -51,6 +51,7 @@ The **FSR 4** panel lets you switch modes on the fly:
 | Panel mode | What it is | Speed on M5* |
 | --- | --- | ---: |
 | FSR 4.1 Lite | Fastest, tiny quality trade-offs (default) | ~3.0 ms |
+| FSR 4.1 Lite 2 | Lite with six trained layers; shown after `make lossy2-weights` | ~3.0 ms |
 | FSR 4.1 | Full quality, fast math | ~4.3 ms |
 
 \* 864×560 → 1712×1112 per frame.
@@ -72,7 +73,10 @@ tools/bin/fsr4mac testcases/quality411 out/bench --profile lossy --bench 10
 ```
 
 Output: PNG previews, RGBA16F `.bin` files and `run.json`.
-Profiles: `lossy` (default), `exact-fast`, `exact` (bit-exact reference).
+Profiles: `lossy` (default), `lossy2` (Lite with six trained layers, see
+[docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md)), `exact-fast`, `exact`
+(bit-exact reference). `make lossy2-weights` fetches the pinned trained weights
+once into `build/`; they are not distributed with this MIT repository.
 
 ## Tests
 
@@ -91,6 +95,7 @@ Build the installer app and DMG: `make installer INSTALLER_VERSION=v1.8`
 | --- | --- |
 | Performance and validation | [docs/FSR411_PERFORMANCE.md](docs/FSR411_PERFORMANCE.md) |
 | Lite image quality update | [docs/FSR411_QUALITY_UPDATE.md](docs/FSR411_QUALITY_UPDATE.md) |
+| Lite 2 (trained layers) | [docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md) |
 | Memory optimization and timing limits | [docs/FSR411_MEMORY_OPTIMIZATION.md](docs/FSR411_MEMORY_OPTIMIZATION.md) |
 | Benchmark method | [BENCHMARK.md](BENCHMARK.md) |
 | Input format | [docs/FSR411_INPUT_CONTRACT.md](docs/FSR411_INPUT_CONTRACT.md) |
