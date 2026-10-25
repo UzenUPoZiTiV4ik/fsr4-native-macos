@@ -18,7 +18,7 @@
 struct Status {
     bool ok = false, active = false;
     std::string reason, model, preset, version;
-    int profile = 1;
+    int profile = 5;
     unsigned rw = 0, rh = 0, uw = 0, uh = 0;
     double frameMs = 0, t = 0;
     unsigned long long replaced = 0, stubs = 0;
@@ -44,22 +44,23 @@ static std::map<std::string, std::string> read_kv(const std::string &path) {
     return kv;
 }
 
-// Profile values match fsr4_live: 0 Exact, 1 Lossy, 2 Exact Fast, 3 FSR 4.0.2, 4 Lossy2.
+// Values 0-4 retain the legacy modes; 5 is AMD FSR 4.1.2 INT8 Lite.
 static int profile_from_name(const std::string &name, int fallback) {
     if (name == "exact" || name == "0") return 0;
     if (name == "lossy" || name == "1") return 1;
     if (name == "exact-fast" || name == "2") return 2;
     if (name == "lossy2" || name == "4") return 4;
+    if (name == "int8-lite" || name == "lite" || name == "5") return 5;
     if (name == "fsr4" || name == "3") return 3;
     return fallback;
 }
 static const char *profile_label(int profile) {
     return profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
-         : profile == 4 ? "lossy2" : "exact";
+         : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : "exact";
 }
-// Panel modes: FSR 4 (4.0.2 model), FSR 4.1 (Exact Fast), FSR 4.1 Lite
-// (Lossy), and Lite 2 (Lossy2) once its weights are fetched. Exact stays
-// available through FSR4_PROFILE/panel.conf and then shows no selected segment.
+// The old Lite (profile 1) is retired from the panel. Keep its saved ID
+// readable for compatibility; Lite 2 (profile 4) is now displayed as Lossy.
+// AMD 4.1.2 Lite (profile 5) uses its own INT8 architecture and weights.
 // FSR 4 is offered only when the 4.0.2 weights are present (the 4.1-only
 // release omits them).
 static bool g_has402 = true, g_has_lossy2 = false;
@@ -75,18 +76,18 @@ static bool has_lossy2() {
 }
 static int panel_modes(int *modes) {
     int count = 0;
+    modes[count++] = 5;
     if (g_has402) modes[count++] = 3;
     modes[count++] = 2;
-    modes[count++] = 1;
     if (g_has_lossy2) modes[count++] = 4;
     return count;
 }
 static int segment_profile(NSInteger segment) {
-    int modes[4], count = panel_modes(modes);
-    return segment >= 0 && segment < count ? modes[segment] : 1;
+    int modes[5], count = panel_modes(modes);
+    return segment >= 0 && segment < count ? modes[segment] : 5;
 }
 static NSInteger segment_for_profile(int profile) {
-    int modes[4], count = panel_modes(modes);
+    int modes[5], count = panel_modes(modes);
     for (int i = 0; i < count; ++i) if (modes[i] == profile) return i;
     return -1;
 }
@@ -100,7 +101,7 @@ static Status read_status() {
     s.reason = kv["reason"]; s.model = kv["model"]; s.preset = kv["preset"];
     s.version = kv["fsr_version"];
     if (s.version.empty()) s.version = "4.0.2";
-    s.profile = profile_from_name(kv["profile"], 1);
+    s.profile = profile_from_name(kv["profile"], 5);
     s.rw = atoi(kv["rw"].c_str()); s.rh = atoi(kv["rh"].c_str());
     s.uw = atoi(kv["uw"].c_str()); s.uh = atoi(kv["uh"].c_str());
     s.frameMs = atof(kv["frame_ms"].c_str());
@@ -111,7 +112,7 @@ static Status read_status() {
 }
 
 static void read_settings(float &sharp, bool &rcas, int &profile, int fallbackProfile = -1) {
-    sharp = 0.4f; rcas = true; profile = fallbackProfile >= 0 ? fallbackProfile : 1;
+    sharp = 0.4f; rcas = true; profile = fallbackProfile >= 0 ? fallbackProfile : 5;
     if (const char *value = getenv("FSR4_PROFILE")) profile = profile_from_name(value, profile);
     auto kv = read_kv(dist_path("panel.conf"));
     if (kv.count("sharpness")) sharp = (float)atof(kv["sharpness"].c_str());
@@ -175,7 +176,7 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
 }
 
 - (void)build {
-    const CGFloat W = 420, H = 320;
+    const CGFloat W = 660, H = 320;
     NSUInteger style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskUtilityWindow
                      | NSWindowStyleMaskNonactivatingPanel | NSWindowStyleMaskHUDWindow;
     NSPanel *p = [[NSPanel alloc] initWithContentRect:NSMakeRect(40, 80, W, H)
@@ -203,20 +204,20 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     [v addSubview:label(@"Mode", 12, y, 50, NO)];
     g_has402 = has_fsr402();
     g_has_lossy2 = has_lossy2();
-    NSMutableArray *modes = [NSMutableArray arrayWithCapacity:4];
+    NSMutableArray *modes = [NSMutableArray arrayWithCapacity:5];
+    [modes addObject:@"FSR 4.1.2 Lite"];
     if (g_has402) [modes addObject:@"FSR 4"];
     [modes addObject:@"FSR 4.1"];
-    [modes addObject:@"FSR 4.1 Lite"];
-    if (g_has_lossy2) [modes addObject:@"FSR 4.1 Lite 2"];
+    if (g_has_lossy2) [modes addObject:@"FSR 4.1 Lossy"];
     self.profile = [NSSegmentedControl segmentedControlWithLabels:modes
         trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(changed:)];
     self.profile.frame = NSMakeRect(62, y - 4, W - 74, 26);
     self.profile.selectedSegment = segment_for_profile(profile);
-    self.profile.toolTip = [NSString stringWithFormat:@"%@FSR 4.1: the 4.1.1 network with fast PRE/POST math. "
-                           @"FSR 4.1 Lite: reuses inference on eligible frames, fastest. "
+    self.profile.toolTip = [NSString stringWithFormat:@"FSR 4.1.2 Lite: AMD's smaller INT8 architecture, evaluated every frame. "
+                           @"%@FSR 4.1: the earlier network with fast PRE/POST math. "
                            @"%@Switching resets history.",
                            g_has402 ? @"FSR 4: the previous 4.0.2 model. " : @"",
-                           g_has_lossy2 ? @"Lite 2: Lite with six layers trained to match FSR 4 more closely. " : @""];
+                           g_has_lossy2 ? @"FSR 4.1 Lossy (formerly Lite 2): six trained layers and inference reuse on eligible frames. " : @""];
     self.profile.accessibilityLabel = @"FSR mode";
     [v addSubview:self.profile]; y -= 34;
     [v addSubview:label(@"Sharpness", 12, y, 70, NO)];
@@ -332,15 +333,16 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     read_settings(s, rc, profile, st.ok && age <= 3.0 ? st.profile : -1);
     self.profile.selectedSegment = segment_for_profile(profile);
     // FSR4_VERSION=4.0.2 in the bottle pins the old model; the modes then do nothing.
-    const bool pinned = st.ok && st.active && age <= 3.0 && st.version != "4.1.1" && profile != 3;
+    const bool pinned = st.ok && st.active && age <= 3.0 && st.version == "4.0.2" && profile != 3;
     self.profile.enabled = !pinned;
     self.profileHint.stringValue = self.settingsError ?: (pinned
-        ? @"The bottle pins FSR 4.0.2 (FSR4_VERSION); modes need 4.1.1."
+        ? @"The bottle pins FSR 4.0.2 (FSR4_VERSION)."
+        : profile == 5 ? @"FSR 4.1.2 INT8 Lite: AMD's smaller model, evaluated every frame."
         : profile == 3 ? @"FSR 4: previous model (4.0.2)."
-        : profile == 2 ? @"FSR 4.1: newer model, about as fast as FSR 4."
-        : profile == 4 ? @"FSR 4.1 Lite 2: Lite with six trained layers (upstream lossy2)."
-        : profile == 1 ? @"FSR 4.1 Lite: fastest, skips the network on some frames."
-        : @"FSR 4.1 Exact (bit-exact reference), set by FSR4_PROFILE.");
+        : profile == 2 ? @"FSR 4.1.1: legacy model with fast PRE/POST math."
+        : profile == 4 ? @"FSR 4.1 Lossy: the former Lite 2 model with six trained layers."
+        : profile == 1 ? @"This saved mode was removed. Select FSR 4.1 Lossy or FSR 4.1.2 Lite."
+        : @"FSR 4.1.1 Exact (bit-exact reference), set by FSR4_PROFILE.");
     self.sharpVal.stringValue = [NSString stringWithFormat:@"%.2f", s];
     if (!self.slider.highlighted && fabs(self.slider.doubleValue - s) > 1e-3) self.slider.doubleValue = s;
     NSControlStateValue want = rc ? NSControlStateValueOn : NSControlStateValueOff;

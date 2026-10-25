@@ -1,6 +1,6 @@
 # fsr4-mac
 
-AMD FSR 4.1.1 upscaling running natively on Apple Silicon (Metal).
+AMD FSR 4.1.2 INT8 Lite upscaling running natively on Apple Silicon (Metal).
 Works as a standalone tool and inside games via CrossOver (DLSS → FSR 4).
 
 ![FSR 4.0.2 vs FSR 4.1 on Apple M5](docs/images/fsr4-vs-fsr41-m5.png)
@@ -15,7 +15,7 @@ Works as a standalone tool and inside games via CrossOver (DLSS → FSR 4).
 
 ## Easiest: the FSR4 Installer app
 
-1. Download **FSR4-Installer-v1.8.dmg** from the
+1. Download **FSR4-Installer-v2.0.dmg** from the
    [latest release](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/releases/latest)
    and drag **FSR4 Installer** to Applications.
 2. First launch: the app is not notarized, so macOS blocks it. Open
@@ -40,9 +40,11 @@ CrossOver's own D3DMetal. Step-by-step guide:
 ```sh
 xcodebuild -downloadComponent MetalToolchain
 make -B
-python3 tools/crossover/crossover_fsr4.py install --panel --profile lossy
+python3 tools/fsr412_import_model.py --dll /path/to/amdvkffx64.dll --with-shaders
+python3 tools/crossover/crossover_fsr4.py install --panel --fsr-version 4.1.2 --profile int8-lite
 ```
 
+The model import is needed for a clean source checkout; release ZIP/DMG payloads already contain the verified model.
 Close the game and its bottle first. Then launch the game and turn on **DLSS**.
 The **FSR 4** panel lets you switch modes on the fly:
 
@@ -50,11 +52,17 @@ The **FSR 4** panel lets you switch modes on the fly:
 
 | Panel mode | What it is | Speed on M5* |
 | --- | --- | ---: |
-| FSR 4.1 Lite | Fastest, tiny quality trade-offs (default) | ~3.0 ms |
-| FSR 4.1 Lite 2 | Lite with six trained layers; shown after `make lossy2-weights` | ~3.0 ms |
+| FSR 4.1.2 Lite | Three-pass AMD INT8 Lite model (default) | 2.70 ms mean* |
+| FSR 4.1 Lossy | Former Lite 2, six trained layers (`lossy2`) | 2.78 ms mean with reuse* |
 | FSR 4.1 | Full quality, fast math | ~4.3 ms |
+| FSR 4 | Older 4.0.2 model, for comparison | ~4.5 ms |
 
-\* 864×560 → 1712×1112 per frame.
+\* Recorded 864×560 → 1712×1112 sequence on M5, 480 measured frames per model,
+interleaved runs, RCAS off. FSR 4.1.2: P99 3.87 ms, maximum 4.93 ms, full
+inference on every frame. FSR 4.1 Lossy: maximum 5.56 ms, 240 neural frames
+and 240 inference reuses. [Method and validation](docs/FSR412_STABILITY.md).
+These are standalone replay GPU times, not a guaranteed ceiling in a running game.
+The old FSR 4.1 Lite mode has been removed from the panel.
 
 Undo the bottle change:
 
@@ -64,18 +72,28 @@ python3 tools/crossover/crossover_fsr4.py restore --bottle "/path/to/cxbottle.co
 
 More: [CrossOver details](docs/CROSSOVER.md).
 
+FSR 4.1.2 INT8 Lite is imported from the supplied AMD driver DLL with
+`python3 tools/fsr412_import_model.py --dll /path/to/amdvkffx64.dll --with-shaders`.
+The importer validates the DLL and 27,392-byte Lite initializers without
+loading the Windows binary. The 4.1.2 graph uses an isolated `fsr412_` cache.
+Its optimized output is byte-identical to the DLL's Lite shaders translated
+to Metal ([comparison](docs/FSR412_DLL_PARITY.md)); the Windows DLL itself is
+not executed.
+
 ## Standalone run on test frames
 
 ```sh
 tools/bin/gen_testcase testcases/quality411 quality 1280 720 1920 1080 8
-tools/bin/fsr4mac testcases/quality411 out/lossy --profile lossy
-tools/bin/fsr4mac testcases/quality411 out/bench --profile lossy --bench 10
+tools/bin/fsr4mac testcases/quality411 out/lite --fsr-version 4.1.2 --profile int8-lite
+tools/bin/fsr4mac testcases/quality411 out/bench --fsr-version 4.1.2 --profile int8-lite --bench 10
 ```
 
 Output: PNG previews, RGBA16F `.bin` files and `run.json`.
-Profiles: `lossy` (default), `lossy2` (Lite with six trained layers, see
-[docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md)), `exact-fast`, `exact`
-(bit-exact reference). `make lossy2-weights` fetches the pinned trained weights
+FSR 4.1.2 uses `int8-lite` (default). FSR 4.1 Lossy retains its internal
+`lossy2` name (six trained layers, see
+[docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md)). Use `--fsr-version 4.1.1`
+for `lossy2`, `exact-fast`, `exact` (bit-exact reference) or the retired `lossy` profile.
+`make lossy2-weights` fetches the pinned trained weights
 once into `build/`; they are not distributed with this MIT repository.
 
 ## Tests
@@ -84,6 +102,7 @@ once into `build/`; they are not distributed with this MIT repository.
 make test                 # includes the installer app tests
 make build-fsr411-tests
 make test-fsr411-gpu
+make test-fsr412-optimization
 ```
 
 Build the installer app and DMG: `make installer INSTALLER_VERSION=v1.8`
@@ -95,8 +114,8 @@ Build the installer app and DMG: `make installer INSTALLER_VERSION=v1.8`
 | --- | --- |
 | Performance and validation | [docs/FSR411_PERFORMANCE.md](docs/FSR411_PERFORMANCE.md) |
 | Lite image quality update | [docs/FSR411_QUALITY_UPDATE.md](docs/FSR411_QUALITY_UPDATE.md) |
-| Lite 2 (trained layers) | [docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md) |
-| Memory optimization and timing limits | [docs/FSR411_MEMORY_OPTIMIZATION.md](docs/FSR411_MEMORY_OPTIMIZATION.md) |
+| FSR 4.1 Lossy (formerly Lite 2) | [docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md) |
+| Latest memory optimization and timing limits | [docs/FSR411_MEMORY_OPTIMIZATION.md](docs/FSR411_MEMORY_OPTIMIZATION.md) |
 | Benchmark method | [BENCHMARK.md](BENCHMARK.md) |
 | Input format | [docs/FSR411_INPUT_CONTRACT.md](docs/FSR411_INPUT_CONTRACT.md) |
 | GPU profiling | [docs/FSR411_PROFILING.md](docs/FSR411_PROFILING.md) |

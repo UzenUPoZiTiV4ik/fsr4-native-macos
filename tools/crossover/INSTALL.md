@@ -1,7 +1,7 @@
-# FSR 4.1 in CrossOver: install guide
+# FSR 4.1.2 in CrossOver: install guide
 
-Replaces DLSS in Windows games running under CrossOver with AMD FSR 4.1
-(4.1.1 INT8 model on Metal). The game keeps its DLSS option; the hook swaps
+Replaces DLSS in Windows games running under CrossOver with AMD FSR 4.1.2
+(INT8 Lite model on Metal). The game keeps its DLSS option; the hook swaps
 the MetalFX upscaler that D3DMetal uses for DLSS. Русская инструкция:
 [docs/GUIDE.md](docs/GUIDE.md).
 
@@ -74,20 +74,20 @@ Start the game and select **DLSS** in its graphics settings. The **FSR 4**
 panel opens next to the game:
 
 - **FSR 4.1**: the full network every frame, best quality.
-- **FSR 4.1 Lite 2**: Lite with six trained layers, shown once
+- **FSR 4.1.2 Lite**: AMD's compact INT8 architecture, evaluated every frame; the default.
+- **FSR 4.1 Lossy**: formerly Lite 2, with six trained layers, shown once
   `make lossy2-weights` has fetched its weights; closer to FSR 4 on thin
   detail, a little slower to follow brightness changes.
-- **FSR 4.1 Lite**: reuses network output on suitable frames, about 30%
-  less GPU time.
 - **Sharpness** and **RCAS** apply immediately.
 
-Status "FSR 4.1.1 active" means the game goes through FSR. If it says
+The old Lite mode has been removed. Status "FSR 4.1.2 active" means the
+game goes through the new FSR model. If it says
 inactive, the reason is shown in the panel and in `dist/crossover/hook.log`.
 The panel can be reopened with `open "dist/crossover/FSR4 Panel.app"`.
 
-Without the panel: drop `--panel`, and pick the mode with `--profile
-exact-fast` (FSR 4.1), `--profile lossy` (FSR 4.1 Lite, default) or
-`--profile lossy2` (Lite 2, after `make lossy2-weights`).
+Without the panel: drop `--panel`. The default is `--fsr-version 4.1.2
+--profile int8-lite`. For FSR 4.1 use `--fsr-version 4.1.1 --profile exact-fast`,
+or `--fsr-version 4.1.1 --profile lossy2` for FSR 4.1 Lossy after `make lossy2-weights`.
 
 ## Update or remove
 

@@ -63,7 +63,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("FSR 4 for CrossOver")
                     .font(.title2.bold())
-                Text("AMD FSR 4.1 instead of DLSS in Windows games")
+                Text("AMD FSR 4.1.2 instead of DLSS in Windows games")
                     .foregroundStyle(.secondary)
                 Text(chipLine)
                     .font(.caption)
@@ -172,7 +172,9 @@ struct ContentView: View {
         case FSRProfile.full.rawValue: return String(localized: "Installed · FSR 4.1")
         case "exact": return String(localized: "Installed · FSR 4.1 (bit-exact)")
         case "fsr4": return String(localized: "Installed · FSR 4")
-        default: return String(localized: "Installed · FSR 4.1 Lite")
+        case FSRProfile.lossy.rawValue: return String(localized: "Installed · FSR 4.1 Lossy")
+        case FSRProfile.lite.rawValue: return String(localized: "Installed · FSR 4.1.2 Lite")
+        default: return String(localized: "Installed · Previous FSR model")
         }
     }
 
@@ -181,14 +183,17 @@ struct ContentView: View {
     private var optionsSection: some View {
         Section {
             Picker("Starting mode", selection: $model.profile) {
-                Text("FSR 4.1 Lite").tag(FSRProfile.lite)
+                Text("FSR 4.1.2 Lite").tag(FSRProfile.lite)
+                Text("FSR 4.1 Lossy").tag(FSRProfile.lossy)
                 Text("FSR 4.1").tag(FSRProfile.full)
             }
             .pickerStyle(.segmented)
             .disabled(model.busy)
             Group {
                 if model.profile == .lite {
-                    Text("Fastest. Reuses network output on suitable frames, about 30% less GPU time.")
+                    Text("AMD's compact INT8 model. Runs the network every frame.")
+                } else if model.profile == .lossy {
+                    Text("Formerly Lite 2. Uses trained layers and reuses inference on suitable frames.")
                 } else {
                     Text("Full network every frame, best quality.")
                 }

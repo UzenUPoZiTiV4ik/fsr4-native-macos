@@ -1,7 +1,7 @@
 # FSR4 вместо DLSS в CrossOver
 
-Текущий вариант по умолчанию — **FSR 4.1.1 / Lossy**. В панели можно
-переключать **Exact / Lossy**; новая настройка сбрасывает историю на следующем
+Текущий вариант по умолчанию — **FSR 4.1.2 INT8 Lite**. В панели можно
+переключать **FSR 4.1.2 Lite / FSR 4.1 / FSR 4.1 Lossy**; новая настройка сбрасывает историю на следующем
 кадре. Краткие команды: [GUIDE.md](GUIDE.md). Преобразование входов:
 [FSR411_INPUT_CONTRACT.md](FSR411_INPUT_CONTRACT.md).
 
@@ -64,8 +64,8 @@ dist/crossover/backups/Игры.cxbottle.conf
 | `FSR4_HOOK_LOG` | `dist/crossover/hook.log` |
 | `FSR4_ROOT` | корень этого репозитория |
 | `FSR4_REPLACE` | `1` |
-| `FSR4_VERSION` | `4.1.1` по умолчанию |
-| `FSR4_PROFILE` | `lossy` по умолчанию, `exact-fast`, `exact` или `fsr4` (модель 4.0.2, четвёртый режим панели) |
+| `FSR4_VERSION` | `4.1.2` по умолчанию |
+| `FSR4_PROFILE` | `int8-lite` по умолчанию, `lossy2` (FSR 4.1 Lossy, бывший Lite 2), `exact-fast`, `exact` или `fsr4` (модель 4.0.2) |
 
 Они должны остаться внутри `[EnvironmentVariables]`. Установщик дописывает их в конец файла; в бутылке «Игры» эта секция как раз последняя.
 

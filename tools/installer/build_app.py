@@ -55,6 +55,11 @@ def build_payload(rev: str, dest: Path) -> int:
         info = tarfile.TarInfo("INSTALL.md")
         info.size, info.mode, info.mtime = len(guide), 0o644, 1767225600
         dst.addfile(info, io.BytesIO(guide))
+        for path,data,mode in package_release.model_payload():
+            info=tarfile.TarInfo(path)
+            info.size,info.mode,info.mtime=len(data),mode,1767225600
+            dst.addfile(info,io.BytesIO(data))
+            count+=1
     return count + 1
 
 

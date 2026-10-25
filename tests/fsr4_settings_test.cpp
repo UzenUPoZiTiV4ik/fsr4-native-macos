@@ -27,9 +27,9 @@ static void poll() {std::this_thread::sleep_for(std::chrono::milliseconds(550));
 
 int main(int argc,char **argv) {try {
     if(argc!=2) return 2;
-    setenv("FSR4_SETTINGS","none",1);unsetenv("FSR4_PROFILE");
+    setenv("FSR4_SETTINGS","none",1);unsetenv("FSR4_PROFILE");unsetenv("FSR4_VERSION");
     if(!std::strcmp(argv[1],"default")) {
-        check(profile()==1,"FSR 4.1.1 default is not Lossy");
+        check(profile()==5,"FSR 4.1.2 default is not INT8 Lite");
         fsr4_live_set_profile(0);check(profile()==0,"in-memory Exact switch failed");
     } else if(!std::strcmp(argv[1],"environment")) {
         setenv("FSR4_PROFILE","exact",1);check(profile()==0,"environment Exact preference was ignored");
@@ -37,16 +37,26 @@ int main(int argc,char **argv) {try {
         setenv("FSR4_PROFILE","exact-fast",1);check(profile()==2,"environment Exact Fast preference was ignored");
     } else if(!std::strcmp(argv[1],"model")) {
         // The FSR 4.0 mode routes to the old model unless the bottle pins a version.
-        unsetenv("FSR4_VERSION");check(!std::strcmp(fsr4_live_model_version(),"4.1.1"),"default model is not 4.1.1");
+        check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"default model is not 4.1.2");
         fsr4_live_set_profile(3);check(profile()==3,"FSR 4.0 mode switch failed");
         check(!std::strcmp(fsr4_live_model_version(),"4.0.2"),"FSR 4.0 mode did not select 4.0.2");
         setenv("FSR4_VERSION","4.1.1",1);check(!std::strcmp(fsr4_live_model_version(),"4.0.2"),"4.1.1 install ignored the FSR 4.0 mode");
         fsr4_live_set_profile(2);check(!std::strcmp(fsr4_live_model_version(),"4.1.1"),"Exact Fast did not return to 4.1.1");
+        fsr4_live_set_profile(5);check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"INT8 Lite did not select 4.1.2");
+        setenv("FSR4_VERSION","4.1.2",1);check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"4.1.2 install did not accept INT8 Lite");
+        fsr4_live_set_profile(1);check(!std::strcmp(fsr4_live_model_version(),"4.1.1"),"legacy Lite preference did not keep its 4.1.1 model");
+        fsr4_live_set_profile(5);
         setenv("FSR4_VERSION","4.0.2",1);check(!std::strcmp(fsr4_live_model_version(),"4.0.2"),"FSR4_VERSION=4.0.2 was not honoured");
+    } else if(!std::strcmp(argv[1],"legacy-default")) {
+        setenv("FSR4_VERSION","4.1.1",1);check(profile()==1,"explicit 4.1.1 default is not Lossy");
+        check(!std::strcmp(fsr4_live_model_version(),"4.1.1"),"explicit 4.1.1 default did not select 4.1.1");
     } else if(!std::strcmp(argv[1],"environment-fsr4")) {
         setenv("FSR4_PROFILE","fsr4",1);check(profile()==3,"environment FSR 4.0 preference was ignored");
     } else if(!std::strcmp(argv[1],"environment-lossy2")) {
         setenv("FSR4_PROFILE","lossy2",1);check(profile()==4,"environment Lite 2 preference was ignored");
+    } else if(!std::strcmp(argv[1],"environment-int8-lite")) {
+        setenv("FSR4_PROFILE","int8-lite",1);check(profile()==5,"environment INT8 Lite preference was ignored");
+        check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"named INT8 Lite did not select 4.1.2");
     } else if(!std::strcmp(argv[1],"file")) {
         char temporary[]="/tmp/fsr4-settings-XXXXXX";
         check(mkdtemp(temporary),"cannot create fixture directory");
@@ -78,10 +88,14 @@ int main(int argc,char **argv) {try {
         write(path,"sharpness=0.300\nrcas=1\nprofile=lossy2\n");times[1].tv_nsec=5000000;
         check(!utimensat(AT_FDCWD,path.c_str(),times,0),"cannot update fixture timestamp");poll();
         check(profile()==4,"saved Lite 2 profile was not loaded");
-        fsr4_live_set_profile(1);
+        write(path,"sharpness=0.300\nrcas=1\nprofile=int8-lite\n");times[1].tv_nsec=6000000;
+        check(!utimensat(AT_FDCWD,path.c_str(),times,0),"cannot update fixture timestamp");poll();
+        check(profile()==5,"saved INT8 Lite profile was not loaded");
+        check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"saved INT8 Lite did not select 4.1.2");
+        fsr4_live_set_profile(5);
         FILE *saved=std::fopen(path.c_str(),"r");check(saved,"cannot reopen fixture");
         char text[128]={};std::fread(text,1,sizeof text-1,saved);std::fclose(saved);
-        check(std::strstr(text,"profile=lossy")!=nullptr,"profile was not saved by name");
+        check(std::strstr(text,"profile=int8-lite")!=nullptr,"INT8 Lite profile was not saved by name");
         unlink(path.c_str());rmdir(temporary);
     } else return 2;
     std::printf("settings %s passed\n",argv[1]);return 0;

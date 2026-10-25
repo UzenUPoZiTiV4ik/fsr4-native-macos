@@ -77,12 +77,51 @@ class CrossoverReferenceTest(unittest.TestCase):
                 (bottles.parent / "CrossOver.conf").write_text('[CrossOver]\n"BottlePath" = ""\n')
                 self.assertEqual(installer.bottle_roots(str(app)), [bottles])
 
-    def test_install_defaults_to_411_lossy(self):
+    def test_install_defaults_to_412_int8_lite(self):
         with patch("sys.argv", ["crossover_fsr4.py", "install", "--no-bottle"]), \
              patch.object(installer, "cmd_install") as install:
             installer.main()
         args = install.call_args.args[0]
-        self.assertEqual((args.fsr_version, args.profile, args.bottle), ("4.1.1", "lossy", ""))
+        self.assertEqual((args.fsr_version, args.profile, args.bottle), ("4.1.2", "int8-lite", ""))
+
+    def test_install_replaces_saved_model_and_preserves_sharpness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            panel = root / "panel.conf"
+            previous = "sharpness=0.498\nrcas=0\nprofile=lossy2\n"
+            panel.write_text(previous)
+            with patch.object(installer, "DIST", root):
+                installer.select_panel_profile("int8-lite")
+            self.assertEqual(panel.read_text(), "sharpness=0.498\nrcas=0\nprofile=int8-lite\n")
+            self.assertEqual((root / "backups/panel.conf").read_text(), previous)
+
+    def test_default_412_reference_matches_live_backend_aliases(self):
+        for requested, selected in (("auto", "auto"), ("int8", "reference"), ("native", "i8mpp")):
+            with self.subTest(model=requested), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                testcase = root / "testcases/testcase_quality_720to1080"
+                testcase.mkdir(parents=True)
+                (testcase / "meta.json").write_text("{}")
+                backend = "int8-reference" if selected == "reference" else "int8-mpp"
+                info = {"device": "Apple M5", "backend": backend, "reason": "requested backend"}
+
+                def run(command, **kwargs):
+                    if command[0] == str(root / "tools/bin/fsr4mac"):
+                        self.assertEqual(command[-5:], ["--fsr-version", "4.1.2", "--profile", "int8-lite", "--" + selected])
+                        destination = Path(command[2])
+                        destination.mkdir(parents=True)
+                        (destination / "f00_out.bin").write_bytes(b"4.1.2 INT8 Lite frame")
+                        (destination / "run.json").write_text(json.dumps(
+                            {"fsr_version": "4.1.2", "profile": "int8-lite", "backend": backend}))
+
+                with patch.object(installer, "ROOT", root), \
+                     patch.object(installer, "DIST", root / "dist/crossover"), \
+                     patch.object(installer, "run", side_effect=run), \
+                     patch.object(installer.subprocess, "check_output", return_value=json.dumps(info)) as query:
+                    reference = installer.build_reference({"FSR4_MODEL": requested})
+                    self.assertEqual(reference.read_bytes(), b"4.1.2 INT8 Lite frame")
+                    self.assertEqual(query.call_args.args[0][-4:],
+                                     ["--fsr-version", "4.1.2", "--backend-info", selected])
 
     def test_old_gpu_uses_fresh_fp16_reference_even_with_int8_override(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -110,7 +149,7 @@ class CrossoverReferenceTest(unittest.TestCase):
                 self.assertEqual(query.call_args.args[0][-4:], ["--fsr-version", "4.0.2", "--backend-info", "i8mpp"])
                 self.assertEqual((root / "out/f00_out.bin").read_bytes(), b"stale M5 INT8 frame")
 
-    def test_reference_defaults_to_411_lossy_integer_model(self):
+    def test_explicit_411_uses_legacy_lossy_integer_model(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             testcase = root / "testcases/testcase_quality_720to1080"
@@ -131,7 +170,7 @@ class CrossoverReferenceTest(unittest.TestCase):
                  patch.object(installer, "DIST", root / "dist/crossover"), \
                  patch.object(installer, "run", side_effect=run), \
                  patch.object(installer.subprocess, "check_output", return_value=json.dumps(info)) as query:
-                reference = installer.build_reference({"FSR4_MODEL": "int8"})
+                reference = installer.build_reference({"FSR4_VERSION": "4.1.1", "FSR4_MODEL": "int8"})
                 self.assertEqual(reference.read_bytes(), b"new 4.1.1 model")
                 self.assertEqual(query.call_args.args[0][-4:],
                                  ["--fsr-version", "4.1.1", "--backend-info", "reference"])

@@ -1,5 +1,32 @@
 # Releases
 
+## v2.0 (2026-10-25)
+
+Added the FSR 4.1.2 INT8 Lite path from the supplied AMD driver libraries.
+
+- The default `int8-lite` profile uses the three-pass Lite graph and a separate
+  `fsr412_` shader/native cache. Legacy 4.1.1 profiles remain selectable.
+- The panel removes the old Lite mode and names former Lite 2 **FSR 4.1 Lossy**.
+  Installation updates the saved panel profile while preserving RCAS and sharpness.
+- Static import validates the provider DLL hashes and both 27,392-byte Lite
+  initializers without executing the Windows DLL.
+- A float32 input-color cache removes repeated PRE/POST transformations.
+  Metal pipeline descriptors use the actual threadgroup size. AE/RCAS
+  helper selection now matches color space and auto exposure.
+- In an interleaved 480-frame M5 replay (864×560 → 1712×1112, RCAS off),
+  4.1.2 measured mean 2.70 ms, P99 3.87 ms and maximum 4.93 ms; Lossy 2
+  measured mean 2.78 ms and maximum 5.56 ms. These are sampled GPU times,
+  not a guaranteed per-frame ceiling. See `docs/FSR412_STABILITY.md`.
+- The optimized path is byte-identical to AMD's Lite shaders translated to
+  Metal on recorded and synthetic cases, including RCAS and Ultra
+  Performance. This fixed wrong Ultra Performance POST quantizer shifts in
+  the native model. The Windows DLL itself was not executed; see
+  `docs/FSR412_DLL_PARITY.md`.
+- Release ZIP/DMG payloads include verified portable Lite data and its
+  provenance receipts. The Windows driver DLLs are not included.
+- `make test-settings`, input/math/layout checks, CLI and Metal compilation
+  pass on the updated tree.
+
 ## v1.9 (2026-10-21)
 
 CrossOver release of the FSR 4.1.1 stack with the Lite 2 profile.
@@ -11,17 +38,16 @@ CrossOver release of the FSR 4.1.1 stack with the Lite 2 profile.
   vendored into this MIT tree: `make lossy2-weights` fetches one pinned file
   into `build/fsr411_lossy2/` and checks its SHA-256. The panel shows the mode
   once those weights exist.
-- Adds Lite 2 to the public release: v1.8 had the FSR 4.1 and FSR 4.1 Lite
-  modes only. Also includes the at-rest dark-band guard.
+- No code changes since v1.8, which introduced Lite 2; this is a fresh
+  release build of the same source.
 
-Checked with `make test` (65 Python tests across the input, settings, math,
-layout, cache and lossy2 suites), `make test-settings` including
-`environment-lossy2`, `make test-installer`, and a Lite 2 run on the recorded
-sequence: 3.9 ms for a full frame, 1.4 ms when inference is reused.
+Checked with `make test` (input, settings, math, layout and cache suites),
+`make test-settings` including `environment-lossy2`, and a Lite 2 run on the
+recorded sequence: 6.1 ms for a full frame, 2.0 ms when inference is reused,
+4.2 ms mean over the run.
 
 ## Older releases
 
 `crossover-v1.0` through `crossover-v1.8` are tagged in this repository. v1.8
-fixed external bottle discovery in both installers; v1.1 to v1.7 were the FSR
-4.1 port, its SIMD backend, memory work, image-quality update, installer app
-and panel changes; v1.0 was the first FSR 4.1-only package.
+added the Lite 2 profile; v1.1 to v1.7 were the FSR 4.1 port, its panel and
+CrossOver packaging fixes; v1.0 was the first FSR 4.1-only package.

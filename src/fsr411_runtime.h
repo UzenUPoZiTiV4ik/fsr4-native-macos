@@ -32,10 +32,10 @@ inline const char *kernels_label(Kernels k) {
 // ExactFast: Exact's network with reciprocal division and fast exp/log in
 // PRE/POST. Lossy: folded coefficients, half-up rounding and inference reuse.
 // Lossy2: Lossy's network with the six layers trained in upstream dll-2026-10-19.
-enum class Profile { Exact, Lossy, ExactFast, Lossy2 };
+enum class Profile { Exact, Lossy, ExactFast, Lossy2, Int8Lite };
 inline bool profile_is_lossy(Profile p) { return p==Profile::Lossy || p==Profile::Lossy2; }
 inline const char *profile_name(Profile p) {
-    return p==Profile::Lossy?"lossy":p==Profile::Lossy2?"lossy2":p==Profile::ExactFast?"exact-fast":"exact";
+    return p==Profile::Int8Lite?"int8-lite":p==Profile::Lossy?"lossy":p==Profile::Lossy2?"lossy2":p==Profile::ExactFast?"exact-fast":"exact";
 }
 inline bool parse_profile(const std::string &name, Profile &p) {
     if(name=="exact") p=Profile::Exact;
@@ -69,6 +69,9 @@ struct FrameSnapshot {
     }
 };
 struct Options {
+    // The 4.1.2 adapter selects its own imported graph and cache namespace.
+    // Input conversion, resource lifetime and encoder synchronization are shared.
+    bool modelLite = false;
     Backend backend = Backend::Auto;
     Profile profile = Profile::Lossy;
     int tier = 0, colorspace = 0, optimize = 1;
@@ -204,6 +207,8 @@ struct Kernel {
     id<MTLBuffer> literalTables = nil;
     MTLSize threads = MTLSizeMake(1, 1, 1);
     std::vector<std::pair<NSUInteger, std::string>> buffers, textures, samplers;
+    int tensorSlot = -1;
+    unsigned tileX = 1, tileY = 1;
 };
 struct NativePass {
     id<MTLComputePipelineState> pso = nil;
@@ -217,7 +222,9 @@ struct Session {
     int tier = 0;
     uint32_t postPixelsPerGroup = 32;
     bool splitAutoExposure = false;
+    bool modelLite = false;
     size_t scratchBytes = 0;
+    bool preparedColor = false;
     bool ultraPerformance = false, externalPostCnb = false;
     bool postCnbAlias = false;
     PostCnbScratchLayout scratchLayout = {};
@@ -226,6 +233,7 @@ struct Session {
     id<MTLBuffer> initializer = nil, nativeWeights = nil, halfWeights = nil;
     std::map<std::string, Kernel> kernels;
     std::map<int, NativePass> native;
+    std::map<std::string,std::vector<int>> nativeSequence;
     std::vector<std::string> order;
 };
 
@@ -255,6 +263,7 @@ struct View {
     id<MTLBuffer> lossyMotion = nil, lossyPlane = nil;
     id<MTLTexture> spdAtomicTexture = nil, luma = nil;
     id<MTLTexture> colorCopy = nil, depthCopy = nil, motionCopy = nil, outputCopy = nil, rcasTemp = nil;
+    id<MTLTexture> preparedColor = nil;
     std::map<std::string, id<MTLBuffer>> captures;
     std::vector<std::unique_ptr<FrameSlot>> slots;
     uint32_t width = 0, height = 0;
@@ -324,12 +333,14 @@ public:
             : options.backend==Backend::Scalar ? Kernels::Scalar
             : (options.backend==Backend::Simd || (simd_family() && !simdFailed_)) ? Kernels::Simd : Kernels::Scalar;
         if (!ensure_helpers(error)) return fail(error);
-        Session *session = ensure_session(tier, p, options, kind, error);
+        Session *session = options.modelLite ? ensure_lite_session(tier,p,options,kind,error)
+                                             : ensure_session(tier,p,options,kind,error);
         if (!session && kind==Kernels::Simd && options.backend==Backend::Auto) {
             // Never retry a failed simd setup on this device; scalar is exact too.
             fsr4_logf("FSR 4.1.1 simd backend unavailable (%s); using scalar", error.c_str());
             simdFailed_ = true; kind = Kernels::Scalar; error.clear();
-            session = ensure_session(tier, p, options, kind, error);
+            session = options.modelLite ? ensure_lite_session(tier,p,options,kind,error)
+                                        : ensure_session(tier,p,options,kind,error);
         }
         if (!session) return fail(error);
         const bool native_or_portable = kind != Kernels::Reference;
@@ -349,6 +360,11 @@ public:
         const bool skip = lossy && view.cacheValid && !view.skippedInference && !p.reset && p.jitter[0]<0.f
             && uint64_t(p.rw)*2u>=p.alignedUW && !options.ultraPerformance;
         TensorSizes sizes = tensor_sizes(p.alignedUW, p.alignedUH);
+        if(options.modelLite) {
+            constexpr unsigned shifts[9]={1,0,1,2,2,1,0,0,0};
+            sizes={};
+            for(unsigned i=0;i<9;++i) {sizes.v[i][0]=p.alignedUW>>shifts[i];sizes.v[i][1]=p.alignedUH>>shifts[i];}
+        }
         fill_constants(*slot, *session, p, sizes, rcas, options.sharpness);
         const LossyConstants lc={skip?1u:0u,p.alignedUW/4u,p.alignedUH/4u,0};
         put(*slot,kLossy,lc);
@@ -433,18 +449,36 @@ public:
                 helper(enc, m4, *slot, "updateExposure", "fsr411_exposure",
                        {{slot->constants,9472}}, {b.exposure,view.autoExposure}, MTLSizeMake(1,1,1));
             }
+            if (session->preparedColor)
+                dispatch(enc,m4,*slot,*session,"prepare_color",MTLSizeMake(ceil_div(p.rw,16),ceil_div(p.rh,16),1),b);
             for (const auto &name : session->order) {
                 if (skip && name!="pre" && name!="post") continue;
                 if (name=="post" && session->externalPostCnb && !skip)
                     dispatch_native(enc,m4,*slot,*session,13,view,sizes);
                 const int pass = name.rfind("pass",0) == 0 ? std::atoi(name.c_str()+4) : 0;
-                if (native_or_portable && pass && session->native.count(pass)) {
+                auto sequence=session->nativeSequence.find(name);
+                if(native_or_portable && sequence!=session->nativeSequence.end()) {
+                    for(int id:sequence->second) dispatch_native(enc,m4,*slot,*session,id,view,sizes);
+                } else if (native_or_portable && pass && session->native.count(pass)) {
                     dispatch_native(enc, m4, *slot, *session, pass, view, sizes);
                 } else {
                     MTLSize groups;
                     if (name == "pre") groups = MTLSizeMake(ceil_div(p.alignedUW,16),ceil_div(p.alignedUH,16),1);
                     else if (name == "post") groups = MTLSizeMake(ceil_div(p.alignedUW,session->postPixelsPerGroup),ceil_div(p.alignedUH,session->postPixelsPerGroup),1);
+                    else if (session->modelLite && name.rfind("pad",0)==0) {
+                        const auto &k=session->kernels.at(name);
+                        const unsigned shift=(k.tensorSlot==3 || k.tensorSlot==4)?2:1;
+                        const uint32_t w=p.alignedUW>>shift,h=p.alignedUH>>shift;
+                        const uint32_t c=std::min((uint32_t(tier*16/9)>>shift)+1u-w,5u);
+                        const uint32_t d=std::min((uint32_t(tier)>>shift)+1u-h,1u);
+                        const uint32_t f=w+1u+c;
+                        groups=MTLSizeMake(ceil_div(f+h+h*c+f*d,32),1,1);
+                    }
                     else if (name.rfind("pad",0) == 0) groups = MTLSizeMake(padding_groups(tier,std::atoi(name.c_str()+3),p.alignedUW,p.alignedUH),1,1);
+                    else if(session->modelLite) {
+                        const auto &k=session->kernels.at(name);
+                        groups=MTLSizeMake(ceil_div(sizes.v[k.tensorSlot][0],k.tileX),ceil_div(sizes.v[k.tensorSlot][1],k.tileY),1);
+                    }
                     else { const int shift = pass_shift(pass); groups = MTLSizeMake(ceil_div(p.alignedUW >> shift,64),p.alignedUH >> shift,1); }
                     // Older precompiled bundles use the shared PRE. New
                     // bundles specialize only the already-authorized reuse
@@ -635,6 +669,7 @@ private:
         }
         if (!v.autoExposure) v.autoExposure=texture(MTLPixelFormatR32Float,2,1);
         bool ok = v.scratch && v.history && v.reprojected && v.recurrent && v.autoExposure;
+        if (s.preparedColor) ok &= fit(v.preparedColor,MTLPixelFormatRGBA32Float,p.rw,p.rh);
         if(profile_is_lossy(o.profile)) {
             const size_t blocks=size_t(p.alignedUW/4u)*(p.alignedUH/4u);
             if(!v.lossyMotion || v.lossyMotion.length!=blocks*16u)
@@ -727,10 +762,12 @@ private:
     }
     bool load_native(Session &s, bool compile, Kernels kind, std::string &error) {
         const bool useMpp=kind==Kernels::Mpp, useSimd=kind==Kernels::Simd;
-        const std::string dir=buildDir_+"/fsr411_native_"+std::to_string(s.tier)+(s.ultraPerformance?"_ultraperformance":"")
+        const std::string dir=buildDir_+(s.modelLite?"/fsr412_native_":"/fsr411_native_")+std::to_string(s.tier)+(s.ultraPerformance?"_ultraperformance":"")
             +(s.profile==Profile::Lossy?"_lossy":s.profile==Profile::Lossy2?"_lossy2":"");
         // ExactFast differs only in PRE/POST math and shares Exact's network.
-        if (compile && !run(@[@"python3",ns(root_+"/tools/gen_fsr411_native.py"),@"--tier",ns(std::to_string(s.tier)),
+        if (compile && s.modelLite && !run(@[@"python3",ns(root_+"/tools/fsr412/native_model.py"),@"--tier",ns(std::to_string(s.tier)),
+            @"--preset",s.ultraPerformance?@"ultraperformance":@"normal",@"--outdir",ns(dir)],error)) return false;
+        if (compile && !s.modelLite && !run(@[@"python3",ns(root_+"/tools/gen_fsr411_native.py"),@"--tier",ns(std::to_string(s.tier)),
             @"--preset",s.ultraPerformance?@"ultraperformance":@"normal",@"--profile",s.profile==Profile::Lossy?@"lossy":s.profile==Profile::Lossy2?@"lossy2":@"exact",
             @"--outdir",ns(dir)],error)) return false;
         auto manifest=json(dir+"/fsr411_native_manifest.json",error);
@@ -787,9 +824,9 @@ private:
             if(!post || ![post[@"output_offset_base"] isEqual:@"scratch_append"]) { error="missing native 4.1.1 POST CNB";return false; }
             if([post[@"scratch_append_bytes"] unsignedLongLongValue]!=s.scratchLayout.cacheBytes ||
                [post[@"scratch_append_alignment"] unsignedIntValue]!=256u ||
-               ![post[@"kind"] isEqual:@"cnb"] || [post[@"input_slot"] unsignedIntValue]!=13u ||
-               [post[@"output_slot"] unsignedIntValue]!=13u || post[@"skip_slot"] ||
-               [post[@"before_stage"] unsignedIntValue]!=26u) {
+               ![post[@"kind"] isEqual:@"cnb"] || [post[@"input_slot"] unsignedIntValue]!=(s.modelLite?5u:13u) ||
+               [post[@"output_slot"] unsignedIntValue]!=(s.modelLite?5u:13u) || post[@"skip_slot"] ||
+               [post[@"before_stage"] unsignedIntValue]!=(s.modelLite?9u:26u)) {
                 error="native 4.1.1 POST CNB layout mismatch";return false;
             }
             passes[@"13"]=post;
@@ -805,7 +842,7 @@ private:
             np.offset=[entry[@"parameter_offset"] unsignedIntValue];
             if (np.offset+sizeof(PassParams)>params.length || kNative+np.offset+sizeof(PassParams)>8192) { error="native parameter region overflow"; return false; }
             memcpy(&np.parameters,(const uint8_t *)params.bytes+np.offset,sizeof(PassParams));
-            if([key intValue]==13 && !post_cnb_tensors_match_layout(np.parameters,s.scratchLayout)) {
+            if([key intValue]==13 && !s.modelLite && !post_cnb_tensors_match_layout(np.parameters,s.scratchLayout)) {
                 error="native 4.1.1 POST CNB tensors do not match the scratch layout";return false;
             }
             // Winograd reads its transformed 3x3 weights from the half copy.
@@ -822,7 +859,14 @@ private:
                                     withRange:NSMakeRange(0,kPassSpecializationCount)];
                     fn=[lib newFunctionWithName:ns(name) constantValues:values error:&e];
                 } else fn=[lib newFunctionWithName:ns(name)];
-                auto pso=fn?[device_ newComputePipelineStateWithFunction:fn error:&e]:nil;
+                id<MTLComputePipelineState> pso=nil;
+                if (fn && s.modelLite) {
+                    MTLComputePipelineDescriptor *descriptor=[MTLComputePipelineDescriptor new];
+                    descriptor.computeFunction=fn;
+                    descriptor.maxTotalThreadsPerThreadgroup=[dispatch[@"threads"] unsignedIntValue];
+                    descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth=descriptor.maxTotalThreadsPerThreadgroup%32u==0;
+                    pso=[device_ newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&e];
+                } else if (fn) pso=[device_ newComputePipelineStateWithFunction:fn error:&e];
                 if (!pso) { error=metal_error(e); return false; }
                 if (pso.maxTotalThreadsPerThreadgroup < [dispatch[@"threads"] unsignedIntValue]) {
                     error="pipeline "+name+" supports fewer threads than its tile needs"; return false;
@@ -840,6 +884,8 @@ private:
         }
         return s.nativeWeights && !s.native.empty();
     }
+    #include "fsr412_session.inc"
+
     Session *ensure_session(int tier, const Fsr4InputPrepared &p, const Options &o, Kernels kind, std::string &error) {
         const bool portable=kind!=Kernels::Reference;
         const bool externalPost=portable || profile_is_lossy(o.profile);
@@ -1028,7 +1074,7 @@ private:
         // the GPU. Keep the old resources alive until its retirement token.
         const id resources[]={slot.constants,s.initializer,s.nativeWeights,s.halfWeights,v.history,v.reprojected,v.recurrent,v.autoExposure,
             v.scratch,v.spdAtomic,v.spdAtomicTexture,v.luma,v.colorCopy,v.depthCopy,v.motionCopy,v.outputCopy,v.rcasTemp,v.lossyMotion,v.lossyPlane,
-            f.color,f.depth,f.motion,f.output,f.exposure,exposureOne_};
+            f.color,f.depth,f.motion,f.output,f.exposure,exposureOne_,v.preparedColor};
         for (id resource:resources) if(resource && ![slot.resources containsObject:resource]) [slot.resources addObject:resource];
         for(const auto &k:s.kernels) if(k.second.literalTables) [slot.resources addObject:k.second.literalTables];
         for (const auto &c:v.captures) [slot.resources addObject:c.second];
@@ -1093,6 +1139,7 @@ private:
     }
     id<MTLTexture> bind_texture(const std::string &name,const Bindings &b) {
         if(name=="r_input_color") return b.color;
+        if(name=="r_prepared_color" || name=="rw_prepared_color") return b.view->preparedColor;
         if(name=="r_depth") return b.depth;
         if(name=="r_velocity") return b.motion;
         if(name=="r_input_exposure") return b.exposure;
@@ -1114,7 +1161,7 @@ private:
         if(name=="Fsr411LossyMotion") return {b.view->lossyMotion,0};
         if(name=="Fsr411LossyPlane") return {b.view->lossyPlane,0};
         if(name=="InitializerBuffer" || name=="t18_initializer") return {s.initializer,0};
-        if(name=="MLSR_Optimized_Constants") return {slot.constants,(stage=="pre" || stage=="pre_reuse" || stage=="post")?0:kTensor};
+        if(name=="MLSR_Optimized_Constants") return {slot.constants,(stage=="pre" || stage=="pre_reuse" || stage=="post" || stage=="prepare_color")?0:kTensor};
         if(name=="CsTensorSizes") return {slot.constants,kTensor};
         if(name=="AutoExposureSPDConstants") return {slot.constants,kSpd};
         if(name=="cbRCAS") return {slot.constants,kRcas};

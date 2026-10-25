@@ -67,9 +67,10 @@ void fsr4_panel_publish(void) {
     }
     Fsr4LiveStatus st;
     fsr4_live_get_status(&st);
-    int profile = 1;
+    int profile = 5;
     fsr4_live_get_profile(&profile);
-    const char *version = !strncmp(st.variant, "fsr411_", 7) ? "4.1.1" : "4.0.2";
+    const char *version = !strncmp(st.variant, "fsr412_", 7) ? "4.1.2"
+                        : !strncmp(st.variant, "fsr411_", 7) ? "4.1.1" : "4.0.2";
     if (!st.variant[0]) version = fsr4_live_model_version();
     FILE *f = fopen(tmp.c_str(), "w");
     if (!f) return;
@@ -82,7 +83,7 @@ void fsr4_panel_publish(void) {
             (unsigned long long)st.encodes, (unsigned long long)st.replaced, (unsigned long long)st.stubs,
             st.sharpness, version,
             profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
-                         : profile == 4 ? "lossy2" : "exact");
+                         : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : "exact");
     fclose(f);
     rename(tmp.c_str(), path.c_str());
 }

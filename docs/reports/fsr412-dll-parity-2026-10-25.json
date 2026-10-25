@@ -1,0 +1,665 @@
+{
+  "schema": "fsr412_dll_parity_v1",
+  "date": "2026-10-25",
+  "device": "Apple M5",
+  "source_commit_base": "bfaab08",
+  "scope": {
+    "a_weights": "Lite initializers and 170 unique Lite SPIR-V payloads are byte-identical to the pinned DLLs (provenance below).",
+    "b_numerical": "Optimized Native INT8 (--i8mpp --optimize 1) compared with AMD Lite SPIR-V translated one to one to Metal (--reference --optimize 0). Both share the Metal frame setup, input upload and AE/RCAS helpers.",
+    "c_not_done": "The Windows DLLs were not executed. Equality with AMD Windows/D3D12 or Vulkan runtime output is not established."
+  },
+  "surface_formats": {
+    "output": "RGBA16Float",
+    "history": "RGBA16Float",
+    "reprojected": "RGBA16Float",
+    "recurrent": "RGBA8Unorm",
+    "auto_exposure": "R32Float 2x1"
+  },
+  "metric_notes": "changed_* are fractions; output RGB PSNR uses the reference RGB peak, *_unit clips to [0,1] with peak 1, *_8bit quantizes [0,1] to 8 bits with peak 255. psnr_db_min null means zero error. Scratch arenas are not compared: the optimized path aliases intermediates after pass3 by design.",
+  "provenance": {
+    "schema": "fsr412_dll_provenance_v1",
+    "providers": [
+      {
+        "file": "amdxcffx64.dll",
+        "sha256": "c33a287f3048bf02311cae430b6a977500b94ca7b315cd7bff751e6b03e483e3",
+        "initializers": [
+          {
+            "name": "initializers-lite.bin",
+            "bytes": 27392,
+            "dll_offset": "0x3c12390",
+            "sha256": "4b9898da719dc2dca5dc45fd71dec5f80bdb9886a580fe3038af59efe637d55e",
+            "byte_identical": true
+          },
+          {
+            "name": "initializers-lite-ultraperformance.bin",
+            "bytes": 27392,
+            "dll_offset": "0x3c2cfc0",
+            "sha256": "4c57292d9963e82dec86134060eef0c2b66214cd1a31a9e9bc73739b5fe2d1d7",
+            "byte_identical": true
+          }
+        ]
+      },
+      {
+        "file": "amdvkffx64.dll",
+        "sha256": "80e761f7c8c0ec8ead7b321df01911baaf917defae51388d29eaecb1d6bc58bd",
+        "initializers": [
+          {
+            "name": "initializers-lite.bin",
+            "bytes": 27392,
+            "dll_offset": "0x34ce3f0",
+            "sha256": "4b9898da719dc2dca5dc45fd71dec5f80bdb9886a580fe3038af59efe637d55e",
+            "byte_identical": true
+          },
+          {
+            "name": "initializers-lite-ultraperformance.bin",
+            "bytes": 27392,
+            "dll_offset": "0x34e9020",
+            "sha256": "4c57292d9963e82dec86134060eef0c2b66214cd1a31a9e9bc73739b5fe2d1d7",
+            "byte_identical": true
+          }
+        ],
+        "validated_unique_lite_shaders": 170
+      }
+    ]
+  },
+  "cases": {
+    "recorded-rcas-off": {
+      "input": "recorded 864x560 -> 1712x1112 DRS sequence, AE on, RCAS off",
+      "preset": "drs",
+      "frames": 8,
+      "output_size": [
+        1712,
+        1112
+      ],
+      "reference": {
+        "backend": "int8-reference",
+        "optimize": 0,
+        "variant": "fsr412_2160_di1_lm1_jm0_cs0_ae1_o0_up0_pc0_int8-reference"
+      },
+      "optimized": {
+        "backend": "int8-mpp",
+        "optimize": 1,
+        "variant": "fsr412_2160_di1_lm1_jm0_cs0_ae1_o1_up0_pc1_v2_int8-mpp"
+      },
+      "summary": {
+        "output_rgb": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_rgb_unit": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_rgb_8bit": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_alpha": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "history": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "reprojected": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "recurrent": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "auto_exposure": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        }
+      }
+    },
+    "recorded-rcas-on": {
+      "input": "same 8 recorded frames, RCAS on, sharpness 0.498",
+      "preset": "drs",
+      "frames": 8,
+      "output_size": [
+        1712,
+        1112
+      ],
+      "reference": {
+        "backend": "int8-reference",
+        "optimize": 0,
+        "variant": "fsr412_2160_di1_lm1_jm0_cs0_ae1_o0_up0_pc0_int8-reference"
+      },
+      "optimized": {
+        "backend": "int8-mpp",
+        "optimize": 1,
+        "variant": "fsr412_2160_di1_lm1_jm0_cs0_ae1_o1_up0_pc1_v2_int8-mpp"
+      },
+      "summary": {
+        "output_rgb": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_rgb_unit": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_rgb_8bit": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_alpha": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "history": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "reprojected": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "recurrent": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "auto_exposure": {
+          "bitwise_equal_frames": 8,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        }
+      }
+    },
+    "recorded-ultra": {
+      "input": "first 4 recorded frames with preset=ultraperformance",
+      "preset": "ultraperformance",
+      "frames": 4,
+      "output_size": [
+        1712,
+        1112
+      ],
+      "reference": {
+        "backend": "int8-reference",
+        "optimize": 0,
+        "variant": "fsr412_2160_di1_lm1_jm0_cs0_ae1_o0_up1_pc0_int8-reference"
+      },
+      "optimized": {
+        "backend": "int8-mpp",
+        "optimize": 1,
+        "variant": "fsr412_2160_di1_lm1_jm0_cs0_ae1_o1_up1_pc1_v2_int8-mpp"
+      },
+      "summary": {
+        "output_rgb": {
+          "bitwise_equal_frames": 4,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_rgb_unit": {
+          "bitwise_equal_frames": 4,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_rgb_8bit": {
+          "bitwise_equal_frames": 4,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_alpha": {
+          "bitwise_equal_frames": 4,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "history": {
+          "bitwise_equal_frames": 4,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "reprojected": {
+          "bitwise_equal_frames": 4,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "recurrent": {
+          "bitwise_equal_frames": 4,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "auto_exposure": {
+          "bitwise_equal_frames": 4,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        }
+      }
+    },
+    "odd-normal": {
+      "input": "synthetic 63x39 -> 127x79, quality preset, reset then history",
+      "preset": "quality",
+      "frames": 2,
+      "output_size": [
+        127,
+        79
+      ],
+      "reference": {
+        "backend": "int8-reference",
+        "optimize": 0,
+        "variant": "fsr412_1080_di0_lm1_jm0_cs0_ae0_o0_up0_pc0_int8-reference"
+      },
+      "optimized": {
+        "backend": "int8-mpp",
+        "optimize": 1,
+        "variant": "fsr412_1080_di0_lm1_jm0_cs0_ae0_o1_up0_pc1_v2_int8-mpp"
+      },
+      "summary": {
+        "output_rgb": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_rgb_unit": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_rgb_8bit": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_alpha": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "history": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "reprojected": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "recurrent": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "auto_exposure": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        }
+      }
+    },
+    "odd-ultra": {
+      "input": "synthetic 63x39 -> 127x79, ultraperformance preset",
+      "preset": "ultraperformance",
+      "frames": 2,
+      "output_size": [
+        127,
+        79
+      ],
+      "reference": {
+        "backend": "int8-reference",
+        "optimize": 0,
+        "variant": "fsr412_1080_di0_lm1_jm0_cs0_ae0_o0_up1_pc0_int8-reference"
+      },
+      "optimized": {
+        "backend": "int8-mpp",
+        "optimize": 1,
+        "variant": "fsr412_1080_di0_lm1_jm0_cs0_ae0_o1_up1_pc1_v2_int8-mpp"
+      },
+      "summary": {
+        "output_rgb": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_rgb_unit": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_rgb_8bit": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "output_alpha": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "history": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "reprojected": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "recurrent": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        },
+        "auto_exposure": {
+          "bitwise_equal_frames": 2,
+          "changed_components_max": 0.0,
+          "changed_pixels_max": 0.0,
+          "max_abs": 0.0,
+          "mean_abs_mean": 0.0,
+          "rmse_max": 0.0,
+          "psnr_db_min": null,
+          "nonfinite": 0
+        }
+      }
+    }
+  },
+  "fixed_before_release": {
+    "issue": "Native Ultra Performance POST CNB used normal-preset quantizer shifts ([8,8], tail [0,6,6,0]); the Ultra DLL shader uses round shift 7 and rint((x/16 + acc/1024)*8), i.e. [7,8], tail [0,6,7,0]. PRE and passes 1-3 were already identical; POST diverged on the first frame and history propagated it.",
+    "case": "odd-ultra",
+    "before_fix_summary": {
+      "output_rgb": {
+        "bitwise_equal_frames": 0,
+        "changed_components_max": 0.9901990099338849,
+        "changed_pixels_max": 0.9997009867437456,
+        "max_abs": 0.188720703125,
+        "mean_abs_mean": 0.015812706577409134,
+        "rmse_max": 0.023301994567864307,
+        "psnr_db_min": 32.08251107701245,
+        "nonfinite": 0
+      },
+      "output_rgb_unit": {
+        "bitwise_equal_frames": 0,
+        "changed_components_max": 0.9901990099338849,
+        "changed_pixels_max": 0.9997009867437456,
+        "max_abs": 0.188720703125,
+        "mean_abs_mean": 0.015812706577409134,
+        "rmse_max": 0.023301994567864307,
+        "psnr_db_min": 32.65213806639542,
+        "nonfinite": 0
+      },
+      "output_rgb_8bit": {
+        "bitwise_equal_frames": 0,
+        "changed_components_max": 0.8997973354596498,
+        "changed_pixels_max": 0.9724907804245988,
+        "max_abs": 48.0,
+        "mean_abs_mean": 4.030532575833084,
+        "rmse_max": 5.957846095473214,
+        "psnr_db_min": 32.62901800421049,
+        "nonfinite": 0
+      },
+      "output_alpha": {
+        "bitwise_equal_frames": 0,
+        "changed_components_max": 0.995813814412439,
+        "changed_pixels_max": 0.995813814412439,
+        "max_abs": 0.188720703125,
+        "mean_abs_mean": 0.022926929024843015,
+        "rmse_max": 0.031036261192577744,
+        "psnr_db_min": 30.16261203773009,
+        "nonfinite": 0
+      },
+      "history": {
+        "bitwise_equal_frames": 0,
+        "changed_components_max": 0.9482421875,
+        "changed_pixels_max": 0.98994140625,
+        "max_abs": 0.044677734375,
+        "mean_abs_mean": 0.0036200344562530517,
+        "rmse_max": 0.005335776079235268,
+        "psnr_db_min": 40.740388267326864,
+        "nonfinite": 0
+      },
+      "reprojected": {
+        "bitwise_equal_frames": 1,
+        "changed_components_max": 0.899072265625,
+        "changed_pixels_max": 0.9517578125,
+        "max_abs": 0.02490234375,
+        "mean_abs_mean": 0.0015151351690292358,
+        "rmse_max": 0.004319034037873082,
+        "psnr_db_min": 42.554682799173165,
+        "nonfinite": 0
+      },
+      "recurrent": {
+        "bitwise_equal_frames": 0,
+        "changed_components_max": 0.999951171875,
+        "changed_pixels_max": 1.0,
+        "max_abs": 85.0,
+        "mean_abs_mean": 24.41822509765625,
+        "rmse_max": 27.988140101266556,
+        "psnr_db_min": 19.191322824489674,
+        "nonfinite": 0
+      },
+      "auto_exposure": {
+        "bitwise_equal_frames": 2,
+        "changed_components_max": 0.0,
+        "changed_pixels_max": 0.0,
+        "max_abs": 0.0,
+        "mean_abs_mean": 0.0,
+        "rmse_max": 0.0,
+        "psnr_db_min": null,
+        "nonfinite": 0
+      }
+    },
+    "after_fix": "all compared surfaces byte-identical; tests/fsr412_optimization_test.mm now compares Backend::Reference with Native optimize=0 bit for bit in all three modes"
+  },
+  "reproduce": [
+    "tools/bin/fsr4mac --fsr-version 4.1.2 CASE REF --reference --optimize 0 --dump-state",
+    "tools/bin/fsr4mac --fsr-version 4.1.2 CASE OPT --i8mpp --optimize 1 --dump-state",
+    "python3 tools/diagnostics/fsr412_dll_parity.py --case NAME=REF:OPT --report parity.json",
+    "make test-fsr412-optimization"
+  ]
+}

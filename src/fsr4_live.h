@@ -115,16 +115,17 @@ void fsr4_live_set_inactive(const char *reason);
 // by the panel) overrides them; FSR4_SETTINGS=none ignores the file.
 void fsr4_live_get_sharpness(float *sharpness, int *rcas);
 void fsr4_live_set_sharpness(float sharpness, int rcas);
-// Upscaler profile: 0 = Exact, 1 = Lossy (default), 2 = Exact-fast
+// Upscaler profile: 0 = Exact, 1 = Lossy, 2 = Exact-fast
 // (exact-fast in FSR4_PROFILE/panel.conf), 3 = the FSR 4.0.2 model ("fsr4"),
-// 4 = Lossy2 ("lossy2", lossy with the six trained layers).
+// 4 = Lossy2 ("lossy2", lossy with the six trained layers),
+// 5 = AMD FSR 4.1.2 INT8 Lite ("int8-lite", default).
 // FSR4_PROFILE sets the initial preference; panel.conf overrides it unless
 // FSR4_SETTINGS=none. The 4.1.1 bridge includes 0-2 in its session/history
-// identity; switching to or from 3 changes the model and resets history.
+// identity; switching to or from 3/5 changes the model and resets history.
 void fsr4_live_get_profile(int *profile);
 void fsr4_live_set_profile(int profile);
 // Model the live bridge encodes: "4.0.2" when FSR4_VERSION=4.0.2 or the
-// profile is 3, otherwise "4.1.1".
+// profile is 3, "4.1.2" for INT8 Lite, otherwise "4.1.1".
 const char *fsr4_live_model_version(void);
 
 // FSR4_PANEL=1: launch dist/crossover/FSR4 Panel.app once (src/fsr4_panel.mm).

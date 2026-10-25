@@ -18,11 +18,11 @@ Ultra Performance новыми весами не поддержан: в этом
 ```sh
 make lossy2-weights   # один раз: 50 КБ, пин по коммиту и SHA-256, в build/
 make -B
-tools/bin/fsr4mac <testcase_dir> out/lossy2 --profile lossy2
+tools/bin/fsr4mac <testcase_dir> out/lossy2 --fsr-version 4.1.1 --profile lossy2
 ```
 
 В CrossOver: `FSR4_PROFILE=lossy2` в бутылке, либо установщик с профилем
-`--profile lossy2`. Панель показывает режим **FSR 4.1 Lite 2** только когда файл
+`--fsr-version 4.1.1 --profile lossy2`. Панель показывает режим **FSR 4.1 Lossy** (бывший Lite 2) только когда файл
 весов уже скачан; иначе пункт скрыт.
 
 Веса не входят в репозиторий: архив принадлежит проекту zgauthier2000 под

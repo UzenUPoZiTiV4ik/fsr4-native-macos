@@ -260,7 +260,7 @@ struct Settings {
     bool loaded = false;
     float sharpness = 0.4f;
     bool rcas = true;
-    int profile = 1; // 0 Exact, 1 Lossy, 2 Exact-fast, 3 FSR 4.0.2 model, 4 Lossy2
+    int profile = 5; // 0-4 legacy modes; 5 AMD FSR 4.1.2 INT8 Lite
     std::string path;
     time_t mtime = 0;
     long mtimeNs = 0;
@@ -279,16 +279,21 @@ static int profile_from_name(const char *name) {
     if (!strcmp(name, "exact-fast") || !strcmp(name, "2")) return 2;
     if (!strcmp(name, "fsr4") || !strcmp(name, "3")) return 3;
     if (!strcmp(name, "lossy2") || !strcmp(name, "4")) return 4;
+    if (!strcmp(name, "int8-lite") || !strcmp(name, "lite") || !strcmp(name, "5")) return 5;
     return -1;
 }
 static const char *profile_label(int profile) {
     return profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
-         : profile == 4 ? "lossy2" : "exact";
+         : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : "exact";
 }
 
 static void settings_load_locked() {
     if (g_set.loaded) return;
     g_set.loaded = true;
+    // An explicit legacy install keeps its previous default. New installs
+    // and an unset version use the smaller AMD 4.1.2 INT8 Lite architecture.
+    if (const char *version = getenv("FSR4_VERSION"))
+        if (!strcmp(version, "4.1.1")) g_set.profile = 1;
     if (const char *e = getenv("FSR4_SHARPNESS")) if (e[0]) g_set.sharpness = (float)atof(e);
     if (const char *e = getenv("FSR4_RCAS")) if (e[0] == '0') g_set.rcas = false;
     if (!(g_set.sharpness > 0.f)) { g_set.sharpness = 0.f; g_set.rcas = false; }
@@ -296,7 +301,7 @@ static void settings_load_locked() {
     if (const char *e = getenv("FSR4_PROFILE")) {
         const int profile = profile_from_name(e);
         if (profile >= 0) g_set.profile = profile;
-        else if (*e) flog("FSR4_PROFILE must be exact, exact-fast, lossy, lossy2 or fsr4; using lossy");
+        else if (*e) flog("FSR4_PROFILE must be int8-lite, exact, exact-fast, lossy, lossy2 or fsr4; using the version default");
     }
     const char *sp = getenv("FSR4_SETTINGS");
     if (sp && !strcmp(sp, "none")) return;
@@ -382,18 +387,19 @@ extern "C" void fsr4_live_get_profile(int *profile) {
     if (profile) *profile = g_set.profile;
 }
 
-// FSR4_VERSION=4.0.2 forces the old model. Otherwise (4.1.1 or unset) the
-// panel's "fsr4" profile selects it, and every other profile selects 4.1.1.
+// FSR4_VERSION=4.0.2 pins the legacy model. Named panel modes otherwise
+// select their actual architectures, so existing 4.1.1 preferences remain
+// meaningful and INT8 Lite never silently executes the older lossy network.
 extern "C" const char *fsr4_live_model_version(void) {
     const char *version = getenv("FSR4_VERSION");
-    if (version && *version && strcmp(version, "4.1.1")) return version;
-    int profile = 1;
+    if (version && *version && strcmp(version, "4.1.1") && strcmp(version, "4.1.2")) return version;
+    int profile = 5;
     fsr4_live_get_profile(&profile);
-    return profile == 3 ? "4.0.2" : "4.1.1";
+    return profile == 3 ? "4.0.2" : profile == 5 ? "4.1.2" : "4.1.1";
 }
 
 extern "C" void fsr4_live_set_profile(int profile) {
-    if (profile < 0 || profile > 4) return;
+    if (profile < 0 || profile > 5) return;
     std::lock_guard<std::mutex> lk(g_set_mu);
     settings_load_locked();
     settings_read_file_locked();
@@ -1437,6 +1443,9 @@ static int encode_legacy_frame(const Fsr4LiveFrame *f, const Fsr4InputGeometry &
 extern "C" int fsr411_encode_live_frame(const Fsr4LiveFrameV2 *) __attribute__((weak_import));
 extern "C" void fsr411_invalidate_owner(void *, void *) __attribute__((weak_import));
 extern "C" void fsr411_release_owner(void *, void *) __attribute__((weak_import));
+extern "C" int fsr412_encode_live_frame(const Fsr4LiveFrameV2 *) __attribute__((weak_import));
+extern "C" void fsr412_invalidate_owner(void *, void *) __attribute__((weak_import));
+extern "C" void fsr412_release_owner(void *, void *) __attribute__((weak_import));
 
 static void invalidate_legacy_input(const Fsr4LiveFrame *frame) {
     if (!frame) return;
@@ -1455,6 +1464,7 @@ void fsr4_invalidate_live_owner(void *device, void *owner) {
     frame.device = device; frame.owner = owner;
     invalidate_legacy_input(&frame);
     if (fsr411_invalidate_owner) fsr411_invalidate_owner(device, owner);
+    if (fsr412_invalidate_owner) fsr412_invalidate_owner(device, owner);
 }
 
 void fsr4_release_live_owner(void *device, void *owner) {
@@ -1471,6 +1481,7 @@ void fsr4_release_live_owner(void *device, void *owner) {
         }
     }
     if (fsr411_release_owner) fsr411_release_owner(device, owner);
+    if (fsr412_release_owner) fsr412_release_owner(device, owner);
 }
 
 static int fail_input_frame(const Fsr4LiveFrame *frame, const char *reason) {
@@ -1487,7 +1498,7 @@ int fsr4_encode_live_frame_v2(const Fsr4LiveFrameV2 *v2) {
     const Fsr4LiveFrame *f = &v2->frame;
     if (!f->device || !f->commandBuffer || !f->color || !f->depth || !f->motion || !f->output)
         return fail_input_frame(f, "missing scaler textures or command buffer");
-    // Both model versions share the panel; request it before routing to either encoder.
+    // All model versions share the panel; request it before routing.
     fsr4_panel_request();
     id<MTLDevice> dev = (__bridge id<MTLDevice>)f->device;
     if (!surface_matches_texture(v2->geometry.color, (__bridge id<MTLTexture>)f->color, dev)
@@ -1498,8 +1509,21 @@ int fsr4_encode_live_frame_v2(const Fsr4LiveFrameV2 *v2) {
     if (f->exposure && [(__bridge id<MTLTexture>)f->exposure device] != dev)
         return fail_input_frame(f, "exposure texture belongs to a different device");
     const char *version = fsr4_live_model_version();
+    if (!strcmp(version, "4.1.2")) {
+        invalidate_legacy_input(f);
+        if (fsr411_invalidate_owner) fsr411_invalidate_owner(f->device, f->owner);
+        if (!fsr412_encode_live_frame) return fail_reason("FSR 4.1.2 encoder is not linked");
+        Fsr4LiveStatus before = {};
+        fsr4_live_get_status(&before);
+        if (fsr412_encode_live_frame(v2)) return 1;
+        Fsr4LiveStatus after = {};
+        fsr4_live_get_status(&after);
+        if (!after.active && after.reason[0] && after.encodes != before.encodes) return 0;
+        return fail_reason("FSR 4.1.2 rejected frame (see hook.log)");
+    }
     if (!strcmp(version, "4.1.1")) {
         invalidate_legacy_input(f);
+        if (fsr412_invalidate_owner) fsr412_invalidate_owner(f->device, f->owner);
         if (!fsr411_encode_live_frame) return fail_reason("FSR 4.1.1 encoder is not linked");
         Fsr4LiveStatus before = {};
         fsr4_live_get_status(&before);
@@ -1512,9 +1536,10 @@ int fsr4_encode_live_frame_v2(const Fsr4LiveFrameV2 *v2) {
         if (!after.active && after.reason[0] && after.encodes != before.encodes) return 0;
         return fail_reason("FSR 4.1.1 rejected frame (see hook.log)");
     }
-    if (strcmp(version, "4.0.2")) return fail_input_frame(f, "FSR4_VERSION must be 4.0.2 or 4.1.1");
+    if (strcmp(version, "4.0.2")) return fail_input_frame(f, "FSR4_VERSION must be 4.0.2, 4.1.1 or 4.1.2");
     // Switching models drops the other model's session and history.
     if (fsr411_invalidate_owner) fsr411_invalidate_owner(f->device, f->owner);
+    if (fsr412_invalidate_owner) fsr412_invalidate_owner(f->device, f->owner);
     return encode_legacy_frame(f, v2->geometry, v2->inputContentProperties);
 }
 

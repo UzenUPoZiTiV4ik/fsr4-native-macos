@@ -1,4 +1,4 @@
-# Инструкция: FSR 4.1.1 на Mac
+# Инструкция: FSR 4.1.2 на Mac
 
 ## 1. Что нужно
 
@@ -10,7 +10,7 @@
 
 ![FSR4 Installer](images/installer.png)
 
-1. Скачайте **FSR4-Installer-v1.8.dmg** из
+1. Скачайте **FSR4-Installer-v2.0.dmg** из
    [последнего релиза](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/releases/latest),
    откройте его и перетащите **FSR4 Installer** в «Программы».
 2. Первый запуск. Приложение не нотаризовано Apple, поэтому macOS его
@@ -35,8 +35,8 @@
    После установки Xcode нажмите ↻ справа от заголовка, чтобы проверить снова.
 4. Полностью закройте игру и её бутылку. Если бутылка запущена, приложение
    предупредит: бутылка читает настройки только при старте.
-5. Выберите бутылку и **режим при запуске**: FSR 4.1 Lite (быстрее) или
-   FSR 4.1 (лучше качество). Оставьте включённой **панель FSR 4**, если хотите
+5. Выберите бутылку и **режим при запуске**: FSR 4.1.2 Lite (по умолчанию),
+   FSR 4.1 Lossy (бывший Lite 2) или FSR 4.1. Оставьте включённой **панель FSR 4**, если хотите
    менять режим прямо в игре.
 6. Нажмите **Установить в «…»**. Установка занимает около минуты: сборка
    хука, патч копии D3DMetal, компиляция шейдеров и проверка результата на
@@ -59,10 +59,12 @@
 ```sh
 xcodebuild -downloadComponent MetalToolchain
 make -B
+python3 tools/fsr412_import_model.py --dll /path/to/amdvkffx64.dll --with-shaders
 tools/bin/fsr4mac --backend-info
 ```
 
 Последняя команда показывает, какой режим GPU будет использован.
+Импорт нужен при сборке из чистых исходников; ZIP/DMG релиза уже содержит модель.
 
 Установка:
 
@@ -70,7 +72,7 @@ tools/bin/fsr4mac --backend-info
 2. Выполните:
 
    ```sh
-   python3 tools/crossover/crossover_fsr4.py install --panel --profile lossy
+   python3 tools/crossover/crossover_fsr4.py install --panel --fsr-version 4.1.2 --profile int8-lite
    ```
 
    Если бутылка одна, она выбирается сама. Если их несколько, добавьте
@@ -83,13 +85,12 @@ tools/bin/fsr4mac --backend-info
 
 | Режим | Что это |
 | --- | --- |
-| FSR 4.1 Lite | Самый быстрый (по умолчанию) |
-| FSR 4.1 Lite 2 | Lite с обученными слоями; появляется после `make lossy2-weights` |
+| FSR 4.1.2 Lite | Новая компактная INT8-модель AMD, нейросеть работает каждый кадр; по умолчанию |
+| FSR 4.1 Lossy | Бывший Lite 2 с обученными слоями и повторным использованием вычислений; появляется после `make lossy2-weights` |
 | FSR 4.1 | Полное качество |
 
-Режим и резкость меняются сразу, перезапуск не нужен. Старая модель 4.0.2
-в панели не показывается: её можно включить только при сборке из исходников
-через `FSR4_PROFILE=fsr4` (см. ниже).
+Режим и резкость меняются сразу, перезапуск не нужен. Старый пункт FSR 4.1 Lite удалён.
+После обновления самого хука игру нужно перезапустить.
 
 ## 5. Как всё вернуть
 
@@ -127,8 +128,8 @@ python3 tools/crossover/crossover_fsr4.py restore --bottle "/path/to/cxbottle.co
 
 | Переменная | Значения |
 | --- | --- |
-| `FSR4_PROFILE` | `lossy` (по умолчанию), `exact-fast`, `exact`, `fsr4` |
-| `FSR4_VERSION` | `4.1.1` (по умолчанию) или `4.0.2` |
+| `FSR4_PROFILE` | `int8-lite` (по умолчанию), `lossy2` (FSR 4.1 Lossy), `exact-fast`, `exact`, `fsr4` |
+| `FSR4_VERSION` | `4.1.2` (по умолчанию), `4.1.1` или `4.0.2` |
 | `FSR4_MODEL` | `auto`, `i8mpp`, `simd` (M1–M4, по умолчанию там), `scalar`, `reference` |
 | `FSR4_SHARPNESS`, `FSR4_RCAS` | Резкость (по умолчанию RCAS 0.4) |
 | `FSR4_OPTIMIZE` | `1` по умолчанию, `0` отключает оптимизации |
@@ -140,8 +141,9 @@ python3 tools/crossover/crossover_fsr4.py restore --bottle "/path/to/cxbottle.co
 
 ```sh
 tools/bin/gen_testcase testcases/quality411 quality 1280 720 1920 1080 8
-tools/bin/fsr4mac testcases/quality411 out/lossy --profile lossy
-tools/bin/fsr4mac testcases/quality411 out/bench --profile lossy --bench 10
+tools/bin/fsr4mac testcases/quality411 out/lite --fsr-version 4.1.2 --profile int8-lite
+tools/bin/fsr4mac testcases/quality411 out/bench --fsr-version 4.1.2 --profile int8-lite --bench 10
+tools/bin/fsr4mac testcases/quality411 out/lossy --fsr-version 4.1.1 --profile lossy2 --bench 10
 ```
 
 Результат: PNG, `.bin` и `run.json`. Формат входа:

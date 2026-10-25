@@ -33,11 +33,13 @@ test-fsr411-layout:
 
 test-settings:
 	mkdir -p build/tests
-	$(CXX) $(CXXFLAGS) -fobjc-arc -x objective-c++ -I src tests/fsr4_settings_test.cpp src/fsr4_live.mm src/fsr4_panel.mm $(FRAMEWORKS) -Wl,-U,_fsr411_encode_live_frame -Wl,-U,_fsr411_invalidate_owner -Wl,-U,_fsr411_release_owner -o build/tests/fsr4_settings_test
+	$(CXX) $(CXXFLAGS) -fobjc-arc -x objective-c++ -I src tests/fsr4_settings_test.cpp src/fsr4_live.mm src/fsr4_panel.mm $(FRAMEWORKS) -Wl,-U,_fsr411_encode_live_frame -Wl,-U,_fsr411_invalidate_owner -Wl,-U,_fsr411_release_owner -Wl,-U,_fsr412_encode_live_frame -Wl,-U,_fsr412_invalidate_owner -Wl,-U,_fsr412_release_owner -o build/tests/fsr4_settings_test
 	build/tests/fsr4_settings_test default
 	build/tests/fsr4_settings_test environment
 	build/tests/fsr4_settings_test environment-fast
 	build/tests/fsr4_settings_test environment-lossy2
+	build/tests/fsr4_settings_test environment-int8-lite
+	build/tests/fsr4_settings_test legacy-default
 	build/tests/fsr4_settings_test environment-fsr4
 	build/tests/fsr4_settings_test model
 	build/tests/fsr4_settings_test file
@@ -207,7 +209,7 @@ test-fsr411-cadence: build/tests/fsr411_lossy_cadence_test
 	build/tests/fsr411_lossy_cadence_test "$(CURDIR)" --compile --inflight
 	build/tests/fsr411_lossy_cadence_test "$(CURDIR)" --compile --inflight --mtl4
 
-dist/crossover/libfsr4hook.dylib: Makefile tools/crossover/crossover_fsr4.py hook/fsr4_metalfx.m src/fsr4_live.mm src/fsr4_panel.mm src/fsr4_live.h src/fsr4_input.h src/fsr4_log.h src/fsr4_device.h src/fsr4_backend.h src/i8mpp_host.h src/fsr411_live.mm src/fsr411_runtime.h src/fsr411_capture_io.h src/fsr411_model.h src/fsr411_scratch_layout.h
+dist/crossover/libfsr4hook.dylib: Makefile tools/crossover/crossover_fsr4.py hook/fsr4_metalfx.m src/fsr4_live.mm src/fsr4_panel.mm src/fsr4_live.h src/fsr4_input.h src/fsr4_log.h src/fsr4_device.h src/fsr4_backend.h src/i8mpp_host.h src/fsr411_live.mm src/fsr411_runtime.h src/fsr411_capture_io.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_live.mm src/fsr412_runtime.h src/fsr412_session.inc
 	python3 -c 'import sys; sys.path.insert(0, "tools/crossover"); import crossover_fsr4 as c; c.build_hook(c.DIST / "hook.log")'
 
 dist/crossover/fsr411_live_regions_test: tests/fsr411_live_regions_test.mm src/fsr4_live.h src/fsr4_input.h dist/crossover/libfsr4hook.dylib Makefile
@@ -217,12 +219,26 @@ test-fsr411-live: dist/crossover/fsr411_live_regions_test
 	FSR4_COMPILE=1 arch -x86_64 $< "$(CURDIR)" i8mpp classic switch
 	FSR4_COMPILE=1 arch -x86_64 $< "$(CURDIR)" i8mpp mtl4 switch
 
-build/obj/fsr411_cli.o: Makefile src/fsr411_cli.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr4_input.h src/fsr4_log.h src/pngio.h
+build/tests/fsr412_optimization_test: tests/fsr412_optimization_test.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr412_session.inc Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) $< $(FRAMEWORKS) -o $@
+
+test-fsr412-optimization: build/tests/fsr412_optimization_test
+	$< "$(CURDIR)"
+	$< "$(CURDIR)" mtl4
+
+.PHONY: test-fsr412-optimization
+
+build/obj/fsr411_cli.o: Makefile src/fsr411_cli.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_session.inc src/fsr4_input.h src/fsr4_log.h src/pngio.h
 	mkdir -p build/obj
 	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) -c src/fsr411_cli.mm -o $@
 
-$(BINDIR)/fsr4mac: Makefile src/fsr4mac.mm src/pngio.h src/pass0_weights.h src/i8mpp_host.h src/fsr4_backend.h src/fsr4_device.h build/obj/fsr411_cli.o
-	$(CXX) $(CXXFLAGS) -isysroot $(SDKROOT) $(FRAMEWORKS) $(ZLIB) -o $@ src/fsr4mac.mm build/obj/fsr411_cli.o
+build/obj/fsr412_cli.o: Makefile src/fsr412_cli.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_session.inc src/fsr4_input.h src/fsr4_log.h src/pngio.h
+	mkdir -p build/obj
+	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) -c src/fsr412_cli.mm -o $@
+
+$(BINDIR)/fsr4mac: Makefile src/fsr4mac.mm src/pngio.h src/pass0_weights.h src/i8mpp_host.h src/fsr4_backend.h src/fsr4_device.h build/obj/fsr411_cli.o build/obj/fsr412_cli.o
+	$(CXX) $(CXXFLAGS) -isysroot $(SDKROOT) $(FRAMEWORKS) $(ZLIB) -o $@ src/fsr4mac.mm build/obj/fsr411_cli.o build/obj/fsr412_cli.o
 
 $(BINDIR)/gen_testcase: src/gen_testcase.cpp
 	$(CXX) $(CXXFLAGS) -o $@ src/gen_testcase.cpp
@@ -240,7 +256,7 @@ lossy2-weights:
 
 clean:
 	rm -f $(BINDIR)/fsr4mac $(BINDIR)/gen_testcase $(BINDIR)/compare $(BINDIR)/bilin $(BINDIR)/bin2png
-	rm -f build/obj/fsr411_cli.o
+	rm -f build/obj/fsr411_cli.o build/obj/fsr412_cli.o
 
 # Installer app (tools/installer): SwiftUI front end for crossover_fsr4.py.
 INSTALLER_CORE := $(filter-out %/App.swift %/ContentView.swift,$(wildcard tools/installer/Sources/*.swift))

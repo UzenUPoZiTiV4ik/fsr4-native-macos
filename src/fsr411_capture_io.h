@@ -35,6 +35,7 @@ struct RecordedFrame {
 };
 struct Job {
     std::string root,directory;
+    std::string version="4.1.1";
     unsigned count=8;
     unsigned requestedCount=8;
     uint64_t reservedBytes=0;
@@ -66,11 +67,11 @@ inline void write_job(std::shared_ptr<Job> job) {
         if(![[NSFileManager defaultManager] createDirectoryAtPath:fsr411::ns(job->directory)
                       withIntermediateDirectories:YES attributes:nil error:&directoryError]) {
             publish(job->root,"error",@"Could not create the diagnostics folder.",job->directory);
-            fsr4_logf("4.1.1 capture directory failed: %s",fsr411::utf8(directoryError.localizedDescription).c_str());
+            fsr4_logf("%s capture directory failed: %s",job->version.c_str(),fsr411::utf8(directoryError.localizedDescription).c_str());
             job->done.store(true,std::memory_order_release);return;
         }
         const auto write_manifest=[&](const char *state) {
-            NSDictionary *manifest=@{@"schema_version":@1,@"fsr_version":@"4.1.1",@"status":fsr411::ns(state),
+            NSDictionary *manifest=@{@"schema_version":@1,@"fsr_version":fsr411::ns(job->version),@"status":fsr411::ns(state),
                 @"format":@"little-endian float32, C row-major",@"requested_frames":@(job->requestedCount),
                 @"frames":saved,@"error":fsr411::ns(error)};
             NSData *data=[NSJSONSerialization dataWithJSONObject:manifest options:NSJSONWritingPrettyPrinted error:nil];
@@ -99,12 +100,12 @@ inline void write_job(std::shared_ptr<Job> job) {
         }
         if(error.empty() && saved.count==job->count && write_manifest("complete")) {
             publish(job->root,"complete",[NSString stringWithFormat:@"Done: recorded %lu frames.",(unsigned long)saved.count],job->directory);
-            fsr4_logf("4.1.1 capture complete frames=%lu directory=%s",(unsigned long)saved.count,job->directory.c_str());
+            fsr4_logf("%s capture complete frames=%lu directory=%s",job->version.c_str(),(unsigned long)saved.count,job->directory.c_str());
         } else {
             if(error.empty())error="incomplete capture";
             write_manifest("error");
             publish(job->root,"error",@"Could not finish recording; see hook.log.",job->directory);
-            fsr4_logf("4.1.1 capture failed: %s directory=%s",error.c_str(),job->directory.c_str());
+            fsr4_logf("%s capture failed: %s directory=%s",job->version.c_str(),error.c_str(),job->directory.c_str());
         }
         job->done.store(true,std::memory_order_release);
     }
@@ -112,7 +113,8 @@ inline void write_job(std::shared_ptr<Job> job) {
 
 class Recorder {
 public:
-    explicit Recorder(std::string root):root_(std::move(root)){}
+    explicit Recorder(std::string root,std::string version="4.1.1")
+        :root_(std::move(root)),version_(std::move(version)){}
 
     std::shared_ptr<fsr411::FrameSnapshot> request(void *owner,const fsr411::Frame &frame) {
         const double now=now_ms();
@@ -135,11 +137,11 @@ public:
                     fclose(f);
                 }
                 unlink(claimed.c_str());
-                job_=std::make_shared<Job>();job_->root=root_;job_->count=frames;job_->requestedCount=frames;job_->start=now+delay;
+                job_=std::make_shared<Job>();job_->root=root_;job_->version=version_;job_->count=frames;job_->requestedCount=frames;job_->start=now+delay;
                 const auto stamp=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
                 job_->directory=root_+"/dist/crossover/captures/"+std::to_string(stamp)+"-"+std::to_string(getpid());
                 publish(root_,"waiting",@"Move the camera: recording starts in 1.5 s.",job_->directory);
-                fsr4_logf("4.1.1 capture requested frames=%u delayMs=%u directory=%s",frames,delay,job_->directory.c_str());
+                fsr4_logf("%s capture requested frames=%u delayMs=%u directory=%s",version_.c_str(),frames,delay,job_->directory.c_str());
             }
         }
         if(!job_ || job_->writing || now<job_->start || (job_->hasOwner && job_->owner!=owner))return nullptr;
@@ -203,7 +205,7 @@ public:
     void failed(void *owner,const std::string &reason) {
         if(!job_ || job_->writing || (job_->hasOwner && job_->owner!=owner))return;
         publish(root_,"error",@"Recording stopped: the scaler rejected a frame. See hook.log.",job_->directory);
-        fsr4_logf("4.1.1 capture interrupted: %s",reason.c_str());
+        fsr4_logf("%s capture interrupted: %s",version_.c_str(),reason.c_str());
         job_.reset();
     }
 
@@ -215,7 +217,7 @@ public:
 private:
     void finish_partial(const char *reason) {
         if(!job_ || job_->writing)return;
-        fsr4_logf("4.1.1 capture recording stopped: %s frames=%lu",reason,(unsigned long)job_->frames.size());
+        fsr4_logf("%s capture recording stopped: %s frames=%lu",version_.c_str(),reason,(unsigned long)job_->frames.size());
         if(job_->frames.size()>=2) {
             job_->count=unsigned(job_->frames.size());job_->writing=true;
             std::thread(write_job,job_).detach();
@@ -224,7 +226,7 @@ private:
             job_.reset();
         }
     }
-    std::string root_;
+    std::string root_,version_;
     double nextCheck_=0;
     std::shared_ptr<Job> job_;
 };

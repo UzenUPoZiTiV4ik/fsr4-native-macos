@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Benchmark FSR 4.1.1 serially, reversing variant order on alternate rounds.
+"""Benchmark FSR 4.1.1/4.1.2 serially, reversing order on alternate rounds.
 
 Usage: benchmark_fsr411.py plan.json output --rounds 6 --bench 30
 Plan: {"input": "/capture", "variants": [{"name": "baseline-full",
-       "root": "/source", "builddir": "/cache", "profile": "exact-fast",
+       "root": "/source", "builddir": "/cache", "profile": "exact-fast", "fsr_version": "4.1.1",
        "binary": "/source/tools/bin/fsr4mac", "source_hash": "optional"}]}
 The plan may supply a default binary; each variant may override input.
 Relative plan paths resolve against the plan's directory. Output must be
@@ -56,8 +56,10 @@ def load_plan(path):
         if name in names:
             raise ValueError("duplicate variant: " + name)
         names.add(name)
-        if variant.get("profile") not in ("exact", "exact-fast", "lossy", "lossy2"):
-            raise ValueError(name + ": profile must be exact, exact-fast, lossy or lossy2")
+        version = variant.setdefault("fsr_version", "4.1.1")
+        profiles = {"4.1.1": ("exact", "exact-fast", "lossy", "lossy2"), "4.1.2": ("int8-lite",)}
+        if version not in profiles or variant.get("profile") not in profiles[version]:
+            raise ValueError(name + ": profile does not match fsr_version (4.1.1 or 4.1.2)")
         for key in ("root", "builddir", "binary", "input"):
             value = variant.get(key, plan.get(key) if key in ("binary", "input") else None)
             if not isinstance(value, str) or not value:
@@ -81,7 +83,7 @@ def load_plan(path):
 
 
 def command_for(variant, output, bench):
-    return [variant["binary"], "--fsr-version", "4.1.1", "--root", variant["root"],
+    return [variant["binary"], "--fsr-version", variant.get("fsr_version", "4.1.1"), "--root", variant["root"],
             "--builddir", variant["builddir"], "--no-compile", "--i8mpp",
             "--profile", variant["profile"], variant["input"], str(output), "--bench", str(bench)]
 
@@ -93,13 +95,15 @@ def summarize(rows):
     if any(isinstance(value, bool) or not isinstance(value, (int, float))
            or not math.isfinite(value) or value <= 0 for value in values):
         raise ValueError("GPU durations must be finite positive numbers")
+    ordered = sorted(values)
     return {"count": len(values), "mean_ms": statistics.mean(values),
-            "median_ms": statistics.median(values), "min_ms": min(values), "max_ms": max(values)}
+            "median_ms": statistics.median(values), "min_ms": min(values), "max_ms": max(values),
+            "p95_ms": ordered[math.ceil(.95*len(values))-1], "p99_ms": ordered[math.ceil(.99*len(values))-1]}
 
 
 def read_measurements(path, variant, bench):
     run = json.loads(path.read_text())
-    if (run.get("fsr_version") != "4.1.1" or run.get("profile") != variant["profile"]
+    if (run.get("fsr_version") != variant.get("fsr_version", "4.1.1") or run.get("profile") != variant["profile"]
             or run.get("backend") != "int8-mpp"):
         raise ValueError(str(path) + ": unexpected model, profile or backend")
     if (run.get("timing_scope") != "full frame command buffer"
@@ -131,7 +135,7 @@ def round_summary(results, variants):
     summary = {}
     for variant in variants:
         selected = [result for result in results if result["variant"] == variant["name"]]
-        value = {"profile": variant["profile"], "rounds": len(selected)}
+        value = {"fsr_version": variant.get("fsr_version", "4.1.1"), "profile": variant["profile"], "rounds": len(selected)}
         for group in GROUPS:
             means = [result[group]["mean_ms"] for result in selected if result[group]["count"]]
             value[group] = {"count": sum(result[group]["count"] for result in selected),
@@ -140,6 +144,7 @@ def round_summary(results, variants):
                 median = statistics.median(means)
                 bounds = [min(means), max(means)]
                 value[group].update(median_round_mean_ms=median, round_mean_range_ms=bounds)
+                value[group]["max_ms"] = max(result[group]["max_ms"] for result in selected if result[group]["count"])
                 # Keep the concise fields used by the earlier local harness.
                 value["mean_ms" if group == "all" else group + "_mean_ms"] = median
                 if group == "all":

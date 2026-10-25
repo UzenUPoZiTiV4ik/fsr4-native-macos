@@ -2,10 +2,12 @@ import AppKit
 import Observation
 
 enum FSRProfile: String, CaseIterable, Identifiable {
-    case lite = "lossy"
+    case lite = "int8-lite"
+    case lossy = "lossy2"
     case full = "exact-fast"
 
     var id: String { rawValue }
+    var version: String { self == .lite ? "4.1.2" : "4.1.1" }
 }
 
 struct Banner: Equatable {
@@ -97,7 +99,7 @@ final class InstallerModel {
 
     func install() {
         guard canInstall, let bottle = selected else { return }
-        var arguments = ["install", "--bottle", bottle.conf.path, "--profile", profile.rawValue]
+        var arguments = ["install", "--bottle", bottle.conf.path, "--fsr-version", profile.version, "--profile", profile.rawValue]
         if panel { arguments.append("--panel") }
         // The same CrossOver the requirements list shows, not the script's own pick.
         if let app = requirements.first(where: { $0.kind == .crossover })?.location {

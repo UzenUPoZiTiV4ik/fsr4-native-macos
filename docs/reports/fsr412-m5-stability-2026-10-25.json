@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-25",
+  "device": "Apple M5",
+  "input": {
+    "render": [
+      864,
+      560
+    ],
+    "upscale": [
+      1712,
+      1112
+    ],
+    "frames": 8,
+    "rcas": false,
+    "auto_exposure": true,
+    "meta_sha256": "0334c6cb0596a76313304f6f47c4b077d00671c4dab703f482a6490a1b9921e0"
+  },
+  "protocol": "3 serial interleaved rounds, order reversed in alternate rounds; 20 measured sequences and 1 warmup sequence per run; full command buffer GPU timestamps; no compilation or diagnostic GPU copies/counters; every reset frame included",
+  "summary": {
+    "fsr412-before": {
+      "frames": 480,
+      "neural_runs": 480,
+      "reused_frames": 0,
+      "gpu_mean_ms": 2.966112846903949,
+      "gpu_median_ms": 2.51902082527522,
+      "gpu_p95_ms": 5.601708311587572,
+      "gpu_p99_ms": 8.307791664265096,
+      "gpu_max_ms": 9.609625005396083,
+      "round_means_ms": [
+        3.4513151047576685,
+        2.7170348961590207,
+        2.7299885397951584
+      ]
+    },
+    "fsr412-lite": {
+      "frames": 480,
+      "neural_runs": 480,
+      "reused_frames": 0,
+      "gpu_mean_ms": 2.6984659722074866,
+      "gpu_median_ms": 2.4762708344496787,
+      "gpu_p95_ms": 3.428125026402995,
+      "gpu_p99_ms": 3.874624992022291,
+      "gpu_max_ms": 4.93187498068437,
+      "round_means_ms": [
+        2.7456578121928032,
+        2.685375523287803,
+        2.6643645811418537
+      ]
+    },
+    "fsr411-lossy2": {
+      "frames": 480,
+      "neural_runs": 240,
+      "reused_frames": 240,
+      "gpu_mean_ms": 2.7761546877324386,
+      "gpu_median_ms": 2.980979174026288,
+      "gpu_p95_ms": 4.696624993812293,
+      "gpu_p99_ms": 5.007458326872438,
+      "gpu_max_ms": 5.564708320889622,
+      "round_means_ms": [
+        2.7371796868465026,
+        2.7804520841527847,
+        2.810832292198029
+      ]
+    }
+  },
+  "limitations": [
+    "Standalone replay, not an in-game frame-time capture.",
+    "Maximum is a finite-sample observation; system scheduling can cause larger outliers.",
+    "The old recorded comparison used RCAS enabled; this comparison uses the current saved RCAS-off preference."
+  ]
+}

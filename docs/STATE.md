@@ -1,6 +1,16 @@
 # FSR4-Metal — project state & handoff
 
-Last updated: **2026-10-19**, optimization of **FSR 4.1.1.2740 INT8**.
+Last updated: **2026-10-25**, **FSR 4.1.2 INT8 Lite**.
+
+2026-10-25: the default model is AMD 4.1.2 INT8 Lite from the pinned driver
+DLLs. Its three-stage network runs every frame; linear PRE/POST share a
+float32 input-color cache. The panel removes old Lite and renames Lite 2 to
+**FSR 4.1 Lossy**. A 480-frame interleaved M5 replay with RCAS off measured
+mean 2.70 ms and maximum 4.93 ms (Lossy 2: 2.78 / 5.56 ms). These are finite
+replay observations. See [FSR412_STABILITY.md](FSR412_STABILITY.md).
+The optimized path is byte-identical to the DLL's Lite shaders translated to
+Metal, including Ultra Performance after a POST quantizer fix; the Windows DLL
+was not executed. See [FSR412_DLL_PARITY.md](FSR412_DLL_PARITY.md).
 
 2026-10-19 (Lite 2): new opt-in `lossy2` profile ports release
 `dll-2026-10-19`: the Lite network with trained integer weights in passes 1, 2,
