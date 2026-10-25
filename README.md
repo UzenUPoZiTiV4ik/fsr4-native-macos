@@ -3,7 +3,11 @@
 AMD FSR 4.1.2 INT8 Lite upscaling running natively on Apple Silicon (Metal).
 Works as a standalone tool and inside games via CrossOver (DLSS → FSR 4).
 
-![FSR 4.0.2 vs FSR 4.1 on Apple M5](docs/images/fsr4-vs-fsr41-m5.png)
+![First release (FSR 4.0.2) vs FSR 4.1.2 Lite on Apple M5: 4.47 vs 2.70 ms per frame](docs/images/fsr4-first-vs-fsr412-lite-m5.png)
+
+The first release ran AMD's FSR 4.0.2 network at **4.47 ms** mean GPU time per
+frame on an M5; the current **4.1.2 Lite** does 2.70 ms on the same recorded
+sequence, 40% less. Method and limits: [FSR 4.1.2 stability](docs/FSR412_STABILITY.md).
 
 **Русская инструкция:** [docs/GUIDE.md](docs/GUIDE.md)
 
