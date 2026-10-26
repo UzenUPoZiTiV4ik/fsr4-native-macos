@@ -115,8 +115,9 @@ static Status read_status() {
     return s;
 }
 
-static void read_settings(float &sharp, bool &rcas, int &profile, bool &pixelFix, int fallbackProfile = -1) {
-    sharp = 0.4f; rcas = true; profile = fallbackProfile >= 0 ? fallbackProfile : 5; pixelFix = false;
+static void read_settings(float &sharp, bool &rcas, int &profile, bool &pixelFix, float &strength,
+                          int fallbackProfile = -1) {
+    sharp = 0.4f; rcas = true; profile = fallbackProfile >= 0 ? fallbackProfile : 5; pixelFix = false; strength = 0.5f;
     if (const char *value = getenv("FSR4_PROFILE")) profile = profile_from_name(value, profile);
     auto kv = read_kv(dist_path("panel.conf"));
     if (kv.count("sharpness")) sharp = (float)atof(kv["sharpness"].c_str());
@@ -125,16 +126,19 @@ static void read_settings(float &sharp, bool &rcas, int &profile, bool &pixelFix
     // Remembered while another mode is selected; profile 6 implies it.
     if (kv.count("pixelization_fix")) pixelFix = atoi(kv["pixelization_fix"].c_str()) != 0;
     if (profile == 6) pixelFix = true;
+    if (kv.count("pixelization_strength")) strength = (float)atof(kv["pixelization_strength"].c_str());
+    if (!std::isfinite(strength)) strength = .5f;
+    strength = strength < 0 ? 0 : strength > 1 ? 1 : strength;
     if (!std::isfinite(sharp)) sharp = .4f;
     if (sharp < 0) sharp = 0; if (sharp > 1) sharp = 1;
 }
 
-static bool write_settings(float sharp, bool rcas, int profile, bool pixelFix) {
+static bool write_settings(float sharp, bool rcas, int profile, bool pixelFix, float strength) {
     const std::string p = dist_path("panel.conf"), tmp = p + ".tmp." + std::to_string(getpid());
     FILE *f = fopen(tmp.c_str(), "w");
     if (!f) return false;
-    bool ok = fprintf(f, "sharpness=%.3f\nrcas=%d\nprofile=%s\npixelization_fix=%d\n", sharp, rcas ? 1 : 0,
-                      profile_label(profile), pixelFix ? 1 : 0) > 0;
+    bool ok = fprintf(f, "sharpness=%.3f\nrcas=%d\nprofile=%s\npixelization_fix=%d\npixelization_strength=%.3f\n",
+                      sharp, rcas ? 1 : 0, profile_label(profile), pixelFix ? 1 : 0, strength) > 0;
     if (fclose(f) != 0) ok = false;
     if (!ok || rename(tmp.c_str(), p.c_str()) != 0) { unlink(tmp.c_str()); return false; }
     return true;
@@ -159,8 +163,8 @@ static bool write_capture_request(NSString **reason) {
 
 @interface PanelApp : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) NSPanel *panel;
-@property(nonatomic, strong) NSTextField *status, *res, *frame, *sharpVal;
-@property(nonatomic, strong) NSSlider *slider;
+@property(nonatomic, strong) NSTextField *status, *res, *frame, *sharpVal, *fixVal;
+@property(nonatomic, strong) NSSlider *slider, *fixStrength;
 @property(nonatomic, strong) NSButton *rcas, *pixelFix;
 @property(nonatomic, strong) NSSegmentedControl *profile;
 @property(nonatomic, strong) NSTextField *profileHint;
@@ -207,8 +211,8 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     self.res = label(@"", 12, y, W - 24, NO); [v addSubview:self.res]; y -= 20;
     self.frame = label(@"", 12, y, W - 24, NO); [v addSubview:self.frame]; y -= 30;
 
-    float sharp; bool rc, fix; int profile;
-    read_settings(sharp, rc, profile, fix);
+    float sharp, strength; bool rc, fix; int profile;
+    read_settings(sharp, rc, profile, fix, strength);
     [v addSubview:label(@"Mode", 12, y, 50, NO)];
     g_has402 = has_fsr402();
     g_has_lossy2 = has_lossy2();
@@ -243,13 +247,23 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
         attributes:@{NSForegroundColorAttributeName: NSColor.whiteColor, NSFontAttributeName: [NSFont systemFontOfSize:12]}];
     [v addSubview:self.rcas];
     self.pixelFix = [NSButton checkboxWithTitle:@"Pixelization fix" target:self action:@selector(changed:)];
-    self.pixelFix.frame = NSMakeRect(W / 2, y, W / 2 - 12, 18);
+    self.pixelFix.frame = NSMakeRect(W / 2, y, 140, 18);
     self.pixelFix.state = fix ? NSControlStateValueOn : NSControlStateValueOff;
     self.pixelFix.attributedTitle = [[NSAttributedString alloc] initWithString:self.pixelFix.title
         attributes:@{NSForegroundColorAttributeName: NSColor.whiteColor, NSFontAttributeName: [NSFont systemFontOfSize:12]}];
     self.pixelFix.toolTip = @"FSR 4.1.2 Lite only: a wider current-frame filter where the network rejects history, "
                             @"so moving hair and thin detail are less blocky. Switching resets history.";
-    [v addSubview:self.pixelFix]; y -= 24;
+    [v addSubview:self.pixelFix];
+    // Strength applies on the next frame; no shader rebuild or history reset.
+    self.fixStrength = [NSSlider sliderWithValue:strength minValue:0.0 maxValue:1.0 target:self action:@selector(changed:)];
+    self.fixStrength.frame = NSMakeRect(W / 2 + 146, y - 2, W / 2 - 146 - 12 - 50, 22);
+    self.fixStrength.continuous = YES;
+    self.fixStrength.toolTip = @"Pixelization fix strength: 0 keeps AMD's filter, 0.5 is the default, 1 widens it most (softer).";
+    self.fixStrength.accessibilityLabel = @"Pixelization fix strength";
+    [v addSubview:self.fixStrength];
+    self.fixVal = label(@"", W - 12 - 46, y, 46, NO);
+    self.fixVal.alignment = NSTextAlignmentRight;
+    [v addSubview:self.fixVal]; y -= 24;
     self.profileHint = label(@"", 12, y, W - 24, NO);
     self.profileHint.font = [NSFont systemFontOfSize:11];
     self.profileHint.textColor = NSColor.lightGrayColor;
@@ -281,7 +295,7 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     int profile = segment_profile(self.profile.selectedSegment);
     if (profile == 5 && fix) profile = 6;
     const bool saved = write_settings((float)self.slider.doubleValue, self.rcas.state == NSControlStateValueOn,
-                                     profile, fix);
+                                     profile, fix, (float)self.fixStrength.doubleValue);
     self.settingsError = saved ? nil : @"Could not save panel settings.";
     [self refresh];
 }
@@ -348,8 +362,8 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
         self.frame.stringValue = [NSString stringWithFormat:@"Game frame: %.1f ms (%.0f fps, average)", st.frameMs, 1000.0 / st.frameMs];
     else
         self.frame.stringValue = @"Game frame: —";
-    float s; bool rc, fix; int profile;
-    read_settings(s, rc, profile, fix, st.ok && age <= 3.0 ? st.profile : -1);
+    float s, strength; bool rc, fix; int profile;
+    read_settings(s, rc, profile, fix, strength, st.ok && age <= 3.0 ? st.profile : -1);
     self.profile.selectedSegment = segment_for_profile(profile);
     // FSR4_VERSION=4.0.2 in the bottle pins the old model; the modes then do nothing.
     const bool pinned = st.ok && st.active && age <= 3.0 && st.version == "4.0.2" && profile != 3;
@@ -358,6 +372,12 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     self.pixelFix.hidden = !lite || pinned;
     NSControlStateValue wantFix = profile == 6 || (!lite && fix) ? NSControlStateValueOn : NSControlStateValueOff;
     if (self.pixelFix.state != wantFix) self.pixelFix.state = wantFix;
+    self.fixStrength.hidden = self.fixVal.hidden = self.pixelFix.hidden;
+    self.fixStrength.enabled = profile == 6;
+    self.fixVal.textColor = profile == 6 ? NSColor.whiteColor : NSColor.grayColor;
+    self.fixVal.stringValue = [NSString stringWithFormat:@"%.2f", strength];
+    if (!self.fixStrength.highlighted && fabs(self.fixStrength.doubleValue - strength) > 1e-3)
+        self.fixStrength.doubleValue = strength;
     self.profileHint.stringValue = self.settingsError ?: (pinned
         ? @"The bottle pins FSR 4.0.2 (FSR4_VERSION)."
         : profile == 5 ? @"FSR 4.1.2 INT8 Lite: AMD's smaller model, evaluated every frame."

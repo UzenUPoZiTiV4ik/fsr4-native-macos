@@ -367,13 +367,15 @@ void usage() {
         "       [--auto|--reference|--scalar|--simd|--i8mpp] [--profile int8-lite] [--dump-passes|--dump-state]\n"
         "       [--capture-stages pre,pass1,pass2,pass3,post] [--bench N] [--profile-stages]\n"
         "       [--builddir dir] [--root dir] [--tier 1080|2160|4320] [--optimize 0|1] [--no-compile] [--pixelization-fix]\n"
+        "       [--pixelization-strength 0..1]\n"
         "       fsr4mac --fsr-version 4.1.2 --backend-info [auto|reference|scalar|simd|i8mpp]\n"
         "--simd (alias --fp16): M1-M4 simdgroup half matrices with float accumulation for the INT8 model.\n"
         "--bench runs one warmup sequence and N measured sequences; only run.json is written.\n"
         "--profile-stages adds diagnostic GPU counters; on Apple GPUs it separates compute encoders.\n"
         "Use an ordinary --bench run for fused production timing; stage counters add overhead.\n"
         "FSR 4.1.2 INT8 Lite is the default: AMD's smaller architecture, evaluated every frame.\n"
-        "--pixelization-fix (or --profile int8-lite-pixfix) widens POST's filter where history is rejected.\n"
+        "--pixelization-fix (or --profile int8-lite-pixfix) widens POST's filter where history is rejected;\n"
+        "--pixelization-strength sets how much (0 none, 0.5 default, 1 most).\n"
         "Use --fsr-version 4.1.1 for the earlier Exact, Exact Fast, Lite and Lite 2 profiles.\n"
         "Use --fsr-version 4.0.2 to select the legacy model and its FP16 backend.\n"
         "GPU timings cover the full frame command buffer; diagnostic copies are labelled separately.\n");
@@ -386,6 +388,7 @@ int fsr412_main(int argc, char **argv) {
         fsr412::Options options;
         const char *profileEnv=std::getenv("FSR4_PROFILE");
         std::string profile=profileEnv && *profileEnv?profileEnv:"int8-lite";
+        float pixelStrength=fsr412::kPixelFixStrength;
         if(const char *opt=std::getenv("FSR4_OPTIMIZE"); opt && *opt) {
             if(std::strcmp(opt,"0") && std::strcmp(opt,"1")) fail("FSR4_OPTIMIZE must be 0 or 1");
             options.optimize=opt[0]=='1';
@@ -411,6 +414,11 @@ int fsr412_main(int argc, char **argv) {
             else if(arg=="--profile") profile=value();
             else if(arg=="--no-compile") options.allowCompile=false;
             else if(arg=="--pixelization-fix") options.pixelFix=true;
+            else if(arg=="--pixelization-strength") {
+                char *end=nullptr; const char *text=value(); const float strength=std::strtof(text,&end);
+                if(end==text || *end || !(strength>=0.f && strength<=1.f)) fail("--pixelization-strength must be 0..1");
+                pixelStrength=strength;
+            }
             else if(arg=="--profile-stages") profileStages=true;
             else if(arg=="--optimize") {
                 const char *opt=value();
@@ -453,6 +461,7 @@ int fsr412_main(int argc, char **argv) {
         if(!fsr412::parse_profile(profile,options.profile))
             fail("FSR 4.1.2 --profile / FSR4_PROFILE must be int8-lite or int8-lite-pixfix; select --fsr-version 4.1.1 for legacy profiles");
         if(fsr412::pixel_fix_profile(profile)) options.pixelFix=true;
+        fsr412::apply_pixel_fix(options,options.pixelFix,pixelStrength);
         profile=fsr412::profile_name(options.profile);
         id<MTLDevice> device=MTLCreateSystemDefaultDevice();
         if(!device) fail("no Metal device");
@@ -611,7 +620,7 @@ int fsr412_main(int argc, char **argv) {
             @"profile":ns(profile),@"model":@"amd-int8-lite",@"neural_passes":@3,
             @"backend":ns(actualBackend),@"variant":ns(variant),@"testcase":ns(inputDir),
             @"preset":ns(preset),@"colorspace":ns(colorspace),@"benchmark_iterations":@(bench),
-            @"optimize":@(options.optimize),@"pixelization_fix":@(options.pixelFix),@"requested_tier":@(options.tier),
+            @"optimize":@(options.optimize),@"pixelization_fix":@(options.pixelFix),@"pixelization_strength":@(pixelStrength),@"requested_tier":@(options.tier),
             @"warmup_sequences":@(bench?1:0),@"timing_scope":@"full frame command buffer",
             @"measured_frames":@(times.size()),@"neural_runs":@(neuralRuns),@"reused_frames":@(reusedFrames),
             @"capture_stages":stages,@"diagnostic_gpu_copies":@(!options.captureStages.empty()),

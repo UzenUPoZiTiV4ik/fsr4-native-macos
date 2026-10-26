@@ -71,13 +71,15 @@ kernel void fsr412_prepare_color(constant type_MLSR_Optimized_Constants& MLSR_Op
     float3 value = """ + formula + ";\n    rw_prepared_color.write(float4(value, 0.0), pixel);\n}\n"
 
 
-def pixelization_fix(text: str, floor: float = 0.6) -> str:
+def pixelization_fix(text: str) -> str:
     """Widen POST's current-frame filter where the network rejects history.
 
     Lite predicts a narrower Gaussian than the 4.1 network. Where history is
     discarded (moving hair, disocclusion) that kernel nearly reproduces the
     half-resolution input, which shows 2x2 blocks. Scaling both precision terms
     by mix(floor, 1, history) leaves pixels that keep history unchanged.
+    The host passes floor in the otherwise unused constant `pad` each frame
+    (Options::pixelFixFloor), so the panel can change it without a rebuild.
     """
     sx = re.search(r"^( +)float (_\d+) = 2\.0 / \(1\.0 \+ exp\(-(_\d+)\.y\)\);\n", text, re.M)
     sy = sx and re.search(r"^ +float (_\d+) = 2\.0 / \(1\.0 \+ exp\(-%s\.z\)\);\n" % sx[3], text, re.M)
@@ -86,7 +88,7 @@ def pixelization_fix(text: str, floor: float = 0.6) -> str:
         raise ValueError("Lite POST filter parameters not found")
     indent, params = sx[1], sx[3]
     code = (f"{indent}// Pixelization fix: wider current-frame filter where history is rejected.\n"
-            f"{indent}const float fsr412Widen = sqrt(mix({floor!r}, 1.0, 1.0 / (1.0 + exp(-{params}.w))));\n"
+            f"{indent}const float fsr412Widen = sqrt(mix(MLSR_Optimized_Constants.pad, 1.0, 1.0 / (1.0 + exp(-{params}.w))));\n"
             f"{indent}float {sx[2]} = (2.0 / (1.0 + exp(-{params}.y))) * fsr412Widen;\n"
             f"{indent}float {sy[1]} = (2.0 / (1.0 + exp(-{params}.z))) * fsr412Widen;\n")
     return text[:sx.start()] + code + text[sy.end():]

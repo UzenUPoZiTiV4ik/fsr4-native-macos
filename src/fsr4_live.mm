@@ -261,6 +261,10 @@ struct Settings {
     float sharpness = 0.4f;
     bool rcas = true;
     int profile = 5; // 0-4 legacy modes; 5 AMD FSR 4.1.2 INT8 Lite; 6 the same with the pixelization fix
+    // Panel state kept across rewrites: the checkbox while another mode is
+    // selected, and the fix strength 0..1 (fsr412::pixel_fix_floor).
+    bool pixelFix = false;
+    float pixelStrength = 0.5f;
     std::string path;
     time_t mtime = 0;
     long mtimeNs = 0;
@@ -326,6 +330,9 @@ static void settings_read_file_locked() {
         char profile[24];
         if (sscanf(line, "sharpness=%f", &v) == 1 && std::isfinite(v)) g_set.sharpness = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
         else if (sscanf(line, "rcas=%d", &iv) == 1) g_set.rcas = iv != 0;
+        else if (sscanf(line, "pixelization_fix=%d", &iv) == 1) g_set.pixelFix = iv != 0;
+        else if (sscanf(line, "pixelization_strength=%f", &v) == 1 && std::isfinite(v))
+            g_set.pixelStrength = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
         else if (sscanf(line, "profile=%23s", profile) == 1) {
             const int value = profile_from_name(profile);
             if (value >= 0) g_set.profile = value;
@@ -347,8 +354,9 @@ static void settings_write_file_locked() {
     const std::string temporary = g_set.path + ".tmp." + std::to_string(getpid());
     FILE *f = fopen(temporary.c_str(), "w");
     if (!f) { flog("cannot write panel settings"); return; }
-    bool ok = fprintf(f, "sharpness=%.3f\nrcas=%d\nprofile=%s\n", g_set.sharpness,
-                      g_set.rcas ? 1 : 0, profile_label(g_set.profile)) > 0;
+    bool ok = fprintf(f, "sharpness=%.3f\nrcas=%d\nprofile=%s\npixelization_fix=%d\npixelization_strength=%.3f\n",
+                      g_set.sharpness, g_set.rcas ? 1 : 0, profile_label(g_set.profile),
+                      g_set.pixelFix || g_set.profile == 6 ? 1 : 0, g_set.pixelStrength) > 0;
     if (fclose(f) != 0) ok = false;
     if (!ok || rename(temporary.c_str(), g_set.path.c_str()) != 0) {
         unlink(temporary.c_str()); flog("cannot save panel settings"); return;
@@ -380,6 +388,12 @@ extern "C" void fsr4_live_set_sharpness(float sharpness, int rcas) {
     g_set.sharpness = sharpness < 0.f ? 0.f : sharpness > 1.f ? 1.f : sharpness;
     g_set.rcas = rcas != 0;
     settings_write_file_locked();
+}
+
+extern "C" void fsr4_live_get_pixelization_strength(float *strength) {
+    std::lock_guard<std::mutex> lk(g_set_mu);
+    settings_refresh_locked();
+    if (strength) *strength = g_set.pixelStrength;
 }
 
 extern "C" void fsr4_live_get_profile(int *profile) {

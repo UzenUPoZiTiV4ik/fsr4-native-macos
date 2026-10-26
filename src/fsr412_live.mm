@@ -63,7 +63,8 @@ bool options_for(const Fsr4LiveFrameV2 &f,fsr412::Frame &frame,fsr412::Options &
     // panel profile numbers never select old weights within this runtime.
     o.profile=fsr412::Profile::Int8Lite;
     int panelProfile=5;fsr4_live_get_profile(&panelProfile);
-    o.pixelFix=panelProfile==6;
+    float strength=fsr412::kPixelFixStrength;fsr4_live_get_pixelization_strength(&strength);
+    fsr412::apply_pixel_fix(o,panelProfile==6,strength);
     if(auto model=env("FSR4_MODEL")) {
         if(!std::strcmp(model,"auto")) o.backend=fsr412::Backend::Auto;
         else if(!std::strcmp(model,"reference") || !std::strcmp(model,"int8")) o.backend=fsr412::Backend::Reference;

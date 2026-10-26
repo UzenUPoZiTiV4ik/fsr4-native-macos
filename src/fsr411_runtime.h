@@ -78,6 +78,8 @@ struct Options {
     bool rcas = false, allowCompile = true, ultraPerformance = false;
     // FSR 4.1.2 only: widen POST's current-frame filter where history is rejected.
     bool pixelFix = false;
+    // Lower bound of the widening, 0..1 (1 = off); POST reads it from `pad`.
+    float pixelFixFloor = 0.6f;
     // Tests only: Exact Fast/Lossy PRE/POST with ordered arithmetic, so their
     // optimized graph can be compared bit for bit with the imported HLSL.
     bool strictMath = false;
@@ -367,7 +369,8 @@ public:
             sizes={};
             for(unsigned i=0;i<9;++i) {sizes.v[i][0]=p.alignedUW>>shifts[i];sizes.v[i][1]=p.alignedUH>>shifts[i];}
         }
-        fill_constants(*slot, *session, p, sizes, rcas, options.sharpness);
+        fill_constants(*slot, *session, p, sizes, rcas, options.sharpness,
+                       options.pixelFix ? std::clamp(options.pixelFixFloor, 0.f, 1.f) : 0.f);
         const LossyConstants lc={skip?1u:0u,p.alignedUW/4u,p.alignedUH/4u,0};
         put(*slot,kLossy,lc);
         view.captures.clear();
@@ -1021,7 +1024,7 @@ private:
     template <typename T> static void put(FrameSlot &slot, NSUInteger offset, const T &value) {
         memcpy((uint8_t *)slot.constants.contents+offset,&value,sizeof(T));
     }
-    void fill_constants(FrameSlot &slot, const Session &s, const Fsr4InputPrepared &p, const TensorSizes &sizes, bool rcas, float sharpness) {
+    void fill_constants(FrameSlot &slot, const Session &s, const Fsr4InputPrepared &p, const TensorSizes &sizes, bool rcas, float sharpness, float pixelFixFloor = 0.f) {
         FrameConstants c={};
         c.inv_size[0]=1.f/p.alignedUW; c.inv_size[1]=1.f/p.alignedUH;
         c.scale[0]=float(p.alignedUW)/p.rw; c.scale[1]=float(p.alignedUH)/p.rh;
@@ -1032,7 +1035,7 @@ private:
         memcpy(c.jitterCancellation,p.jitterCancellation,sizeof c.jitterCancellation);
         c.width=p.alignedUW; c.height=p.alignedUH; c.width_lr=p.rw; c.height_lr=p.rh;
         c.reset=p.reset; c.preExposure=p.preExposure; c.previousPreExposure=p.previousPreExposure;
-        c.rcas=rcas; c.sharpness=sharpness; put(slot,0,c); put(slot,kTensor,sizes);
+        c.rcas=rcas; c.sharpness=sharpness; c.pad=pixelFixFloor; put(slot,0,c); put(slot,kTensor,sizes);
         SpdConstants ae={}; ae.mips=std::clamp(uint32_t(std::floor(std::log2(std::max(p.rw,p.rh)))),1u,12u);
         ae.groups=ceil_div(p.rw,64)*ceil_div(p.rh,64); ae.invInputSize[0]=1.f/p.rw; ae.invInputSize[1]=1.f/p.rh;
         ae.preExposure=p.preExposure; ae.validSize[0]=p.rw; ae.validSize[1]=p.rh; put(slot,kSpd,ae);

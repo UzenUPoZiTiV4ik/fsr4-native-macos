@@ -212,7 +212,7 @@ def main():
     prepared=bool(a.optimize and a.external_post_cnb and a.colorspace==0)
     key=f"fsr412_{a.res}_di{a.depth_inverted}_lm{a.low_res_mv}_jm{a.jittered_mv}_cs{a.colorspace}_ae{a.auto_exposure}_o{a.optimize}_up{a.ultra_performance}_pc{a.external_post_cnb}"
     if prepared: key+=f"_v{REVISION}"
-    if a.pixelization_fix: key+="_px1"
+    if a.pixelization_fix: key+="_px2"
     out=Path(a.outdir).resolve() if a.outdir else bdir/key; out.mkdir(parents=True,exist_ok=True)
     lock=(out/".compile.lock").open("a")
     fcntl.flock(lock,fcntl.LOCK_EX)

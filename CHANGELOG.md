@@ -1,5 +1,16 @@
 # Releases
 
+## Unreleased
+
+- Pixelization fix strength slider next to the checkbox (panel.conf
+  `pixelization_strength`, CLI `--pixelization-strength 0..1`). The filter
+  floor is `1 - 0.8 * strength`: 0.5 is the v2.1 behavior bit for bit, 0
+  selects plain Lite, 1 widens the filter up to about 2.2x. POST reads the
+  floor from the unused `pad` frame constant, so moving the slider needs no
+  shader rebuild or history reset (cache suffix `_px2`).
+- The hook keeps `pixelization_fix` and the strength when it rewrites
+  panel.conf.
+
 ## v2.1 (2026-10-26)
 
 FSR 4.1.2 Lite: pixelization fix and faster M1–M4 path.
