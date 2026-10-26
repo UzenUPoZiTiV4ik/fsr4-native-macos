@@ -89,11 +89,44 @@ def model(tier, preset, initializer):
     post.update(before_stage=9,output_offset_base='scratch_append',scratch_append_alignment=256,scratch_append_bytes=w*h*16)
     return {1:p1,4:p4,2:p2,3:p3},post
 
+def float_bound(p,matrices):
+    # simd accumulates INT8 products in float: every partial sum, in any
+    # order, is bounded by 128 * sum|w| per output column.
+    limit=0
+    for layer,matrix in enumerate(matrices):
+        n=len(p['bias_values'][layer])*(4 if layer==3 else 1)
+        column=(lambda i:i%16) if layer==0 and p['kind']!='ds' else (lambda i,n=n:i%n)
+        sums={}
+        for i,x in enumerate(matrix):sums[column(i)]=sums.get(column(i),0)+abs(x)
+        limit=max(limit,128*max(sums.values()))
+    if limit>=1<<24:raise ValueError('INT8 dot products exceed the exact float range')
+    return limit
+
+def winograd(p,conv):
+    # Integer Winograd F(2x2,3x3) for the grouped 16->16 3x3 convolution, as
+    # in tools/gen_fsr411_native.py: w' = (2G) g (2G)^T per [position][in][out]
+    # as int16. The GPU forms 4*conv with half operands and float sums, so
+    # this returns None unless every partial sum is exact for these weights.
+    if p['kind']=='ds':return None
+    g2=((2,0,0),(1,1,1),(1,-1,1),(0,0,2));at=((1,1,1,0),(0,1,-1,-1))
+    values=[sum(g2[xi][ky]*g2[nu][kx]*conv[(ky*3+kx)*256+ic*16+oc] for ky in range(3) for kx in range(3))
+            for xi in range(4) for nu in range(4) for ic in range(16) for oc in range(16)]
+    if max(abs(v) for v in values)>2048:return None  # |d'| <= 512 for INT8 input
+    worst=0
+    for oc in range(16):
+        column=[512*sum(abs(values[(q*16+ic)*16+oc]) for ic in range(16)) for q in range(16)]
+        for i in range(2):
+            for j in range(2):
+                worst=max(worst,sum(column[xi*4+nu] for xi in range(4) for nu in range(4) if at[i][xi] and at[j][nu]))
+    if worst>=1<<24:return None
+    return values,worst
+
 def pack(tier,preset,initializer,out):
     passes,post=model(tier,preset,initializer);blob=bytearray();params=bytearray()
     def append(data):
         blob.extend(bytes((-len(blob))%64));off=len(blob);blob.extend(data);return off
     def emit(p):
+        bound=float_bound(p,p['matrices']);transformed=winograd(p,p['matrices'][0])
         matrices=p.pop('matrices');biases=p.pop('bias_values')
         ws=[append(bytes(x&255 for x in m)) for m in matrices]
         bs=[append(struct.pack('<'+str(len(b))+'i',*b)) for b in biases]
@@ -104,9 +137,15 @@ def pack(tier,preset,initializer,out):
         e={**p,'parameter_offset':off,'weights':ws,'biases':bs,'function':p['kernel'],
             'dispatch_space':'input' if kind=='ct' else 'output',
             'reference':{'function':'fsr411_ref_'+kind,'tile':[32,1],'threads':32},
-            'simd':{'function':'fsr411_simd_'+(kind if kind=='cnb' else kind+str(nf)),'tile':tile,'threads':128},
+            'simd':{'function':'fsr411_simd_'+(kind if kind=='cnb' else kind+str(nf)),'tile':tile,'threads':128,
+                    'float_accumulator_bound':bound},
             'source_sha256':digest(initializer),'accumulator_bounds':[],
             'coefficient_provenance':'verified AMD FSR4.1.2 Lite initializer, no 4.1.1 coefficients'}
+        if transformed:
+            values,worst=transformed
+            e['simd']['winograd']={'function':{'cnb':'fsr411_simd_wcnb','fnb':'fsr411_simd_wfnb32','ct':'fsr411_simd_wct32'}[kind],
+                'tile':[16,8],'threads':128,'float_accumulator_bound':worst,
+                'weights0':append(struct.pack('<'+str(len(values))+'h',*values)),'weights0_count':len(values)}
         return e
     entries={str(k):emit(v) for k,v in passes.items()};pe=emit(post)
     m={'schema':'fsr411_native_v1','abi_version':1,'parameter_size':212,'parameter_stride':256,

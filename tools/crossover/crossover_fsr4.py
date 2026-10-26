@@ -54,7 +54,7 @@ VERSION_KEY = "FSR4_VERSION"
 PROFILE_KEY = "FSR4_PROFILE"
 METALFX_KEY = "D3DM_ENABLE_METALFX"
 # "fsr4" remains the legacy panel mode for the FSR 4.0.2 comparison model.
-PROFILES = ("int8-lite", "exact", "exact-fast", "lossy", "lossy2", "fsr4")
+PROFILES = ("int8-lite", "int8-lite-pixfix", "exact", "exact-fast", "lossy", "lossy2", "fsr4")
 OURS = (KEY, LOG_KEY, ROOT_KEY, REPLACE_KEY, PANEL_KEY, VERSION_KEY, PROFILE_KEY)
 
 
@@ -495,8 +495,8 @@ def build_reference(env):
         model = aliases[model]
         version_options = ["--fsr-version", version]
         profile = env.get(PROFILE_KEY, "int8-lite")
-        if profile not in ("int8-lite", "lite"):
-            raise SystemExit("FSR4_PROFILE must be int8-lite for FSR 4.1.2")
+        if profile not in ("int8-lite", "lite", "int8-lite-pixfix"):
+            raise SystemExit("FSR4_PROFILE must be int8-lite or int8-lite-pixfix for FSR 4.1.2")
     else:
         if model == "int8":
             model = "i8mpp"  # historic 4.0.2 live alias

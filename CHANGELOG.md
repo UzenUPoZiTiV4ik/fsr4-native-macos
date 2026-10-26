@@ -1,5 +1,31 @@
 # Releases
 
+## v2.1 (2026-10-26)
+
+FSR 4.1.2 Lite: pixelization fix and faster M1–M4 path.
+
+- **Pixelization fix** checkbox in the panel, shown when FSR 4.1.2 Lite is
+  selected (profile `int8-lite-pixfix`, CLI `--pixelization-fix`). Where the
+  network rejects history (moving hair, thin detail) Lite narrows POST's
+  current-frame filter so much that half-resolution 2×2 blocks show. The fix
+  multiplies the filter's precision by `mix(0.6, 1, history weight)`: up to
+  29% wider where history is rejected, unchanged where it is used. Weights,
+  network and history are untouched; off by default; no measurable cost.
+- **M1–M4 (`simd`) Lite is faster:** its 3×3 convolutions (pass1, pass2,
+  pass3, POST CNB) now use the exact integer Winograd kernels FSR 4.1 already
+  used. M5 measured with `--simd`: 4.62 → 3.98 ms on the recorded sequence.
+  Output stays byte-identical to `--scalar` (recorded, Ultra Performance and
+  odd sizes). M1–M4 were not measured on real hardware.
+- AMD's driver has no lighter model for GPUs without INT8 matrices: its
+  RDNA 2 provider (`ffxProvider_FSR4_Int8_Navi2`) runs the same FSR 4.1 model
+  with `dp4a`, which Apple GPUs lack. Lite on `simd` remains the fastest path
+  for M1–M4.
+- FSR 4.1.2 PRE: translated SPIR-V `powr` exponents are squared correctly;
+  `tools/diagnostics/capture_to_testcase.py` converts panel recordings for
+  offline replay.
+- Checks: `make test`, `make test-fsr411-simd`, `make test-fsr412-optimization`
+  (classic Metal and Metal 4).
+
 ## v2.0 (2026-10-25)
 
 Added the FSR 4.1.2 INT8 Lite path from the supplied AMD driver libraries.

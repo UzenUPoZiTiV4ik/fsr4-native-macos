@@ -69,3 +69,24 @@ kernel void fsr412_prepare_color(constant type_MLSR_Optimized_Constants& MLSR_Op
     if (any(pixel >= uint2(MLSR_Optimized_Constants.width_lr, MLSR_Optimized_Constants.height_lr))) return;
     float exposure = r_auto_exposure_texture.read(uint2(0u), 0u).x / MLSR_Optimized_Constants.preExposure;
     float3 value = """ + formula + ";\n    rw_prepared_color.write(float4(value, 0.0), pixel);\n}\n"
+
+
+def pixelization_fix(text: str, floor: float = 0.6) -> str:
+    """Widen POST's current-frame filter where the network rejects history.
+
+    Lite predicts a narrower Gaussian than the 4.1 network. Where history is
+    discarded (moving hair, disocclusion) that kernel nearly reproduces the
+    half-resolution input, which shows 2x2 blocks. Scaling both precision terms
+    by mix(floor, 1, history) leaves pixels that keep history unchanged.
+    """
+    sx = re.search(r"^( +)float (_\d+) = 2\.0 / \(1\.0 \+ exp\(-(_\d+)\.y\)\);\n", text, re.M)
+    sy = sx and re.search(r"^ +float (_\d+) = 2\.0 / \(1\.0 \+ exp\(-%s\.z\)\);\n" % sx[3], text, re.M)
+    history = sx and re.search(r"= 1\.0 / \(1\.0 \+ exp\(-%s\.w\)\);" % sx[3], text)
+    if not sx or not sy or not history or sy.start() != sx.end():
+        raise ValueError("Lite POST filter parameters not found")
+    indent, params = sx[1], sx[3]
+    code = (f"{indent}// Pixelization fix: wider current-frame filter where history is rejected.\n"
+            f"{indent}const float fsr412Widen = sqrt(mix({floor!r}, 1.0, 1.0 / (1.0 + exp(-{params}.w))));\n"
+            f"{indent}float {sx[2]} = (2.0 / (1.0 + exp(-{params}.y))) * fsr412Widen;\n"
+            f"{indent}float {sy[1]} = (2.0 / (1.0 + exp(-{params}.z))) * fsr412Widen;\n")
+    return text[:sx.start()] + code + text[sy.end():]

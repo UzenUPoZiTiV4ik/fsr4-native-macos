@@ -6,13 +6,14 @@ research pass.  It contains only content addressed SPIR-V translations; this
 tool never loads the driver. Native MPP operators use the same manifest and
 scratch ABI. Optimized linear variants share a float32 input-color transform
 between PRE and POST, without changing the neural or temporal graph.
+--pixelization-fix widens POST's current-frame filter where history is rejected.
 """
 from __future__ import annotations
 
 import argparse, fcntl, hashlib, json, os, re, shutil, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from fsr412.optimization import REVISION, input_color_cache, color_cache_source
+from fsr412.optimization import REVISION, input_color_cache, color_cache_source, pixelization_fix
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "tools" / "fsr412" / "shader_catalog.json"
@@ -104,16 +105,76 @@ def external_post_cnb(text: str, tier: int) -> str:
     return text[:begin]+replacement+text[end:]
 
 
-def compile_metal(src: Path, out: Path, entry: str, external: bool = False, tier: int = 1080, prepared=False, stage=""):
+def _call_span(text: str, open_paren: int) -> tuple[int, str]:
+    """Return the argument list of the call whose '(' is at open_paren."""
+    depth = 0
+    for index in range(open_paren, len(text)):
+        if text[index] == "(":
+            depth += 1
+        elif text[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return index + 1, text[open_paren + 1:index]
+    raise ValueError("unbalanced SPIR-V pow call")
+
+
+def _split_arguments(arguments: str) -> list[str]:
+    parts, depth, start = [], 0, 0
+    for index, character in enumerate(arguments):
+        if character in "([":
+            depth += 1
+        elif character in ")]":
+            depth -= 1
+        elif character == "," and depth == 0:
+            parts.append(arguments[start:index]); start = index + 1
+    parts.append(arguments[start:])
+    return parts
+
+
+def signed_square(text: str) -> str:
+    """Replace every `powr(x, 2.0)` with a multiply.
+
+    SPIR-V Pow with a constant exponent 2 becomes Metal `powr`, whose base
+    must be nonnegative, while AMD's DXIL lowers the same source to `fmul`.
+    The 4.1.2 PRE colour-distance feature squares signed chroma differences,
+    so a negative base returns NaN on Metal and corrupts the temporal colour
+    feature the network uses to separate current colour from stale history.
+    The 4.1.1 path fixes the same expression in its HLSL sources; this is the
+    equivalent correction for the translated SPIR-V.
+    """
+    result, cursor, replacements = [], 0, 0
+    while True:
+        found = text.find("powr(", cursor)
+        if found < 0:
+            result.append(text[cursor:]); break
+        end, arguments = _call_span(text, found + len("powr"))
+        parts = _split_arguments(arguments)
+        if len(parts) != 2:
+            raise ValueError("unrecognized SPIR-V pow call")
+        base, exponent = parts[0].strip(), parts[1].strip()
+        if exponent not in ("2.0", "2"):
+            raise ValueError(f"unexpected SPIR-V pow exponent {exponent!r}")
+        result.append(text[cursor:found])
+        result.append(f"(({base}) * ({base}))")
+        cursor = end; replacements += 1
+    return "".join(result)
+
+
+def compile_metal(src: Path, out: Path, entry: str, external: bool = False, tier: int = 1080, prepared=False, stage="", pixel_fix=False):
     text = src.read_text()
     if external:
         text=external_post_cnb(text,tier)
     text = re.sub(r"kernel\s+void\s+(\w+)(\s*\()", r"kernel void fsr412_\1\2", text, count=1)
     text = text.replace(".xyzz, uint2", ".xyzx, uint2")
+    text = signed_square(text)
+    if "powr(" in text:
+        raise RuntimeError(f"unhandled SPIR-V pow in {src.name}")
     if prepared and stage in ("pre", "post"):
         text, formula = input_color_cache(text, 4 if stage == "pre" else 9)
         if stage == "pre":
             (out.parent / "prepare_color.metal").write_text(color_cache_source(text, formula))
+    if pixel_fix and stage == "post":
+        text = pixelization_fix(text)
     generated = out.with_suffix(".metal")
     generated.write_text(text)
     air = out.with_suffix(".air")
@@ -146,10 +207,12 @@ def main():
     ap.add_argument("--jittered-mv",type=int,choices=(0,1),default=0); ap.add_argument("--colorspace",type=int,choices=(0,1,2,3),default=0)
     ap.add_argument("--auto-exposure",type=int,choices=(0,1),default=0); ap.add_argument("--optimize",type=int,choices=(0,1),default=0)
     ap.add_argument("--ultra-performance",type=int,choices=(0,1),default=0); ap.add_argument("--external-post-cnb",type=int,choices=(0,1),default=0)
+    ap.add_argument("--pixelization-fix",type=int,choices=(0,1),default=0)
     a=ap.parse_args(); root=Path(a.root).resolve(); bdir=Path(a.builddir).resolve()
     prepared=bool(a.optimize and a.external_post_cnb and a.colorspace==0)
     key=f"fsr412_{a.res}_di{a.depth_inverted}_lm{a.low_res_mv}_jm{a.jittered_mv}_cs{a.colorspace}_ae{a.auto_exposure}_o{a.optimize}_up{a.ultra_performance}_pc{a.external_post_cnb}"
     if prepared: key+=f"_v{REVISION}"
+    if a.pixelization_fix: key+="_px1"
     out=Path(a.outdir).resolve() if a.outdir else bdir/key; out.mkdir(parents=True,exist_ok=True)
     lock=(out/".compile.lock").open("a")
     fcntl.flock(lock,fcntl.LOCK_EX)
@@ -177,7 +240,7 @@ def main():
     for stage in order:
         row=selected[stage]
         src=source_for(row); base=out/stage
-        generated,lib=compile_metal(src,base,row["entry"],stage=="post" and bool(a.external_post_cnb),a.res,prepared,stage)
+        generated,lib=compile_metal(src,base,row["entry"],stage=="post" and bool(a.external_post_cnb),a.res,prepared,stage,bool(a.pixelization_fix))
         entry="fsr412_"+row["entry"]
         bufs,tex,sam=reflect_bindings(generated.read_text(),entry)
         info={"stage":stage,"entry":entry,"library":lib.name,"wgsize":row.get("wgsize",[256,1,1]),"buffers":bufs,"textures":tex,"samplers":sam,"source_sha256":row["sha256"]}
@@ -201,7 +264,7 @@ def main():
     scratch={1080:25027392,2160:99886528,4320:398707392}[a.res]
     init=root/"build/fsr412_model"/("initializers-lite-ultraperformance.bin" if a.ultra_performance else "initializers-lite.bin")
     manifest={"version":"4.1.2","model":"int8-lite","key":key,"source_hash":fingerprint,"optimization_revision":REVISION,
-        "prepared_color":prepared,"order":order,"kernels":kernels,"scratch_bytes":scratch,"initializer":str(init.resolve()),"external_post_cnb":bool(a.external_post_cnb),"post_pixels_per_group":32,"geometry":{"pre":{"kind":"pre","tile":[16,16],"threads":[256,1,1]},"post":{"kind":"post","tile":[16,16],"threads":[256,1,1]}}}
+        "prepared_color":prepared,"pixelization_fix":bool(a.pixelization_fix),"order":order,"kernels":kernels,"scratch_bytes":scratch,"initializer":str(init.resolve()),"external_post_cnb":bool(a.external_post_cnb),"post_pixels_per_group":32,"geometry":{"pre":{"kind":"pre","tile":[16,16],"threads":[256,1,1]},"post":{"kind":"post","tile":[16,16],"threads":[256,1,1]}}}
     temporary=out/f".bindings.{os.getpid()}.json"
     temporary.write_text(json.dumps(manifest,indent=2)+"\n")
     temporary.replace(manifest_path)

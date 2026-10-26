@@ -8,7 +8,7 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
         +"_lm"+std::to_string(p.lowResMV)+"_jm"+std::to_string(p.jitteredMV)+"_cs"+std::to_string(o.colorspace)
         +"_ae"+std::to_string(p.autoExposure)+"_o"+std::to_string(o.optimize)
         +"_up"+std::to_string(o.ultraPerformance)+"_pc"+std::to_string(portable)
-        +(o.optimize && portable && o.colorspace==0?"_v2":"");
+        +(o.optimize && portable && o.colorspace==0?"_v2":"")+(o.pixelFix?"_px1":"");
     const std::string cacheKey=key+"_"+kernels_label(kind);
     auto existing=sessions_.find(cacheKey);if(existing!=sessions_.end())return existing->second.get();
     if(o.allowCompile && !run(@[@"python3",ns(root_+"/tools/fsr412/compile_fsr412.py"),@"--root",ns(root_),
@@ -16,7 +16,8 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
         @"--depth-inverted",ns(std::to_string(p.depthReversed)),@"--low-res-mv",ns(std::to_string(p.lowResMV)),
         @"--jittered-mv",ns(std::to_string(p.jitteredMV)),@"--colorspace",ns(std::to_string(o.colorspace)),
         @"--auto-exposure",ns(std::to_string(p.autoExposure)),@"--optimize",ns(std::to_string(o.optimize)),
-        @"--ultra-performance",o.ultraPerformance?@"1":@"0",@"--external-post-cnb",portable?@"1":@"0"],error))return nullptr;
+        @"--ultra-performance",o.ultraPerformance?@"1":@"0",@"--external-post-cnb",portable?@"1":@"0",
+        @"--pixelization-fix",o.pixelFix?@"1":@"0"],error))return nullptr;
     auto manifest=json(buildDir_+"/"+key+"/bindings.json",error);
     const std::vector<std::string> order={"pre","pad0","pass1","pad1","pad1b","pass2","pad2","pass3","pad3","post"};
     if(!manifest || ![manifest[@"version"] isEqual:@"4.1.2"] || [manifest[@"order"] count]!=order.size()) {
@@ -24,6 +25,7 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
     }
     for(size_t i=0;i<order.size();++i) if(utf8(manifest[@"order"][i])!=order[i]) {error="FSR 4.1.2 graph order mismatch";return nullptr;}
     if([manifest[@"external_post_cnb"] boolValue]!=portable) {error="FSR 4.1.2 POST cache ABI mismatch";return nullptr;}
+    if([manifest[@"pixelization_fix"] boolValue]!=o.pixelFix) {error="FSR 4.1.2 pixelization-fix variant mismatch";return nullptr;}
     auto s=std::make_unique<Session>();s->key=cacheKey;s->tier=tier;s->modelLite=true;
     s->profile=Profile::Int8Lite;s->ultraPerformance=o.ultraPerformance;s->externalPostCnb=portable;
     s->splitAutoExposure=true;s->order=order;

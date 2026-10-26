@@ -51,16 +51,19 @@ static int profile_from_name(const std::string &name, int fallback) {
     if (name == "exact-fast" || name == "2") return 2;
     if (name == "lossy2" || name == "4") return 4;
     if (name == "int8-lite" || name == "lite" || name == "5") return 5;
+    if (name == "int8-lite-pixfix" || name == "lite-pixfix" || name == "6") return 6;
     if (name == "fsr4" || name == "3") return 3;
     return fallback;
 }
 static const char *profile_label(int profile) {
     return profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
-         : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : "exact";
+         : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : profile == 6 ? "int8-lite-pixfix" : "exact";
 }
 // The old Lite (profile 1) is retired from the panel. Keep its saved ID
 // readable for compatibility; Lite 2 (profile 4) is now displayed as Lossy.
 // AMD 4.1.2 Lite (profile 5) uses its own INT8 architecture and weights.
+// Profile 6 is the same model with the POST pixelization fix; the panel shows
+// it as the Lite segment plus the "Pixelization fix" checkbox.
 // FSR 4 is offered only when the 4.0.2 weights are present (the 4.1-only
 // release omits them).
 static bool g_has402 = true, g_has_lossy2 = false;
@@ -88,6 +91,7 @@ static int segment_profile(NSInteger segment) {
 }
 static NSInteger segment_for_profile(int profile) {
     int modes[5], count = panel_modes(modes);
+    if (profile == 6) profile = 5;
     for (int i = 0; i < count; ++i) if (modes[i] == profile) return i;
     return -1;
 }
@@ -111,22 +115,26 @@ static Status read_status() {
     return s;
 }
 
-static void read_settings(float &sharp, bool &rcas, int &profile, int fallbackProfile = -1) {
-    sharp = 0.4f; rcas = true; profile = fallbackProfile >= 0 ? fallbackProfile : 5;
+static void read_settings(float &sharp, bool &rcas, int &profile, bool &pixelFix, int fallbackProfile = -1) {
+    sharp = 0.4f; rcas = true; profile = fallbackProfile >= 0 ? fallbackProfile : 5; pixelFix = false;
     if (const char *value = getenv("FSR4_PROFILE")) profile = profile_from_name(value, profile);
     auto kv = read_kv(dist_path("panel.conf"));
     if (kv.count("sharpness")) sharp = (float)atof(kv["sharpness"].c_str());
     if (kv.count("rcas")) rcas = atoi(kv["rcas"].c_str()) != 0;
     profile = profile_from_name(kv["profile"], profile);
+    // Remembered while another mode is selected; profile 6 implies it.
+    if (kv.count("pixelization_fix")) pixelFix = atoi(kv["pixelization_fix"].c_str()) != 0;
+    if (profile == 6) pixelFix = true;
     if (!std::isfinite(sharp)) sharp = .4f;
     if (sharp < 0) sharp = 0; if (sharp > 1) sharp = 1;
 }
 
-static bool write_settings(float sharp, bool rcas, int profile) {
+static bool write_settings(float sharp, bool rcas, int profile, bool pixelFix) {
     const std::string p = dist_path("panel.conf"), tmp = p + ".tmp." + std::to_string(getpid());
     FILE *f = fopen(tmp.c_str(), "w");
     if (!f) return false;
-    bool ok = fprintf(f, "sharpness=%.3f\nrcas=%d\nprofile=%s\n", sharp, rcas ? 1 : 0, profile_label(profile)) > 0;
+    bool ok = fprintf(f, "sharpness=%.3f\nrcas=%d\nprofile=%s\npixelization_fix=%d\n", sharp, rcas ? 1 : 0,
+                      profile_label(profile), pixelFix ? 1 : 0) > 0;
     if (fclose(f) != 0) ok = false;
     if (!ok || rename(tmp.c_str(), p.c_str()) != 0) { unlink(tmp.c_str()); return false; }
     return true;
@@ -153,7 +161,7 @@ static bool write_capture_request(NSString **reason) {
 @property(nonatomic, strong) NSPanel *panel;
 @property(nonatomic, strong) NSTextField *status, *res, *frame, *sharpVal;
 @property(nonatomic, strong) NSSlider *slider;
-@property(nonatomic, strong) NSButton *rcas;
+@property(nonatomic, strong) NSButton *rcas, *pixelFix;
 @property(nonatomic, strong) NSSegmentedControl *profile;
 @property(nonatomic, strong) NSTextField *profileHint;
 @property(nonatomic, strong) NSString *settingsError;
@@ -199,8 +207,8 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     self.res = label(@"", 12, y, W - 24, NO); [v addSubview:self.res]; y -= 20;
     self.frame = label(@"", 12, y, W - 24, NO); [v addSubview:self.frame]; y -= 30;
 
-    float sharp; bool rc; int profile;
-    read_settings(sharp, rc, profile);
+    float sharp; bool rc, fix; int profile;
+    read_settings(sharp, rc, profile, fix);
     [v addSubview:label(@"Mode", 12, y, 50, NO)];
     g_has402 = has_fsr402();
     g_has_lossy2 = has_lossy2();
@@ -229,11 +237,19 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     self.sharpVal.alignment = NSTextAlignmentRight;
     [v addSubview:self.sharpVal]; y -= 26;
     self.rcas = [NSButton checkboxWithTitle:@"RCAS (FSR sharpening)" target:self action:@selector(changed:)];
-    self.rcas.frame = NSMakeRect(12, y, W - 24, 18);
+    self.rcas.frame = NSMakeRect(12, y, W / 2 - 24, 18);
     self.rcas.state = rc ? NSControlStateValueOn : NSControlStateValueOff;
     self.rcas.attributedTitle = [[NSAttributedString alloc] initWithString:self.rcas.title
         attributes:@{NSForegroundColorAttributeName: NSColor.whiteColor, NSFontAttributeName: [NSFont systemFontOfSize:12]}];
-    [v addSubview:self.rcas]; y -= 24;
+    [v addSubview:self.rcas];
+    self.pixelFix = [NSButton checkboxWithTitle:@"Pixelization fix" target:self action:@selector(changed:)];
+    self.pixelFix.frame = NSMakeRect(W / 2, y, W / 2 - 12, 18);
+    self.pixelFix.state = fix ? NSControlStateValueOn : NSControlStateValueOff;
+    self.pixelFix.attributedTitle = [[NSAttributedString alloc] initWithString:self.pixelFix.title
+        attributes:@{NSForegroundColorAttributeName: NSColor.whiteColor, NSFontAttributeName: [NSFont systemFontOfSize:12]}];
+    self.pixelFix.toolTip = @"FSR 4.1.2 Lite only: a wider current-frame filter where the network rejects history, "
+                            @"so moving hair and thin detail are less blocky. Switching resets history.";
+    [v addSubview:self.pixelFix]; y -= 24;
     self.profileHint = label(@"", 12, y, W - 24, NO);
     self.profileHint.font = [NSFont systemFontOfSize:11];
     self.profileHint.textColor = NSColor.lightGrayColor;
@@ -261,8 +277,11 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
 }
 
 - (void)changed:(id)sender {
+    const bool fix = self.pixelFix.state == NSControlStateValueOn;
+    int profile = segment_profile(self.profile.selectedSegment);
+    if (profile == 5 && fix) profile = 6;
     const bool saved = write_settings((float)self.slider.doubleValue, self.rcas.state == NSControlStateValueOn,
-                                     segment_profile(self.profile.selectedSegment));
+                                     profile, fix);
     self.settingsError = saved ? nil : @"Could not save panel settings.";
     [self refresh];
 }
@@ -329,15 +348,20 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
         self.frame.stringValue = [NSString stringWithFormat:@"Game frame: %.1f ms (%.0f fps, average)", st.frameMs, 1000.0 / st.frameMs];
     else
         self.frame.stringValue = @"Game frame: —";
-    float s; bool rc; int profile;
-    read_settings(s, rc, profile, st.ok && age <= 3.0 ? st.profile : -1);
+    float s; bool rc, fix; int profile;
+    read_settings(s, rc, profile, fix, st.ok && age <= 3.0 ? st.profile : -1);
     self.profile.selectedSegment = segment_for_profile(profile);
     // FSR4_VERSION=4.0.2 in the bottle pins the old model; the modes then do nothing.
     const bool pinned = st.ok && st.active && age <= 3.0 && st.version == "4.0.2" && profile != 3;
     self.profile.enabled = !pinned;
+    const bool lite = profile == 5 || profile == 6;
+    self.pixelFix.hidden = !lite || pinned;
+    NSControlStateValue wantFix = profile == 6 || (!lite && fix) ? NSControlStateValueOn : NSControlStateValueOff;
+    if (self.pixelFix.state != wantFix) self.pixelFix.state = wantFix;
     self.profileHint.stringValue = self.settingsError ?: (pinned
         ? @"The bottle pins FSR 4.0.2 (FSR4_VERSION)."
         : profile == 5 ? @"FSR 4.1.2 INT8 Lite: AMD's smaller model, evaluated every frame."
+        : profile == 6 ? @"FSR 4.1.2 Lite with pixelization fix: wider filter where history is rejected."
         : profile == 3 ? @"FSR 4: previous model (4.0.2)."
         : profile == 2 ? @"FSR 4.1.1: legacy model with fast PRE/POST math."
         : profile == 4 ? @"FSR 4.1 Lossy: the former Lite 2 model with six trained layers."

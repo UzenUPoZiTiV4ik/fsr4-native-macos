@@ -76,6 +76,8 @@ struct Options {
     Profile profile = Profile::Lossy;
     int tier = 0, colorspace = 0, optimize = 1;
     bool rcas = false, allowCompile = true, ultraPerformance = false;
+    // FSR 4.1.2 only: widen POST's current-frame filter where history is rejected.
+    bool pixelFix = false;
     // Tests only: Exact Fast/Lossy PRE/POST with ordered arithmetic, so their
     // optimized graph can be compared bit for bit with the imported HLSL.
     bool strictMath = false;

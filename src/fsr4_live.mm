@@ -260,7 +260,7 @@ struct Settings {
     bool loaded = false;
     float sharpness = 0.4f;
     bool rcas = true;
-    int profile = 5; // 0-4 legacy modes; 5 AMD FSR 4.1.2 INT8 Lite
+    int profile = 5; // 0-4 legacy modes; 5 AMD FSR 4.1.2 INT8 Lite; 6 the same with the pixelization fix
     std::string path;
     time_t mtime = 0;
     long mtimeNs = 0;
@@ -280,11 +280,12 @@ static int profile_from_name(const char *name) {
     if (!strcmp(name, "fsr4") || !strcmp(name, "3")) return 3;
     if (!strcmp(name, "lossy2") || !strcmp(name, "4")) return 4;
     if (!strcmp(name, "int8-lite") || !strcmp(name, "lite") || !strcmp(name, "5")) return 5;
+    if (!strcmp(name, "int8-lite-pixfix") || !strcmp(name, "lite-pixfix") || !strcmp(name, "6")) return 6;
     return -1;
 }
 static const char *profile_label(int profile) {
     return profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
-         : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : "exact";
+         : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : profile == 6 ? "int8-lite-pixfix" : "exact";
 }
 
 static void settings_load_locked() {
@@ -301,7 +302,7 @@ static void settings_load_locked() {
     if (const char *e = getenv("FSR4_PROFILE")) {
         const int profile = profile_from_name(e);
         if (profile >= 0) g_set.profile = profile;
-        else if (*e) flog("FSR4_PROFILE must be int8-lite, exact, exact-fast, lossy, lossy2 or fsr4; using the version default");
+        else if (*e) flog("FSR4_PROFILE must be int8-lite, int8-lite-pixfix, exact, exact-fast, lossy, lossy2 or fsr4; using the version default");
     }
     const char *sp = getenv("FSR4_SETTINGS");
     if (sp && !strcmp(sp, "none")) return;
@@ -322,10 +323,10 @@ static void settings_read_file_locked() {
     while (fgets(line, sizeof line, f)) {
         float v;
         int iv;
-        char profile[16];
+        char profile[24];
         if (sscanf(line, "sharpness=%f", &v) == 1 && std::isfinite(v)) g_set.sharpness = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
         else if (sscanf(line, "rcas=%d", &iv) == 1) g_set.rcas = iv != 0;
-        else if (sscanf(line, "profile=%15s", profile) == 1) {
+        else if (sscanf(line, "profile=%23s", profile) == 1) {
             const int value = profile_from_name(profile);
             if (value >= 0) g_set.profile = value;
         }
@@ -395,11 +396,11 @@ extern "C" const char *fsr4_live_model_version(void) {
     if (version && *version && strcmp(version, "4.1.1") && strcmp(version, "4.1.2")) return version;
     int profile = 5;
     fsr4_live_get_profile(&profile);
-    return profile == 3 ? "4.0.2" : profile == 5 ? "4.1.2" : "4.1.1";
+    return profile == 3 ? "4.0.2" : profile == 5 || profile == 6 ? "4.1.2" : "4.1.1";
 }
 
 extern "C" void fsr4_live_set_profile(int profile) {
-    if (profile < 0 || profile > 5) return;
+    if (profile < 0 || profile > 6) return;
     std::lock_guard<std::mutex> lk(g_set_mu);
     settings_load_locked();
     settings_read_file_locked();

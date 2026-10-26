@@ -23,8 +23,10 @@ struct Options : fsr411::Options {
     Options() {modelLite=true;profile=Profile::Int8Lite;}
 };
 inline const char *profile_name(Profile) {return "int8-lite";}
+// int8-lite-pixfix is the same model with Options::pixelFix (POST filter widening).
+inline bool pixel_fix_profile(const std::string &name) {return name=="int8-lite-pixfix" || name=="lite-pixfix";}
 inline bool parse_profile(const std::string &name,Profile &p) {
-    if(name!="int8-lite" && name!="lite")return false;
+    if(name!="int8-lite" && name!="lite" && !pixel_fix_profile(name))return false;
     p=Profile::Int8Lite;return true;
 }
 inline Profile profile_from_int(int) {return Profile::Int8Lite;}

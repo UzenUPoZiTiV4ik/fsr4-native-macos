@@ -37,6 +37,13 @@ byte-identical. A second device probe checks exact float accumulation for
 `FSR411_SIMD_WINOGRAD=0` forces the direct kernels. The 64-channel and
 downsample convolutions stay direct.
 
+FSR 4.1.2 Lite uses the same Winograd kernels for its pass1 CNB, pass2
+FNB32, pass3 FNB32+CT2D and POST CNB; its downsample stays direct.
+`tools/fsr412/native_model.py` checks the same bounds on the Lite weights
+(largest Winograd accumulator 9,997,312, Ultra Performance pass3). Lite
+`simd` output is byte-identical to `--scalar` on the recorded sequence,
+Ultra Performance and odd sizes.
+
 Measured on Apple M5, low-power mode off, median of three `--bench 10` runs,
 mean GPU frame:
 
@@ -46,6 +53,14 @@ mean GPU frame:
 | Lossy | `tc_game_balanced` | 6.42 ms | 4.98 ms | 3.27 ms |
 | Exact Fast | `q411` | 12.02 ms | 8.23 ms | 4.71 ms |
 | Exact Fast | `tc_game_balanced` | 10.86 ms | 8.13 ms | 4.72 ms |
+
+FSR 4.1.2 Lite, recorded 864×560 → 1712×1112 sequence, three interleaved
+rounds of `--bench 10`, mean of the round means:
+
+| Profile | simd direct | simd with Winograd | i8mpp |
+| --- | ---: | ---: | ---: |
+| Lite | 4.62 ms | 3.98 ms | 2.71 ms |
+| Lite + pixelization fix | — | 3.92 ms | — |
 
 Scalar is about 72 ms (Lossy) and 140 ms (Exact Fast).
 
