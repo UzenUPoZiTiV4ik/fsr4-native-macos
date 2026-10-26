@@ -1,6 +1,8 @@
 # Releases
 
-## Unreleased
+## v2.2 (2026-10-26)
+
+Adjustable FSR 4.1.2 Lite pixelization fix.
 
 - Pixelization fix strength slider next to the checkbox (panel.conf
   `pixelization_strength`, CLI `--pixelization-strength 0..1`). The filter
@@ -10,6 +12,9 @@
   shader rebuild or history reset (cache suffix `_px2`).
 - The hook keeps `pixelization_fix` and the strength when it rewrites
   panel.conf.
+- Checks: `make test`, `make test-fsr412-optimization` (classic Metal and
+  Metal 4); strength 0 equals plain Lite and 0.5 equals v2.1 on all 8
+  recorded frames with `i8mpp` and `simd`.
 
 ## v2.1 (2026-10-26)
 
