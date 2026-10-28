@@ -322,7 +322,7 @@ final class InstallerModel {
         }
         if command.contains("live_test") { return String(localized: "Checking the result against the reference…") }
         if command.contains("FSR4 Panel") || command.contains("iconutil") { return String(localized: "Building the FSR 4 panel…") }
-        if command.contains("D3DMetal") { return String(localized: "Patching a copy of D3DMetal…") }
+        if command.contains("D3DMetal") { return String(localized: "Patching D3DMetal…") }
         if command.contains("smoke") || command.contains("dlopen_test") { return String(localized: "Testing the hook…") }
         if command.contains("make") || command.contains("--backend-info") { return String(localized: "Preparing the FSR tool…") }
         if command.hasPrefix("clang") || command.contains("libfsr4hook") { return String(localized: "Building the hook…") }

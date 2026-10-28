@@ -1,7 +1,9 @@
-// Loaded by the copied D3DMetal (LC_LOAD_DYLIB). Swizzles only the temporal
+// Loaded by D3DMetal (LC_LOAD_DYLIB): either the bottle's copy (CrossOver
+// 24/25) or CrossOver's own framework (26+). Swizzles only the temporal
 // scaler D3DMetal creates for DLSS. Spatial, frame generation and denoise
-// stay on MetalFX. FSR4_REPLACE=1 is the switch; until the encoder returns
-// success the original encode still runs, so a bad build does not black the frame.
+// stay on MetalFX. FSR4_ROOT must be set (only FSR 4 bottles set it), then
+// FSR4_REPLACE=1 is the switch; until the encoder returns success the
+// original encode still runs, so a bad build does not black the frame.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -245,6 +247,11 @@ static void swizzle_new(Class cls, SEL sel, IMP repl, IMP *slot) {
 
 __attribute__((constructor))
 static void fsr4_hook_init(void) {
+    // CrossOver 26 needs the hook inside its own D3DMetal, so the library is
+    // loaded in every bottle. Only a bottle with our keys may swizzle; the
+    // rest must keep stock MetalFX behavior.
+    const char *root = getenv("FSR4_ROOT");
+    if (!root || !root[0]) return;
     @autoreleasepool {
     hook_log("loaded pid=%d", getpid());
     Class desc = objc_getClass("MTLFXTemporalScalerDescriptor");

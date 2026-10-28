@@ -15,7 +15,7 @@ sequence, 40% less. Method and limits: [FSR 4.1.2 stability](docs/FSR412_STABILI
 
 - Mac with Apple Silicon (fastest on M5; M1–M4 use the `simd` half-matrix backend, not benchmarked on those chips yet, see [hardware](docs/HARDWARE.md))
 - macOS 26+, Xcode 26+ with Metal Toolchain, Python 3
-- For games: CrossOver 24+ and Rosetta 2
+- For games: CrossOver 24 or newer (CrossOver 26 is supported) and Rosetta 2
 
 ## Easiest: the FSR4 Installer app
 
@@ -33,9 +33,14 @@ sequence, 40% less. Method and limits: [FSR 4.1.2 stability](docs/FSR412_STABILI
 
 ![FSR4 Installer](docs/images/installer.png)
 
-The app keeps its files in `~/Library/Application Support/fsr4-native-macos`
-and never modifies CrossOver.app. **Remove…** puts the bottle back on
-CrossOver's own D3DMetal. Step-by-step guide:
+The app keeps its files in `~/Library/Application Support/fsr4-native-macos`.
+On CrossOver 24/25 it never modifies `CrossOver.app`: the bottle is pointed at
+a patched copy of D3DMetal. CrossOver 26 no longer reads that redirect
+variable, so there the app patches `D3DMetal.framework/Versions/A/D3DMetal`
+inside CrossOver itself, keeping the original as `D3DMetal.fsr4-original`;
+only that binary and `libfsr4hook.dylib` change, and macOS may ask for the
+**App Management** permission. **Remove…** puts the bottle back on CrossOver's
+own D3DMetal and restores the original binary. Step-by-step guide:
 [docs/GUIDE.md](docs/GUIDE.md) (Russian),
 [tools/crossover/INSTALL.md](tools/crossover/INSTALL.md) (English).
 
@@ -50,6 +55,9 @@ python3 tools/crossover/crossover_fsr4.py install --panel --fsr-version 4.1.2 --
 
 The model import is needed for a clean source checkout; release ZIP/DMG payloads already contain the verified model.
 Close the game and its bottle first. Then launch the game and turn on **DLSS**.
+The install prints `D3DMetal: … (redirect)` on CrossOver 24/25 or `(in-place)`
+on 26; on 26 it patches CrossOver's own D3DMetal (the app is changed only
+while installed) and the restore command below puts the original back.
 The **FSR 4** panel lets you switch modes on the fly:
 
 ![FSR4 Panel](docs/images/panel.png)
@@ -68,7 +76,9 @@ and 240 inference reuses. [Method and validation](docs/FSR412_STABILITY.md).
 These are standalone replay GPU times, not a guaranteed ceiling in a running game.
 The old FSR 4.1 Lite mode has been removed from the panel.
 
-Undo the bottle change:
+Undo the bottle change (on CrossOver 26 this also restores the original
+D3DMetal; if another bottle uses the same patched framework, restore asks you
+to undo that one first):
 
 ```sh
 python3 tools/crossover/crossover_fsr4.py restore --bottle "/path/to/cxbottle.conf"

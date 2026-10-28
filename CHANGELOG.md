@@ -1,5 +1,35 @@
 # Releases
 
+## Unreleased
+
+CrossOver 26 support.
+
+- CrossOver 26 moved GPTK 3 to `lib64/apple_gptk/external` (and
+  `lib64/apple_gptk3/external`). The installer searches those first and keeps
+  the `lib/` paths for CrossOver 24/25.
+- CrossOver 26's `libd3dshared.dylib` no longer reads
+  `D3DMETAL_FRAMEWORK_PATH`: it loads `@rpath/D3DMetal.framework/D3DMetal`
+  with `LC_RPATH @loader_path`. The installer therefore patches CrossOver's
+  own `Versions/A/D3DMetal` in place, keeps the original next to it as
+  `D3DMetal.fsr4-original`, and copies `libfsr4hook.dylib` beside it. Those
+  two files are the only changes inside the app; the framework is not
+  re-signed, so restoring the original bytes makes it verify again.
+- `FSR4_FRAMEWORK` records the patched binary for `restore`. Restore leaves
+  the framework patched while another bottle still uses it, removes stale
+  backup/hook files when CrossOver was updated in the meantime, and never
+  overwrites a framework CrossOver replaced.
+- The hook returns before swizzling when `FSR4_ROOT` is unset, so the
+  app-wide patch stays inert in bottles that are not FSR 4.
+- Install checks write access to `CrossOver.app` before the long build and
+  explains the macOS App Management permission.
+- CrossOver 24/25 keep the copied-framework redirect (`D3DMETAL_FRAMEWORK_PATH`)
+  unchanged.
+- FSR4 Installer app: finds `lib64`, recognizes `FSR4_FRAMEWORK` bottles, and
+  its step text no longer says "a copy of D3DMetal".
+- Tests: lib64 discovery and precedence, mode detection, in-place
+  install/restore/update paths, the multi-bottle restore guard, and the
+  installer app. Docs updated.
+
 ## v2.2 (2026-10-26)
 
 Adjustable FSR 4.1.2 Lite pixelization fix.

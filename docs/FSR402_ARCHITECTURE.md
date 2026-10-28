@@ -124,8 +124,8 @@ GPU time per frame is printed from `MTLCommandBuffer` `GPUStartTime`/
     BENCHMARK.md            how to run --bench / --caps (for the M5 bot)
     docs/GUIDE.md           step-by-step launch guide (RU): CLI, golden check,
                             CrossOver install/restore, troubleshooting
-    docs/CROSSOVER.md       DLSS→FSR4 in CrossOver Preview: copied D3DMetal,
-                            bottle env, hook, restore
+    docs/CROSSOVER.md       DLSS→FSR4 in CrossOver Preview: copied (24/25) or
+                            in-place (26) D3DMetal, bottle env, hook, restore
 
 ---
 
@@ -366,7 +366,10 @@ bit-stable across runs, per-channel means match the WARP golden to 4 digits
 - FP8/WMMA model path intentionally not ported (AMD-only intrinsics; the
   selector never picks it on non-AMD anyway).
 - CrossOver integration is separate from this CLI: see **docs/CROSSOVER.md**.
-  `CrossOver.app` is not modified; one bottle is pointed at a copied D3DMetal.
+  CrossOver 24/25 are pointed at a copied D3DMetal (`CrossOver.app` unchanged);
+  CrossOver 26 loads the framework from inside the app, so install patches
+  `D3DMetal.framework/Versions/A/D3DMetal` in place and keeps the original as
+  `D3DMetal.fsr4-original` until restore.
 - Perf tuning (fused passes, memory layout) deliberately deferred.
 
 ---

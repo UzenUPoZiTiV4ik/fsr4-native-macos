@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Point one CrossOver bottle at a copied D3DMetal that loads libfsr4hook.
+"""Point one CrossOver bottle at a D3DMetal that loads libfsr4hook.
 
-The CrossOver.app bundle is not modified. libd3dshared reads
-D3DMETAL_FRAMEWORK_PATH and dlopens that path (RTLD_NOW). Restore deletes
-only that key from the bottle config.
+CrossOver 24/25: libd3dshared reads D3DMETAL_FRAMEWORK_PATH and dlopens that
+path (RTLD_NOW); CrossOver.app is not modified and restore deletes only the
+bottle keys.
+
+CrossOver 26+: libd3dshared no longer reads that variable and loads
+@rpath/D3DMetal.framework/D3DMetal from the app. The framework's
+Versions/A/D3DMetal is patched in place, with the original binary kept beside
+it as D3DMetal.fsr4-original; restore copies that back and removes the hook.
 """
 
 import argparse
@@ -29,10 +34,15 @@ PANEL_APP = DIST / "FSR4 Panel.app"
 SMOKE_SRC = ROOT / "tools" / "crossover" / "smoke.m"
 LIVE_TEST_SRC = ROOT / "tools" / "crossover" / "live_test.mm"
 DLOPEN_SRC = ROOT / "tools" / "crossover" / "dlopen_test.c"
-# D3DMetal inside a CrossOver.app, in order of preference. Newer builds also
-# ship GPTK 3 in apple_gptk3; older ones only have apple_gptk.
-FRAMEWORKS_IN_APP = ("Contents/SharedSupport/CrossOver/lib/apple_gptk/external/D3DMetal.framework",
-                     "Contents/SharedSupport/CrossOver/lib/apple_gptk3/external/D3DMetal.framework")
+# D3DMetal inside a CrossOver.app, in order of preference. CrossOver 26 moved
+# GPTK 3 to lib64; earlier builds ship it under lib. Newer builds also have
+# apple_gptk3; older ones only have apple_gptk.
+FRAMEWORK_LIB64_GPTK = "Contents/SharedSupport/CrossOver/lib64/apple_gptk/external/D3DMetal.framework"
+FRAMEWORK_LIB64_GPTK3 = "Contents/SharedSupport/CrossOver/lib64/apple_gptk3/external/D3DMetal.framework"
+FRAMEWORK_LIB_GPTK = "Contents/SharedSupport/CrossOver/lib/apple_gptk/external/D3DMetal.framework"
+FRAMEWORK_LIB_GPTK3 = "Contents/SharedSupport/CrossOver/lib/apple_gptk3/external/D3DMetal.framework"
+FRAMEWORKS_IN_APP = (FRAMEWORK_LIB64_GPTK, FRAMEWORK_LIB64_GPTK3,
+                     FRAMEWORK_LIB_GPTK, FRAMEWORK_LIB_GPTK3)
 FRAMEWORK_IN_APP = FRAMEWORKS_IN_APP[0]
 CROSSOVER_MARKER = "Contents/SharedSupport/CrossOver"
 CROSSOVER_BUNDLE_ID = "com.codeweavers.CrossOver"
@@ -52,10 +62,16 @@ REPLACE_KEY = "FSR4_REPLACE"
 PANEL_KEY = "FSR4_PANEL"
 VERSION_KEY = "FSR4_VERSION"
 PROFILE_KEY = "FSR4_PROFILE"
+FRAMEWORK_KEY = "FSR4_FRAMEWORK"
 METALFX_KEY = "D3DM_ENABLE_METALFX"
+ORIGINAL_SUFFIX = ".fsr4-original"
+HOOK_NAME = "libfsr4hook.dylib"
+# 24/25: libd3dshared reads this. 26 dropped it and loads the framework by
+# @loader_path, so the app's own binary has to carry the hook.
+FRAMEWORK_PATH_ENV = b"D3DMETAL_FRAMEWORK_PATH"
 # "fsr4" remains the legacy panel mode for the FSR 4.0.2 comparison model.
 PROFILES = ("int8-lite", "int8-lite-pixfix", "exact", "exact-fast", "lossy", "lossy2", "fsr4")
-OURS = (KEY, LOG_KEY, ROOT_KEY, REPLACE_KEY, PANEL_KEY, VERSION_KEY, PROFILE_KEY)
+OURS = (KEY, LOG_KEY, ROOT_KEY, REPLACE_KEY, PANEL_KEY, VERSION_KEY, PROFILE_KEY, FRAMEWORK_KEY)
 
 
 def run(cmd, **kw):
@@ -285,6 +301,19 @@ def find_framework(app: str = "") -> Path:
                      "or pass --crossover /path/to/CrossOver.app")
 
 
+def framework_mode(framework: Path) -> str:
+    """How this CrossOver loads D3DMetal.
+
+    CrossOver 24/25's libd3dshared reads D3DMETAL_FRAMEWORK_PATH and can be
+    pointed at a copy; 26 dropped that variable and loads the framework next
+    to libd3dshared, so only the app's own binary can load the hook."""
+    shared = framework.parent / "libd3dshared.dylib"
+    try:
+        return "redirect" if FRAMEWORK_PATH_ENV in shared.read_bytes() else "inplace"
+    except OSError:
+        return "inplace"
+
+
 def bottle_roots(crossover=None) -> list:
     """Read CrossOver's configured search path, including external volumes."""
     environment = dict(os.environ)
@@ -344,7 +373,7 @@ def bottle_names(crossover=None) -> list:
 
 def has_install(conf: Path) -> bool:
     text = conf.read_text(errors="replace")
-    return MARKER in text or f'"{KEY}"' in text
+    return MARKER in text or f'"{KEY}"' in text or f'"{FRAMEWORK_KEY}"' in text
 
 
 def default_bottle(for_restore: bool = False, crossover=None) -> Path:
@@ -390,17 +419,192 @@ def resolve_bottle(value: str, crossover=None) -> Path:
     return path
 
 
+def atomic_copy(source: Path, dest: Path):
+    """Replace dest with source without exposing a half-written file."""
+    temp = dest.with_name(dest.name + f".tmp.{os.getpid()}")
+    shutil.copy2(source, temp)
+    os.replace(temp, dest)
+
+
+def remove_file(path: Path):
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def require_writable(directory: Path):
+    """Fail with an actionable message when macOS blocks changes to CrossOver.app."""
+    probe = directory / f".fsr4-write-test.{os.getpid()}"
+    try:
+        probe.write_bytes(b"")
+    except OSError as error:
+        raise SystemExit(
+            f"cannot write {directory}: {error}\n"
+            "macOS may be blocking changes to CrossOver.app (App Management). "
+            "Allow Terminal or FSR 4 Installer in System Settings > Privacy & Security > "
+            "App Management, quit CrossOver, and try again.") from error
+    finally:
+        remove_file(probe)
+
+
+def preflight_inplace(framework: Path):
+    """Check the binary and write access before the long build."""
+    binary = framework / "Versions" / "A" / "D3DMetal"
+    if not binary.is_file():
+        raise SystemExit(f"D3DMetal binary not found: {binary}\n"
+                         "CrossOver 26 keeps it in D3DMetal.framework/Versions/A/D3DMetal")
+    require_writable(binary.parent)
+
+
 def copy_framework(hook: Path, source: Path) -> Path:
+    """Copy D3DMetal from CrossOver into dist and add the hook to that copy.
+
+    In-place installs keep the pristine binary as
+    Versions/A/D3DMetal.fsr4-original next to the patched one; a reinstall
+    must patch a clean binary, not one that already has the load command."""
     dest = DIST / "D3DMetal.framework"
     if dest.exists():
         shutil.rmtree(dest)
-    shutil.copytree(source, dest, symlinks=True)
+    shutil.copytree(source, dest, symlinks=True,
+                    ignore=shutil.ignore_patterns("D3DMetal" + ORIGINAL_SUFFIX, HOOK_NAME))
     binary = dest / "Versions" / "A" / "D3DMetal"
+    current = source / "Versions" / "A" / "D3DMetal"
+    pristine = current.with_name(current.name + ORIGINAL_SUFFIX)
+    if pristine.is_file() and LOAD_PATH in current.read_bytes():
+        shutil.copy2(pristine, binary)
     patch_macho(binary)
-    shutil.copy2(hook, dest / "Versions" / "A" / "libfsr4hook.dylib")
+    shutil.copy2(hook, dest / "Versions" / "A" / HOOK_NAME)
     run(["codesign", "-f", "-s", "-", str(binary)])
-    run(["codesign", "-f", "-s", "-", str(dest / "Versions" / "A" / "libfsr4hook.dylib")])
+    run(["codesign", "-f", "-s", "-", str(dest / "Versions" / "A" / HOOK_NAME)])
     return binary
+
+
+def install_inplace(hook: Path, framework: Path, patched: Path) -> Path:
+    """Patch the app's own D3DMetal; the original stays next to it."""
+    binary = framework / "Versions" / "A" / "D3DMetal"
+    original = binary.with_name(binary.name + ORIGINAL_SUFFIX)
+    current = binary.read_bytes()
+    if original.exists():
+        if LOAD_PATH not in current:
+            atomic_copy(binary, original)   # CrossOver was updated since the last install
+    elif LOAD_PATH in current:
+        raise SystemExit(f"{binary} already loads a hook but {original.name} is missing; "
+                         "reinstall CrossOver to get an original binary")
+    else:
+        atomic_copy(binary, original)
+    try:
+        # The dist copy and the hook are already ad-hoc signed. Copying them
+        # keeps their embedded signatures and, unlike codesign here, does not
+        # rewrite the framework's _CodeSignature seal, so restore can make the
+        # bundle verify again.
+        atomic_copy(patched, binary)
+        atomic_copy(hook, binary.with_name(HOOK_NAME))
+    except BaseException:
+        try:
+            if original.exists():
+                atomic_copy(original, binary)
+            remove_file(binary.with_name(HOOK_NAME))
+        except OSError as error:
+            print(f"warning: rollback failed: {error}")
+        raise
+    return binary
+
+
+def restore_needed(binary: Path) -> bool:
+    """True when restore would change or clean anything next to the binary."""
+    original = binary.with_name(binary.name + ORIGINAL_SUFFIX)
+    hook = binary.with_name(HOOK_NAME)
+    if original.exists() or hook.exists():
+        return True
+    try:
+        return LOAD_PATH in binary.read_bytes()
+    except OSError:
+        return False
+
+
+def restore_inplace(binary: Path) -> bool:
+    """Put CrossOver's original D3DMetal back. Returns True if it changed."""
+    original = binary.with_name(binary.name + ORIGINAL_SUFFIX)
+    hook = binary.with_name(HOOK_NAME)
+    try:
+        patched = LOAD_PATH in binary.read_bytes()
+    except OSError as error:
+        print(f"cannot read {binary}: {error}")
+        return False
+    if original.exists() and patched:
+        atomic_copy(original, binary)
+        remove_file(original)
+        remove_file(hook)
+        print(f"restored {binary} from {original.name}")
+        try:
+            run(["codesign", "--verify", "--strict", str(binary)])
+        except subprocess.CalledProcessError:
+            print(f"warning: {binary} does not verify after restore")
+        return True
+    if original.exists():
+        # CrossOver replaced the binary after our install; the backup is stale.
+        remove_file(original)
+        remove_file(hook)
+        print(f"{binary} is already original; removed the fsr4 backup")
+        return False
+    if patched:
+        print(f"warning: {binary} still loads the hook but {original.name} is missing; "
+              "reinstall CrossOver to undo the patch")
+        return False
+    remove_file(hook)
+    return False
+
+
+def conf_get(conf: Path, key: str) -> str:
+    try:
+        text = conf.read_text(errors="replace")
+    except OSError:
+        return ""
+    field = re.compile(r'\s*"' + re.escape(key) + r'"\s*=\s*"((?:[^"\\]|\\.)*)"')
+    for line in text.splitlines():
+        match = field.match(line)
+        if match:
+            return re.sub(r'\\(["\\])', r'\1', match.group(1))
+    return ""
+
+
+def conf_remove(conf: Path, keys):
+    try:
+        text = conf.read_text()
+    except OSError:
+        return
+    lines = text.splitlines()
+    out = [line for line in lines if not any(line.strip().startswith(f'"{key}"') for key in keys)]
+    if out != lines:
+        conf.write_text("\n".join(out) + ("\n" if text.endswith("\n") else ""))
+        print(f"removed {', '.join(keys)} from {conf}")
+
+
+def other_bottles_using(binary: Path, current: Path) -> list:
+    """Bottles (besides current) whose FSR4_FRAMEWORK points at this binary."""
+    try:
+        target = binary.resolve()
+    except OSError:
+        target = binary
+    users = []
+    for conf in discover_bottles():
+        try:
+            if conf.resolve() == current.resolve():
+                continue
+        except OSError:
+            pass
+        value = conf_get(conf, FRAMEWORK_KEY)
+        if not value:
+            continue
+        path = Path(value).expanduser()
+        try:
+            same = path.resolve() == target
+        except OSError:
+            same = path == binary
+        if same:
+            users.append(conf)
+    return users
 
 
 def conf_set(conf: Path, values: dict):
@@ -550,7 +754,10 @@ def cmd_install(args):
         bottle = resolve_bottle(args.bottle, args.crossover) if args.bottle else default_bottle(crossover=args.crossover)
         print(f"bottle: {bottle}")
     framework = find_framework(args.crossover)
-    print(f"D3DMetal: {framework}")
+    mode = framework_mode(framework)
+    print(f"D3DMetal: {framework} ({'in-place' if mode == 'inplace' else 'redirect'})")
+    if mode == "inplace" and bottle:
+        preflight_inplace(framework)
     log = DIST / "hook.log"
     DIST.mkdir(parents=True, exist_ok=True)
     log.write_text("")
@@ -583,14 +790,29 @@ def cmd_install(args):
          str(ROOT / "testcases" / "testcase_quality_720to1080"), str(ref)], env=env)
     print(loaded.strip())
     build_panel_app()
+    installed = None
     if bottle:
+        if mode == "inplace":
+            installed = install_inplace(hook, framework, binary)
+            log.write_text("")
+            run(["arch", "-x86_64", str(dl), str(installed)], env=env)
+            installed_log = log.read_text()
+            if "loaded pid=" not in installed_log:
+                if other_bottles_using(installed, bottle):
+                    print("warning: other bottles use this D3DMetal; run install for them again")
+                restore_inplace(installed)
+                raise SystemExit(f"patched D3DMetal did not load the hook:\n{installed_log}")
+            print(f"patched D3DMetal loads the hook: {installed}")
         values = {
-            KEY: str(binary),
             LOG_KEY: str(DIST / "hook.log"),
             ROOT_KEY: str(ROOT),
             REPLACE_KEY: "1",
             VERSION_KEY: args.fsr_version,
         }
+        if mode == "inplace":
+            values[FRAMEWORK_KEY] = str(installed)
+        else:
+            values[KEY] = str(binary)
         if args.fsr_version in ("4.1.1", "4.1.2"):
             values[PROFILE_KEY] = args.profile
         if args.panel:
@@ -598,9 +820,22 @@ def cmd_install(args):
         # DLSS reaches MetalFX only with this D3DMetal switch. Not in OURS:
         # restore leaves it, as it may have been set before the install.
         values[METALFX_KEY] = "1"
-        conf_set(bottle, values)
-        select_panel_profile("fsr4" if args.fsr_version == "4.0.2" else args.profile)
-    print("original CrossOver.app was not modified")
+        try:
+            # Keep only the key of the mode actually used.
+            conf_remove(bottle, [FRAMEWORK_KEY] if mode == "redirect" else [KEY])
+            conf_set(bottle, values)
+            select_panel_profile("fsr4" if args.fsr_version == "4.0.2" else args.profile)
+        except BaseException:
+            if installed and not other_bottles_using(installed, bottle):
+                restore_inplace(installed)
+            raise
+    if installed:
+        print("patched CrossOver's own D3DMetal; the original is kept as "
+              f"{installed.name}{ORIGINAL_SUFFIX} next to it")
+    else:
+        if mode == "inplace":
+            print("CrossOver 26 loads D3DMetal from the app; run install with a bottle to apply the patch")
+        print("original CrossOver.app was not modified")
     restore = f"python3 {Path(__file__)} restore"
     if bottle:
         restore += " --bottle " + shlex.quote(str(bottle))
@@ -608,8 +843,35 @@ def cmd_install(args):
 
 
 def cmd_restore(args):
-    conf_unset(resolve_bottle(args.bottle) if args.bottle else default_bottle(for_restore=True))
-    print("CrossOver.app was not modified; next launch uses the bundled D3DMetal")
+    conf = resolve_bottle(args.bottle) if args.bottle else default_bottle(for_restore=True)
+    binary = conf_get(conf, FRAMEWORK_KEY)
+    if binary:
+        installed = Path(binary).expanduser()
+        users = other_bottles_using(installed, conf) if installed.is_file() else []
+        if users:
+            conf_unset(conf)
+            print("CrossOver's D3DMetal is still used by: " + ", ".join(c.parent.name for c in users))
+            print("run restore for those bottles before the framework can be put back")
+            print("this bottle no longer enables FSR 4")
+            return
+        if installed.is_file() and restore_needed(installed):
+            # Fail before dropping the keys, so restore can simply be run again.
+            require_writable(installed.parent)
+    conf_unset(conf)
+    if not binary:
+        print("CrossOver.app was not modified; next launch uses the bundled D3DMetal")
+        return
+    installed = Path(binary).expanduser()
+    if not installed.is_file():
+        print(f"patched D3DMetal not found: {installed}")
+    else:
+        try:
+            restore_inplace(installed)
+        except OSError as error:
+            print(f"warning: could not restore {installed}: {error}")
+            print(f"the original is kept as {installed.name}{ORIGINAL_SUFFIX}; "
+                  "grant App Management access and run restore again")
+    print("next launch uses the bundled D3DMetal")
 
 
 def main():
@@ -621,8 +883,8 @@ def main():
                         "(default: the only bottle; required when there are several)")
     i.add_argument("--no-bottle", action="store_true")
     i.add_argument("--crossover", default="",
-                   help="CrossOver.app to copy D3DMetal from, any name or folder "
-                        "(default: first CrossOver found in /Applications or ~/Applications)")
+                   help="CrossOver.app to use: copied for 24/25, patched in place for 26+, "
+                        "any name or folder (default: first CrossOver found in /Applications or ~/Applications)")
     i.add_argument("--fsr-version", choices=("4.0.2", "4.1.1", "4.1.2"), default="4.1.2",
                    help="FSR model version for the live bridge and installation test (default: 4.1.2)")
     i.add_argument("--profile", choices=PROFILES, default="int8-lite",

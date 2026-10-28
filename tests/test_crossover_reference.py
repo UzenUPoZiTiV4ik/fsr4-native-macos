@@ -292,6 +292,255 @@ class CrossoverReferenceTest(unittest.TestCase):
                 steam.write_text(f'[EnvironmentVariables]\n{installer.MARKER}\n"{installer.KEY}" = "/x"\n')
                 self.assertEqual(installer.default_bottle(for_restore=True), steam)
 
+    def test_framework_paths_prefer_lib64(self):
+        self.assertEqual(installer.FRAMEWORKS_IN_APP, (
+            installer.FRAMEWORK_LIB64_GPTK, installer.FRAMEWORK_LIB64_GPTK3,
+            installer.FRAMEWORK_LIB_GPTK, installer.FRAMEWORK_LIB_GPTK3))
+        self.assertEqual(installer.FRAMEWORK_IN_APP, installer.FRAMEWORK_LIB64_GPTK)
+
+    def test_finds_d3dmetal_in_lib64_layout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / "CrossOver.app"
+            lib64 = app / installer.FRAMEWORK_LIB64_GPTK
+            lib64.mkdir(parents=True)
+            with patch.object(installer, "crossover_apps", return_value=[app]):
+                self.assertEqual(installer.find_framework(), lib64)
+            # CrossOver 26 uses lib64 for a win64 bottle; it must win over lib.
+            (app / installer.FRAMEWORK_LIB_GPTK).mkdir(parents=True)
+            with patch.object(installer, "crossover_apps", return_value=[app]):
+                self.assertEqual(installer.find_framework(), lib64)
+
+    def test_framework_mode_follows_libd3dshared(self):
+        with tempfile.TemporaryDirectory() as directory:
+            framework = Path(directory) / "D3DMetal.framework"
+            framework.mkdir()
+            shared = framework.parent / "libd3dshared.dylib"
+            shared.write_bytes(b"no marker here")
+            self.assertEqual(installer.framework_mode(framework), "inplace")
+            shared.write_bytes(b"..." + installer.FRAMEWORK_PATH_ENV + b"...")
+            self.assertEqual(installer.framework_mode(framework), "redirect")
+            shared.unlink()
+            self.assertEqual(installer.framework_mode(framework), "inplace")
+
+    def test_inplace_install_and_restore(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            framework = root / "D3DMetal.framework"
+            version = framework / "Versions" / "A"
+            version.mkdir(parents=True)
+            binary = version / "D3DMetal"
+            binary.write_bytes(b"original")
+            original = version / ("D3DMetal" + installer.ORIGINAL_SUFFIX)
+            hook = version / installer.HOOK_NAME
+            patched = root / "patched"
+            patched.write_bytes(installer.LOAD_PATH + b"patched")
+            hook_source = root / "libfsr4hook.dylib"
+            hook_source.write_bytes(b"hook")
+            with patch.object(installer, "run") as run:
+                installed = installer.install_inplace(hook_source, framework, patched)
+            self.assertEqual(installed, binary)
+            self.assertEqual(binary.read_bytes(), patched.read_bytes())
+            self.assertEqual(original.read_bytes(), b"original")
+            self.assertEqual(hook.read_bytes(), b"hook")
+            self.assertTrue(installer.restore_needed(binary))
+            run.assert_not_called()  # copies keep the signatures; no re-sign here
+            with patch.object(installer, "run") as run:
+                self.assertTrue(installer.restore_inplace(binary))
+            self.assertEqual(binary.read_bytes(), b"original")
+            self.assertFalse(original.exists())
+            self.assertFalse(hook.exists())
+            self.assertFalse(installer.restore_needed(binary))
+            run.assert_called_once()  # codesign --verify --strict
+            with patch.object(installer, "run"):
+                self.assertFalse(installer.restore_inplace(binary))
+
+    def test_inplace_install_refreshes_backup_after_crossover_update(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            version = root / "D3DMetal.framework" / "Versions" / "A"
+            version.mkdir(parents=True)
+            binary = version / "D3DMetal"
+            binary.write_bytes(b"new original")
+            original = version / ("D3DMetal" + installer.ORIGINAL_SUFFIX)
+            original.write_bytes(b"old original")
+            patched = root / "patched"
+            patched.write_bytes(installer.LOAD_PATH + b"patched")
+            hook = root / "hook"
+            hook.write_bytes(b"hook")
+            with patch.object(installer, "run"):
+                installer.install_inplace(hook, root / "D3DMetal.framework", patched)
+            self.assertEqual(original.read_bytes(), b"new original")
+
+    def test_inplace_install_rejects_patched_binary_without_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            version = root / "D3DMetal.framework" / "Versions" / "A"
+            version.mkdir(parents=True)
+            (version / "D3DMetal").write_bytes(installer.LOAD_PATH + b"patched")
+            patched = root / "patched"
+            patched.write_bytes(installer.LOAD_PATH + b"patched")
+            hook = root / "hook"
+            hook.write_bytes(b"hook")
+            with self.assertRaisesRegex(SystemExit, "reinstall CrossOver"):
+                installer.install_inplace(hook, root / "D3DMetal.framework", patched)
+
+    def test_inplace_restore_does_not_overwrite_updated_crossover(self):
+        with tempfile.TemporaryDirectory() as directory:
+            version = Path(directory) / "D3DMetal.framework" / "Versions" / "A"
+            version.mkdir(parents=True)
+            binary = version / "D3DMetal"
+            binary.write_bytes(b"updated by CrossOver")
+            original = version / ("D3DMetal" + installer.ORIGINAL_SUFFIX)
+            original.write_bytes(b"stale backup")
+            hook = version / installer.HOOK_NAME
+            hook.write_bytes(b"hook")
+            with patch.object(installer, "run"):
+                self.assertFalse(installer.restore_inplace(binary))
+            self.assertEqual(binary.read_bytes(), b"updated by CrossOver")
+            self.assertFalse(original.exists())
+            self.assertFalse(hook.exists())
+
+    def test_inplace_restore_keeps_hook_when_backup_is_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            version = Path(directory) / "D3DMetal.framework" / "Versions" / "A"
+            version.mkdir(parents=True)
+            binary = version / "D3DMetal"
+            binary.write_bytes(installer.LOAD_PATH + b"patched")
+            hook = version / installer.HOOK_NAME
+            hook.write_bytes(b"hook")
+            with patch.object(installer, "run"):
+                self.assertFalse(installer.restore_inplace(binary))
+            self.assertTrue(hook.exists())   # removing it would break the app
+
+    def test_copy_framework_patches_the_original_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "D3DMetal.framework"
+            version = source / "Versions" / "A"
+            version.mkdir(parents=True)
+            current = version / "D3DMetal"
+            current.write_bytes(installer.LOAD_PATH + b"already patched")
+            (version / ("D3DMetal" + installer.ORIGINAL_SUFFIX)).write_bytes(b"original")
+            hook = root / "libfsr4hook.dylib"
+            hook.write_bytes(b"hook")
+            seen = []
+
+            def fake_patch(path):
+                seen.append(path.read_bytes())
+                path.write_bytes(b"patched")
+
+            with patch.object(installer, "DIST", root / "dist"), \
+                 patch.object(installer, "patch_macho", side_effect=fake_patch), \
+                 patch.object(installer, "run"):
+                binary = installer.copy_framework(hook, source)
+            self.assertEqual(seen, [b"original"])
+            self.assertEqual(binary.read_bytes(), b"patched")
+            copied = root / "dist/D3DMetal.framework/Versions/A"
+            self.assertFalse((copied / ("D3DMetal" + installer.ORIGINAL_SUFFIX)).exists())
+            self.assertTrue((copied / installer.HOOK_NAME).exists())
+
+    def test_framework_key_counts_as_installed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            conf = Path(directory) / "Modern" / "cxbottle.conf"
+            conf.parent.mkdir()
+            conf.write_text(f'[EnvironmentVariables]\n"{installer.FRAMEWORK_KEY}" = "/x/D3DMetal"\n')
+            self.assertTrue(installer.has_install(conf))
+
+    def test_framework_key_is_cleaned_up_and_blocks_restore(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "D3DMetal"
+            binary.write_bytes(installer.LOAD_PATH + b"patched")
+            current = root / "Steam" / "cxbottle.conf"
+            other = root / "Games" / "cxbottle.conf"
+            current.parent.mkdir()
+            other.parent.mkdir()
+            current.write_text("[EnvironmentVariables]\n")
+            other.write_text(f'[EnvironmentVariables]\n"{installer.FRAMEWORK_KEY}" = "{binary}"\n')
+            with patch.object(installer, "DIST", root / "dist"):
+                installer.conf_set(current, {installer.FRAMEWORK_KEY: str(binary),
+                                             installer.METALFX_KEY: "1"})
+                self.assertEqual(installer.conf_get(current, installer.FRAMEWORK_KEY), str(binary))
+                with patch.object(installer, "discover_bottles", return_value=[current, other]):
+                    self.assertEqual(installer.other_bottles_using(binary, current), [other])
+                with patch("sys.argv",
+                           ["crossover_fsr4.py", "restore", "--bottle", str(current)]), \
+                     patch.object(installer, "discover_bottles", return_value=[current, other]), \
+                     patch.object(installer, "restore_inplace") as restore:
+                    installer.main()
+                restore.assert_not_called()
+                self.assertEqual(installer.conf_get(current, installer.FRAMEWORK_KEY), "")
+                self.assertIn('"D3DM_ENABLE_METALFX" = "1"', current.read_text())
+
+    def test_restore_legacy_redirect_bottle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            conf = Path(directory) / "Steam" / "cxbottle.conf"
+            conf.parent.mkdir()
+            conf.write_text("[EnvironmentVariables]\n")
+            with patch.object(installer, "DIST", Path(directory) / "dist"):
+                installer.conf_set(conf, {installer.KEY: "/x/D3DMetal", installer.METALFX_KEY: "1"})
+            with patch("sys.argv", ["crossover_fsr4.py", "restore", "--bottle", str(conf)]), \
+                 patch.object(installer, "restore_inplace") as restore:
+                installer.main()
+            restore.assert_not_called()
+            text = conf.read_text()
+            self.assertNotIn(installer.KEY, text)
+            self.assertIn('"D3DM_ENABLE_METALFX" = "1"', text)
+
+    def test_preflight_reports_missing_binary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            framework = Path(directory) / "D3DMetal.framework"
+            (framework / "Versions" / "A").mkdir(parents=True)
+            with self.assertRaisesRegex(SystemExit, "D3DMetal binary not found"):
+                installer.preflight_inplace(framework)
+
+    def test_preflight_reports_app_management(self):
+        with tempfile.TemporaryDirectory() as directory:
+            framework = Path(directory) / "D3DMetal.framework"
+            version = framework / "Versions" / "A"
+            version.mkdir(parents=True)
+            (version / "D3DMetal").write_bytes(b"original")
+            version.chmod(0o500)
+            try:
+                with self.assertRaisesRegex(SystemExit, "App Management"):
+                    installer.preflight_inplace(framework)
+            finally:
+                version.chmod(0o700)
+
+    def test_install_no_bottle_does_not_patch_the_app(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dist = root / "dist"
+            framework = root / "CrossOver.app/Contents/SharedSupport/CrossOver/lib64/apple_gptk/external/D3DMetal.framework"
+            (framework / "Versions" / "A").mkdir(parents=True)
+            (framework / "Versions" / "A" / "D3DMetal").write_bytes(b"original")
+            binary = dist / "D3DMetal.framework/Versions/A/D3DMetal"
+            log = dist / "hook.log"
+
+            def fake_run(cmd, **kw):
+                text = " ".join(map(str, cmd))
+                if "smoke" in text:
+                    log.write_text("swizzled X encodeToCommandBuffer:\n")
+                elif "dlopen_test" in text:
+                    log.write_text("loaded pid=1\n")
+
+            with patch.object(installer, "DIST", dist), \
+                 patch.object(installer, "find_framework", return_value=framework), \
+                 patch.object(installer, "preflight_inplace") as preflight, \
+                 patch.object(installer, "build_hook", return_value=dist / "libfsr4hook.dylib"), \
+                 patch.object(installer, "copy_framework", return_value=binary), \
+                 patch.object(installer, "build_smoke", return_value=root / "smoke"), \
+                 patch.object(installer, "build_dlopen", return_value=root / "dlopen_test"), \
+                 patch.object(installer, "build_live", return_value=root / "live_test"), \
+                 patch.object(installer, "build_reference", return_value=root / "ref.bin"), \
+                 patch.object(installer, "build_panel_app"), \
+                 patch.object(installer, "install_inplace") as install_inplace, \
+                 patch.object(installer, "run", side_effect=fake_run), \
+                 patch("sys.argv", ["crossover_fsr4.py", "install", "--no-bottle"]):
+                installer.main()
+            install_inplace.assert_not_called()
+            preflight.assert_not_called()
+
     def test_installer_has_no_personal_defaults(self):
         source = (Path(__file__).resolve().parents[1] / "tools/crossover/crossover_fsr4.py").read_text()
         self.assertNotRegex(source, "[\u0400-\u04ff]")
@@ -336,13 +585,13 @@ class CrossoverReferenceTest(unittest.TestCase):
             (home / "CrossOver/Game.app/Contents").mkdir(parents=True)   # bottle launcher, not CrossOver
             (home / "Steam.app/Contents").mkdir(parents=True)
             (dated / installer.FRAMEWORK_IN_APP).mkdir(parents=True)
-            (nested / installer.FRAMEWORKS_IN_APP[1]).mkdir(parents=True)
+            (nested / installer.FRAMEWORK_LIB_GPTK3).mkdir(parents=True)
             apps = installer.crossover_apps((system, home), spotlight=False)
             self.assertEqual(apps, [dated, patched, nested])
             with patch.object(installer, "crossover_apps", return_value=apps):
                 self.assertEqual(installer.find_framework(), dated / installer.FRAMEWORK_IN_APP)
-            # GPTK 3-only layout
-            self.assertEqual(installer.find_framework(str(nested)), nested / installer.FRAMEWORKS_IN_APP[1])
+            # GPTK 3-only layout of CrossOver 24/25 (lib/, not lib64/)
+            self.assertEqual(installer.find_framework(str(nested)), nested / installer.FRAMEWORK_LIB_GPTK3)
             # The standard name in /Applications comes first.
             standard = system / "CrossOver.app"
             (standard / installer.CROSSOVER_MARKER).mkdir(parents=True)

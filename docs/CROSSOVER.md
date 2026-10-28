@@ -7,34 +7,62 @@
 
 Сборка CLI и шейдеры описаны в [README.md](../README.md) и [STATE.md](STATE.md), пошаговая установка и откат — в [GUIDE.md](GUIDE.md). Здесь только то, как FSR4 встаёт на место DLSS внутри CrossOver Preview, и какие файлы при этом меняются.
 
-DLSS в CrossOver Preview — это не отдельный `nvngx.so`. D3DMetal (GPTK, каталог `lib/apple_gptk`) сам реализует NGX и для временного апскейла вызывает MetalFX. Хук подменяет только `encodeToCommandBuffer:` у временного скейлера. Пространственный скейл, генерация кадров и денойз остаются на MetalFX. Путь DXMT не используется.
+DLSS в CrossOver Preview — это не отдельный `nvngx.so`. D3DMetal (GPTK, каталог `lib64/apple_gptk` в CrossOver 26 и `lib/apple_gptk` в 24/25) сам реализует NGX и для временного апскейла вызывает MetalFX. Хук подменяет только `encodeToCommandBuffer:` у временного скейлера. Пространственный скейл, генерация кадров и денойз остаются на MetalFX. Путь DXMT не используется.
 
-`CrossOver.app` не изменяется. Бутылка указывает на копию фреймворка в `dist/crossover/`. Каталог `dist/` в git не входит.
+CrossOver 24/25: `CrossOver.app` не изменяется, бутылка указывает на копию
+фреймворка в `dist/crossover/`. CrossOver 26: `libd3dshared.dylib` больше не
+читает `D3DMETAL_FRAMEWORK_PATH` и грузит фреймворк рядом с собой, поэтому
+правится собственный `D3DMetal` приложения — только `Versions/A/D3DMetal` и
+`libfsr4hook.dylib` рядом с ним, оригинал сохраняется как
+`D3DMetal.fsr4-original`. Каталог `dist/` в git не входит.
 
 ## Почему не `DYLD_INSERT_LIBRARIES`
 
 Wine в CrossOver — x86_64 под Rosetta, с hardened runtime. Флага `allow-dyld-environment-variables` нет, поэтому `DYLD_INSERT_LIBRARIES` до процесса не доходит. Флаг `disable-library-validation` есть, поэтому ad-hoc подпись копии D3DMetal и хука принимается.
 
-`libd3dshared.dylib` читает `D3DMETAL_FRAMEWORK_PATH` и делает `dlopen` этого пути (`RTLD_NOW`). Если переменной нет, он открывает системный `D3DMetal.framework` или копию по rpath внутри приложения. Переменные секции `[EnvironmentVariables]` в `cxbottle.conf` CrossOver копирует в unix-процесс бутылки.
+`libd3dshared.dylib` в CrossOver 24/25 читает `D3DMETAL_FRAMEWORK_PATH` и делает `dlopen` этого пути (`RTLD_NOW`). Если переменной нет, он открывает системный `D3DMetal.framework` или копию по rpath внутри приложения. Переменные секции `[EnvironmentVariables]` в `cxbottle.conf` CrossOver копирует в unix-процесс бутылки.
+
+В CrossOver 26 переменной `D3DMETAL_FRAMEWORK_PATH` нет: `libd3dshared.dylib`
+грузит `@rpath/D3DMetal.framework/D3DMetal`, а `LC_RPATH @loader_path`
+резолвит его рядом с собой, внутри приложения. Поэтому на 26 патчится сам
+фреймворк CrossOver, а не копия. Хук при этом загружается в D3D-процессы
+всех бутылок, но до свизла выходит, если в бутылке нет `FSR4_ROOT`.
 
 ## Что создаёт установка
 
 Источник фреймворка — найденный CrossOver, например:
 
 ```
-/Applications/CrossOver Preview.app/Contents/SharedSupport/CrossOver/lib/apple_gptk/external/D3DMetal.framework
+/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/lib64/apple_gptk/external/D3DMetal.framework
 ```
 
-Если `apple_gptk` нет, берётся `lib/apple_gptk3/external/D3DMetal.framework`.
+Порядок поиска: `lib64/apple_gptk`, `lib64/apple_gptk3`, затем `lib/apple_gptk`
+и `lib/apple_gptk3` (CrossOver 24/25). Режим определяется по соседнему
+`libd3dshared.dylib`: если в нём есть строка `D3DMETAL_FRAMEWORK_PATH` — это
+24/25 (`redirect`), иначе 26+ (`in-place`). Установщик печатает
+`D3DMetal: <путь> (redirect|in-place)`.
 
 `python3 tools/crossover/crossover_fsr4.py install` делает следующее.
 
 1. Собирает `dist/crossover/libfsr4hook.dylib` из `hook/fsr4_metalfx.m` и `src/fsr4_live.mm` (x86_64, ad-hoc подпись).
-2. Копирует `D3DMetal.framework` в `dist/crossover/D3DMetal.framework`. Если каталог уже был, он удаляется и копируется заново.
+2. Копирует `D3DMetal.framework` в `dist/crossover/D3DMetal.framework`. Если каталог уже был, он удаляется и копируется заново; в режиме `in-place` источником служит `D3DMetal.fsr4-original`, если приложение уже пропатчено.
 3. В копию бинарника `Versions/A/D3DMetal` дописывает одну load-команду `LC_LOAD_DYLIB` с именем `@loader_path/libfsr4hook.dylib`. Команда ложится в нулевой зазор заголовка Mach-O между концом load-команд и `__text`. Код `EncodeTemporallyScaleMTLFX` не патчится.
 4. Кладёт `libfsr4hook.dylib` рядом с бинарником и подписывает оба файла ad-hoc (`codesign -s -`).
 5. Прогоняет smoke (свизл создаётся, FSR4 ещё не подменяет кадр), `dlopen` копии и `live_test` по `testcases/testcase_quality_720to1080`.
-6. Если указана бутылка, дописывает переменные в конец `cxbottle.conf` и один раз сохраняет копию конфига.
+6. Режим `redirect`: копия остаётся в `dist/`, приложение не трогается.
+   Режим `in-place`: в `CrossOver.app/…/D3DMetal.framework/Versions/A/`
+   кладётся `D3DMetal.fsr4-original` (исходный бинарник), затем подписанный
+   бинарник из `dist/` копируется на место `D3DMetal`, а `libfsr4hook.dylib` —
+   рядом. Установленные файлы заново **не** подписываются: их ad-hoc подписи
+   уже верны, а `codesign` переписал бы `_CodeSignature/CodeResources`, и
+   восстановление байт в байт перестало бы проходить проверку. После патча
+   `dlopen` уже установленного бинарника проверяет, что хук грузится.
+7. Если указана бутылка, дописывает переменные в конец `cxbottle.conf` и один раз сохраняет копию конфига. Ключ другого режима удаляется.
+
+Запись в `CrossOver.app` на macOS 26 может требовать разрешения **App
+Management**. Установщик проверяет запись до долгой сборки и при отказе
+просит разрешить Терминал (или **FSR 4 Installer**) в
+**Системные настройки → Конфиденциальность и безопасность → App Management**.
 
 Установщик читает `BottlePath` из `CrossOver.conf` и `CX_BOTTLE_PATH`,
 поэтому обнаруживает и бутылки на внешнем диске. Без этих настроек ищет в
@@ -58,18 +86,19 @@ dist/crossover/backups/Игры.cxbottle.conf
 
 Ключи, которые пишет установщик (маркер `;; fsr4-mac`):
 
-| Ключ | Значение |
-| --- | --- |
-| `D3DMETAL_FRAMEWORK_PATH` | `dist/crossover/D3DMetal.framework/Versions/A/D3DMetal` |
-| `FSR4_HOOK_LOG` | `dist/crossover/hook.log` |
-| `FSR4_ROOT` | корень этого репозитория |
-| `FSR4_REPLACE` | `1` |
-| `FSR4_VERSION` | `4.1.2` по умолчанию |
-| `FSR4_PROFILE` | `int8-lite` по умолчанию, `lossy2` (FSR 4.1 Lossy, бывший Lite 2), `exact-fast`, `exact` или `fsr4` (модель 4.0.2) |
+| Ключ | Режим | Значение |
+| --- | --- | --- |
+| `D3DMETAL_FRAMEWORK_PATH` | 24/25 | `dist/crossover/D3DMetal.framework/Versions/A/D3DMetal` |
+| `FSR4_FRAMEWORK` | 26+ | `<CrossOver.app>/…/D3DMetal.framework/Versions/A/D3DMetal` |
+| `FSR4_HOOK_LOG` | оба | `dist/crossover/hook.log` |
+| `FSR4_ROOT` | оба | корень этого репозитория |
+| `FSR4_REPLACE` | оба | `1` |
+| `FSR4_VERSION` | оба | `4.1.2` по умолчанию |
+| `FSR4_PROFILE` | оба | `int8-lite` по умолчанию, `lossy2` (FSR 4.1 Lossy, бывший Lite 2), `exact-fast`, `exact` или `fsr4` (модель 4.0.2) |
 
 Они должны остаться внутри `[EnvironmentVariables]`. Установщик дописывает их в конец файла; в бутылке «Игры» эта секция как раз последняя.
 
-Другие ключи бутылки, ярлыки и само приложение не трогаются. Повторный `install` заново копирует фреймворк из CrossOver и заново накладывает только load-команду хука.
+Другие ключи бутылки, ярлыки и остальные файлы приложения не трогаются. Повторный `install` заново готовит фреймворк из CrossOver (в режиме `in-place` — из `D3DMetal.fsr4-original`) и заново накладывает только load-команду хука. Если CrossOver обновился, установщик обновляет и `.fsr4-original`.
 
 Команды:
 
@@ -81,16 +110,30 @@ python3 tools/crossover/crossover_fsr4.py restore
 ```
 
 `restore` удаляет управляемые ключи установщика, включая версию/профиль и
-панель, и строку `;; fsr4-mac`. Копия в `dist/` остаётся на диске. Следующий
-запуск бутылки снова берёт D3DMetal из CrossOver.app.
+панель, и строку `;; fsr4-mac`. В режиме `redirect` копия в `dist/` остаётся
+на диске, приложение не менялось. В режиме `in-place` оригинальный бинарник
+возвращается на место из `D3DMetal.fsr4-original`, а `.fsr4-original` и
+`libfsr4hook.dylib` удаляются; после этого `codesign --verify` у фреймворка
+снова проходит. Ключ `D3DM_ENABLE_METALFX` restore не трогает — он мог быть
+выставлен и до установки.
 
-Пока CrossOver запущен, в память уже загружен старый dylib. После `install` или `restore` процесс нужно закрыть полностью, не только окно игры.
+Если тот же пропатченный фреймворк ещё использует другая бутылка, restore
+снимает ключи только у текущей, оставляет фреймворк пропатченным и печатает
+имена бутылок, которые нужно откатить первыми. Оригинал возвращает последняя.
+Если CrossOver обновился, пока стоял патч, restore видит непатченный бинарник
+и просто удаляет устаревшие `.fsr4-original`/хук, не перезаписывая новый.
+
+Пока CrossOver запущен, в память уже загружен старый dylib. После `install` или `restore` процесс нужно закрыть полностью, не только окно игры. Откатывайте патч перед обновлением CrossOver.
 
 Где ищется CrossOver: сначала `CrossOver.app` и `CrossOver Preview.app` в `/Applications`, потом в `~/Applications`, потом любая переименованная копия (`CrossOver_patched.app`, `CrossOver Preview-20261006.app`) в этих папках или на уровень глубже, потом копии, которые знает Spotlight/LaunchServices (другие диски). CrossOver узнаётся по папке `Contents/SharedSupport/CrossOver`, а не по имени. Если копий несколько, в приложении-установщике есть кнопка **Сменить…**, а в скрипте — `--crossover /путь/к/CrossOver.app`. Выбирайте ту копию, через которую запускаете игру. Бутылки у копий общие.
 
 ## Что делает хук
 
-Конструктор `libfsr4hook.dylib` свизлит `MTLFXTemporalScalerDescriptor`:
+Конструктор `libfsr4hook.dylib` первым делом проверяет `FSR4_ROOT`: без него
+(бутылка без FSR 4) он сразу выходит, ничего не логируя и не свизля. Это
+важно для CrossOver 26, где хук лежит в общем для всех бутылок фреймворке.
+
+Дальше конструктор свизлит `MTLFXTemporalScalerDescriptor`:
 
 - `newTemporalScalerWithDevice:`
 - `newTemporalScalerWithDevice:compiler:`

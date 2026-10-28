@@ -38,9 +38,13 @@ enum SystemCheck {
     static let crossoverBundleID = "com.codeweavers.CrossOver"
     static let crossoverMarker = "Contents/SharedSupport/CrossOver"
     /// D3DMetal inside a CrossOver.app, in order of preference (as in crossover_fsr4.py).
-    static let d3dmetalPaths = ["Contents/SharedSupport/CrossOver/lib/apple_gptk/external/D3DMetal.framework",
+    /// CrossOver 26 moved GPTK 3 to lib64; earlier builds ship it under lib.
+    static let d3dmetalPaths = ["Contents/SharedSupport/CrossOver/lib64/apple_gptk/external/D3DMetal.framework",
+                                "Contents/SharedSupport/CrossOver/lib64/apple_gptk3/external/D3DMetal.framework",
+                                "Contents/SharedSupport/CrossOver/lib/apple_gptk/external/D3DMetal.framework",
                                 "Contents/SharedSupport/CrossOver/lib/apple_gptk3/external/D3DMetal.framework"]
     static let chosenCrossOverKey = "CrossOverApp"
+    static let crossoverOverrideVariable = "FSR4_INSTALLER_CROSSOVER"
 
     /// A CrossOver.app under any name: copies get renamed (CrossOver_patched.app,
     /// CrossOver Preview-20261006.app).
@@ -93,11 +97,23 @@ enum SystemCheck {
         where !apps.contains(where: { $0.path == app.path }) && isCrossOver(app) {
             apps.append(app)
         }
+        if let override = crossoverOverride {
+            apps.removeAll { $0.path == override.path }
+            apps.insert(override, at: 0)
+        }
         if let chosen = chosenCrossOver {
             apps.removeAll { $0.path == chosen.path }
             apps.insert(chosen, at: 0)
         }
         return apps
+    }
+
+    /// Test-only: FSR4_INSTALLER_CROSSOVER selects a CrossOver copy outside
+    /// /Applications, so the end-to-end test never patches a real install.
+    static var crossoverOverride: URL? {
+        guard let path = ProcessInfo.processInfo.environment[crossoverOverrideVariable], !path.isEmpty else { return nil }
+        let app = URL(fileURLWithPath: path)
+        return isCrossOver(app) ? app : nil
     }
 
     /// CrossOver.app picked with Choose…, while it still exists.
