@@ -2,8 +2,16 @@
 
 ## v2.3 (2026-10-30)
 
-FSR 4.1.2 Lossy: retrained weights and a speck clamp from upstream
-`dll-2026-10-29`.
+FSR 4.1.2 Lossy with retrained weights and a speck clamp from upstream
+`dll-2026-10-29`; Lite and Lossy POST about 10% faster, same picture.
+
+- **Speed** (M5, synthetic 24-frame 1000x648 -> 1712x1112 scene, 6
+  interleaved rounds against the v2.2 release with its own weights):
+  FSR 4.1.2 Lite 2.56 -> 2.32 ms median, 2.90 -> 2.60 ms mean, P95 5.32 ->
+  4.66 ms. FSR 4.1.2 Lossy mean 2.94 -> 2.65 ms, reuse frames 1.41 -> 1.22
+  ms, neural frames 3.74 -> 3.60 ms, P95 5.39 -> 4.27 ms. A recorded game
+  frame pair (`tc_game_balanced`) agrees: Lite 2.56 -> 2.32 ms, Lossy reuse
+  1.42 -> 1.23 ms.
 
 - **FSR 4.1.2 Lossy** (profile `lossy2`, panel label was "FSR 4.1 Lossy").
   New weights for passes 1, 2, 4, 5, 10 and 12, and the upstream rule for
@@ -25,28 +33,35 @@ FSR 4.1.2 Lossy: retrained weights and a speck clamp from upstream
 - Panel and installer labels: **FSR 4.1.2 Exact** (`exact-fast`) and
   **FSR 4.1.2 Lossy** (`lossy2`). Profile names and saved settings are
   unchanged.
-- Faster POST, same picture. The CT2D weights are widened to half once per
-  threadgroup in threadgroup memory instead of in every lane; INT8 values and
-  the half-to-float widening are exact, so every float product and sum is
-  unchanged. The Lossy classify and depth-edge probes now issue their loads
-  together. M5, synthetic 24-frame 1000x648 -> 1712x1112 scene, 6
-  interleaved rounds against v2.2's code with the new weights: Lossy reuse
-  frames 1.451 -> 1.220 ms median (-16%), neural frames 3.727 -> 3.600 ms,
-  mean over all frames 2.956 -> 2.758 ms. The POST change is shared, so FSR
-  4.1.2 Exact gets it too. Output is byte-identical to v2.2's for lossy2,
-  lossy, exact, exact-fast and int8-lite (i8mpp, and simd for lossy2,
-  exact-fast and int8-lite).
-- Same scene, FSR 4.1.2 Lite: 2.552 ms median, 2.886 ms mean. Lossy is 5%
-  cheaper on average but uneven: a 3.6 ms neural frame, then a 1.2 ms reuse
-  frame. On the nine synthetic diagnostic scenes Lite scores higher on eight
-  (by 0.6 to 4.2 dB; thin lines in a pan 29.94 against 25.74 dB); Lossy
-  wins only the bar over a moving background (33.60 against 32.85 dB).
-  These scenes have no foliage against distant depth, where the speck
-  clamp works.
+- Faster Lossy and Exact POST, same picture. The CT2D weights are widened
+  to half once per threadgroup in threadgroup memory instead of in every
+  lane; INT8 values and the half-to-float widening are exact, so every
+  float product and sum is unchanged. The Lossy classify and depth-edge
+  probes now issue their loads together.
+- Faster Lite POST, same picture. Its INT8 CT2D products are float dots
+  against a table widened at compile time (every term and partial sum is
+  an exact integer below 2^24). A second POST pipeline, `post_tile`, reads
+  the nine colour taps from a 28x28 threadgroup tile; the host uses it when
+  `ceil(32 * inv_scale) + 6 <= 28` on both axes (render/output up to
+  0.6875, Quality and below) and keeps the original POST above that (DLAA).
+  The tile is a separate pipeline because a branch between tile and
+  texture changed how the compiler contracted the weighted sum.
+- Output is byte-identical to v2.2's code for lossy2 (same weights), lossy,
+  exact, exact-fast, int8-lite, the pixelization fix and Ultra Performance,
+  on i8mpp and simd; the Metal 4 DLL parity test runs the tiled POST.
+- Lossy against Lite, both new: mean 2.65 against 2.60 ms; Lite runs an
+  even 2.3 ms, Lossy alternates 3.6 ms neural and 1.2 ms reuse frames. On
+  the nine synthetic diagnostic scenes Lite scores higher on eight (by 0.6
+  to 4.2 dB; thin lines in a pan 29.94 against 25.74 dB); Lossy wins only
+  the bar over a moving background (33.60 against 32.85 dB). These scenes
+  have no foliage against distant depth, where the speck clamp works.
 - The plain `lossy` profile compiles to the same shaders as before.
 - Checks: `make test`, `make test-fsr411-gpu` (the CLI suite now pins
   FSR 4.1.1 explicitly; it still assumed the pre-v2.0 default),
+  `make test-fsr412-optimization` (classic Metal and Metal 4),
   `make test-fsr411-lossy`, `make test-fsr411-cadence`,
+  `tools/fsr411/test_fsr412_ct2d.py` (exact float dot, tile coverage up to
+  the host limit),
   the new `tools/fsr411/test_lossy412.py` (decoder round trip on synthetic
   DXIL, reproducible npz, speck rule only in the `lossy2` POST) and
   `test_lossy2.py` with the new weights.

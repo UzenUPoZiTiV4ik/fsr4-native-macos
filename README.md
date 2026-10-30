@@ -64,9 +64,10 @@ The **FSR 4** panel lets you switch modes on the fly:
 \* Recorded 864×560 → 1712×1112 sequence on M5, 480 measured frames per model,
 interleaved runs, RCAS off. FSR 4.1.2: P99 3.87 ms, maximum 4.93 ms, full
 inference on every frame. Lossy: maximum 5.56 ms, 240 neural frames
-and 240 inference reuses, measured before v2.3. In v2.3 the 4.1.2 Lossy
-reuse frame is 16% faster (1.45 -> 1.22 ms median on a synthetic
-1712×1112 scene); see [FSR 4.1.2 Lossy](docs/FSR411_LOSSY2.md) for the
+and 240 inference reuses. Both measured before v2.3, which makes Lite about
+9% and Lossy about 10% faster with the same picture (synthetic 1712×1112
+scene, against v2.2: Lite 2.56 -> 2.32 ms median, Lossy 2.94 -> 2.65 ms
+mean); see [FSR 4.1.2 Lossy](docs/FSR411_LOSSY2.md) for the numbers and the
 Lossy vs Lite comparison. [Method and validation](docs/FSR412_STABILITY.md).
 These are standalone replay GPU times, not a guaranteed ceiling in a running game.
 The old FSR 4.1 Lite mode has been removed from the panel.
