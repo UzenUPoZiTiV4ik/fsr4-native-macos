@@ -19,7 +19,7 @@ sequence, 40% less. Method and limits: [FSR 4.1.2 stability](docs/FSR412_STABILI
 
 ## Easiest: the FSR4 Installer app
 
-1. Download **FSR4-Installer-v2.3.dmg** from the
+1. Download **FSR4-Installer-v2.4.dmg** from the
    [latest release](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/releases/latest)
    and drag **FSR4 Installer** to Applications.
 2. First launch: the app is not notarized, so macOS blocks it. Open

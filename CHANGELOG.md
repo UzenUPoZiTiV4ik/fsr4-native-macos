@@ -1,8 +1,9 @@
 # Releases
 
-## Unreleased
+## v2.4 (2026-10-30)
 
-CrossOver 26 support.
+CrossOver 26 support (contributed by @d45h71, #13; fixes #15). FSR 4.1.2
+modes, profiles and the panel are unchanged from v2.3.
 
 - CrossOver 26 moved GPTK 3 to `lib64/apple_gptk/external` (and
   `lib64/apple_gptk3/external`). The installer searches those first and keeps
