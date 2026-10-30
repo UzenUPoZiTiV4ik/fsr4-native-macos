@@ -14,7 +14,7 @@ import argparse, fcntl, hashlib, json, os, re, shutil, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fsr412.optimization import (REVISION, POST_TILE_SIDE, input_color_cache, color_cache_source, pixelization_fix,
-                                 ct2d_float_dot, post_color_tile)
+                                 ct2d_float_dot, post_color_tile, constant_initializer)
 from fsr412.model_data import initializer_for, patch_post_tail, load_lossy_initializer, patch_post_biases_by_tap
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -178,6 +178,7 @@ def compile_metal(src: Path, out: Path, entry: str, external: bool = False, tier
         text, formula = input_color_cache(text, 9 if stage == "post" else 4)
         if stage == "pre":
             (out.parent / "prepare_color.metal").write_text(color_cache_source(text, formula))
+            text = constant_initializer(text)
     if lossy:
         from fsr412.lossy_shaders import apply_lossy_pre, apply_lossy_post
         if stage in ("pre","pre_reuse"):
