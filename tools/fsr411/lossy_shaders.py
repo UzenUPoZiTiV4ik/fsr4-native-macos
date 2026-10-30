@@ -147,16 +147,20 @@ void Fsr411LossyClassify(int2 cell, uint4 own, out bool atRest, out bool uncover
                        out bool otherMotion)
 {
     int2 displacement = asint(own.xy);
-    otherMotion = Fsr411LossyDifferentMotion(displacement,
-        asint(Fsr411LossyReadMotion(cell + (displacement >> 1)).xy));
     // The release probes in units of 2x2 output-pixel cells, not blocks.
     static const int2 offsets[8] = {
         int2(3, 0), int2(-3, 0), int2(0, 3), int2(0, -3),
         int2(8, 0), int2(-8, 0), int2(0, 8), int2(0, -8)
     };
-    [loop] for (uint probe = 0u; probe < 8u; ++probe)
-        otherMotion = otherMotion || Fsr411LossyDifferentMotion(displacement,
-            asint(Fsr411LossyReadMotion(cell + offsets[probe]).xy));
+    // Every probe is a clamped, side-effect-free read. Evaluate all nine and
+    // OR the results without short-circuiting, so their loads issue together
+    // instead of one after another; the boolean result is the same.
+    uint differs = Fsr411LossyDifferentMotion(displacement,
+        asint(Fsr411LossyReadMotion(cell + (displacement >> 1)).xy)) ? 1u : 0u;
+    [unroll] for (uint probe = 0u; probe < 8u; ++probe)
+        differs |= Fsr411LossyDifferentMotion(displacement,
+            asint(Fsr411LossyReadMotion(cell + offsets[probe]).xy)) ? 1u : 0u;
+    otherMotion = differs != 0u;
     atRest = all(displacement == int2(0, 0)) && !otherMotion;
     uncovered = false;
 
@@ -227,14 +231,15 @@ bool Fsr411LossyDepthEdge(int2 cell, uint4 own)
         int2(2, 0), int2(-2, 0), int2(0, 2), int2(0, -2),
         int2(3, 0), int2(-3, 0), int2(0, 3), int2(0, -3)
     };
-    bool edge = false;
+    // Non-short-circuit OR of side-effect-free probes, as in Classify.
+    uint edge = 0u;
     [unroll] for (uint probe = 0u; probe < 12u; ++probe)
     {
         uint neighbour = Fsr411LossyReadMotion(cell + offsets[probe]).z;
         float other = asfloat(neighbour);
-        edge = edge || (neighbour != 0u && abs(other - asfloat(own.z)) > max(abs(other), depth) * 0.02f);
+        edge |= (neighbour != 0u && abs(other - asfloat(own.z)) > max(abs(other), depth) * 0.02f) ? 1u : 0u;
     }
-    return edge;
+    return edge != 0u;
 }
 
 // At a depth edge in motion, keep a skipped frame's result within 0.9x..1.5x
