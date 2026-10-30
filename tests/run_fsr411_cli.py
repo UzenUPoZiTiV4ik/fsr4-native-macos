@@ -24,6 +24,11 @@ def main():
     for name in ("FSR4_VERSION", "FSR4_PROFILE", "FSR4_MODEL", "FSR4_OPTIMIZE"):
         env.pop(name, None)
     env["FSR4_ROOT"] = str(ROOT)
+    default = json.loads(subprocess.run([str(args.binary.resolve()), "--backend-info"], cwd=ROOT, env=env,
+                                        capture_output=True, text=True, check=True).stdout)
+    assert default["fsr_version"] == "4.1.2" and default["profile"] == "int8-lite", default
+    # The rest of this suite covers the FSR 4.1.1 runner; 4.1.2 is the default since v2.0.
+    env["FSR4_VERSION"] = "4.1.1"
 
     def cli(*flags, success=True):
         result = subprocess.run([str(args.binary.resolve()), *map(str, flags)],
