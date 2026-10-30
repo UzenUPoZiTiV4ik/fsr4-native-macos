@@ -388,6 +388,8 @@ public:
         }
         id enc = [commandBuffer computeCommandEncoder];
         if (!enc) return fail("caller command buffer already has an active encoder");
+        if ([enc respondsToSelector:@selector(setLabel:)])
+            [enc setLabel:session->modelLite ? @"FSR4 4.1.2 Lite" : @"FSR4 4.1.1"];
         const bool m4 = ![enc respondsToSelector:@selector(setBuffer:offset:atIndex:)];
         if (m4 && options.stageProfiler) {
             [enc endEncoding]; return fail("CLI stage counters require a classic Metal command buffer");
