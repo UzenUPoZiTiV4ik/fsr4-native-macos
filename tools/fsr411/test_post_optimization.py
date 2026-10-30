@@ -11,7 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 try:
     from compile_fsr411 import external_post_cnb, math_flags
     from fsr411.lossy_shaders import apply_lossy_post, apply_lossy_post_cells
-    from fsr411.post_optimization import apply_post_optimization, POST_CACHE_SIDE, POST_PIXELS_PER_GROUP
+    from fsr411.post_optimization import (apply_post_optimization, CT2D_COPY_FIRST_LANE, CT2D_PHASE_ROWS,
+                                          POST_CACHE_SIDE, POST_PIXELS_PER_GROUP)
 finally:
     sys.path.pop(0)
 
@@ -79,14 +80,52 @@ class PostOptimizationTests(unittest.TestCase):
                 phase, values = ("pk", "packedVss") if profile == "exact" else ("cnbPixel", "pixelCnb")
                 self.assertIn("float ct[8];", result)
                 self.assertNotIn("int ct[8];", result)
-                self.assertIn("ct[ch] = CT2D_S[" + phase + " * 8 + ch];", result)
-                self.assertIn("int b = (" + phase + " * 32 + ch2 * 4);", result)
+                self.assertIn("ct[ch] = Fsr411PostCt2dS[" + phase + " * 8 + ch];", result)
+                self.assertIn("uint w = (" + phase + " * " + str(CT2D_PHASE_ROWS) + "u + ch2) * 4u;", result)
                 for word in range(4):
-                    index = "b" if word == 0 else "b + " + str(word)
-                    self.assertIn("ct[ch2] = Fsr411PostDot4Exact(CT2D_W[" + index + "], " + values +
+                    index = "w" if word == 0 else "w + " + str(word) + "u"
+                    self.assertIn("ct[ch2] = Fsr411PostDot4Shared(Fsr411PostCt2dW[" + index + "], " + values +
                                   "[" + str(word) + "], ct[ch2]);", result)
-                self.assertEqual(result.count("ct[ch2] = Fsr411PostDot4Exact("), 4)
-                self.assertIn("return dot(float4(unpack_s8s32(a)), float4(unpack_s8s32(b))) + acc;", result)
+                self.assertEqual(result.count("ct[ch2] = Fsr411PostDot4Shared("), 4)
+                self.assertIn("return dot(float4(a), float4(unpack_s8s32(b))) + acc;", result)
+                self.assertIn("Fsr411PostCt2dW[first + word] = half4(unpack_s8s32(uint(CT2D_W[row * 4u + word])));", result)
+                self.assertIn("Fsr411PostCt2dS[row] = CT2D_S[row];", result)
+
+    def test_shared_ct2d_rows_hold_each_original_table_word_once(self):
+        # Mirror the fill (lanes 160..191) and the per-pixel read indices.
+        filled = {}
+        for lane in range(256):
+            row = (lane - CT2D_COPY_FIRST_LANE) & 0xffffffff
+            if row >= 32:
+                continue
+            first = ((row >> 3) * CT2D_PHASE_ROWS + (row & 7)) * 4
+            for word in range(4):
+                self.assertNotIn(first + word, filled)
+                filled[first + word] = row * 4 + word
+        self.assertEqual(sorted(filled.values()), list(range(128)))
+        self.assertLess(max(filled), 4 * CT2D_PHASE_ROWS * 4)
+        for phase in range(4):
+            for channel in range(8):
+                for word in range(4):
+                    self.assertEqual(filled[(phase * CT2D_PHASE_ROWS + channel) * 4 + word],
+                                     phase * 32 + channel * 4 + word)
+        # The copy lanes take one colour-cache entry at most and never the
+        # lossy classifier lanes 192..255.
+        self.assertGreaterEqual(CT2D_COPY_FIRST_LANE + 256, POST_CACHE_SIDE * POST_CACHE_SIDE)
+        self.assertLessEqual(CT2D_COPY_FIRST_LANE + 32, 192)
+        # Every signed INT8 weight is an exact half.
+        for value in range(-128, 128):
+            self.assertEqual(struct.unpack("<e", struct.pack("<e", float(value)))[0], value)
+
+    def test_shared_ct2d_copy_precedes_the_barrier(self):
+        for _, _, _, source in variants():
+            result = apply_post_optimization(source)
+            helper = result[result.index("void Fsr411CachePostColor("):result.index("[numthreads(")]
+            self.assertLess(helper.index("Fsr411PostCt2dS[row] = CT2D_S[row];"),
+                            helper.index("GroupMemoryBarrierWithGroupSync();"))
+            main = result[result.index("void fsr4_model_v07_fp8_no_scale_postpass("):]
+            self.assertNotIn("CT2D_W[", main)
+            self.assertNotIn("CT2D_S[", main)
 
     def test_all_tier_tables_bound_every_float32_partial_sum(self):
         for tier, preset, packed, biases in ct2d_tables():
@@ -160,7 +199,9 @@ class PostOptimizationTests(unittest.TestCase):
             self.assertLess(main.index("Fsr411CachePostColor("), main.index("return;"))
             self.assertIn("GroupMemoryBarrierWithGroupSync();", result[:result.index("[numthreads(")])
             self.assertIn("groupshared float3 Fsr411PostColor[", result)
-            self.assertNotIn("groupshared half", result)
+            # The colour cache stays float32; only the INT8 CT2D weights,
+            # exact in half, may live in a half groupshared array.
+            self.assertEqual(re.findall(r"groupshared half\w* (\w+)", result), ["Fsr411PostCt2dW"])
             self.assertNotIn("for (uint pk", main)
 
     def test_lossy_cells_classify_once_before_the_shared_barrier(self):

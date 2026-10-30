@@ -16,7 +16,15 @@ and include this module in the build cache identity when enabling it.
 POST_PIXELS_PER_GROUP = 16
 POST_THREADS_PER_GROUP = 256
 POST_CACHE_SIDE = 20
-MARKER = "// fsr411-generated-post-color-cache: output-tile=16 cache-side=20 active-load=1 exact-float-ct2d=1\n"
+MARKER = ("// fsr411-generated-post-color-cache: output-tile=16 cache-side=20 active-load=1 exact-float-ct2d=1"
+          " shared-ct2d=half\n")
+# Lanes 160..191 copy the 32 (phase, channel) CT2D rows into threadgroup
+# memory before the existing barrier. They load one colour-cache entry at
+# most; lanes 192..255 classify lossy cells. Row r = phase * 8 + channel
+# starts at element (phase * 9 + channel) * 4: the pad row moves the four
+# phases a simdgroup reads at once into different banks.
+CT2D_COPY_FIRST_LANE = 160
+CT2D_PHASE_ROWS = 9
 
 
 def _replace(source, before, after):
@@ -34,6 +42,14 @@ CT2D_HELPER = r"""
 float Fsr411PostDot4Exact(uint a, uint b, float acc)
 {
     return dot(float4(unpack_s8s32(a)), float4(unpack_s8s32(b))) + acc;
+}
+
+// The same float32 dot product with the weight bytes already widened. A
+// signed INT8 value is an exact half, and widening half to float is exact, so
+// every operand, product and sum equals Fsr411PostDot4Exact's.
+float Fsr411PostDot4Shared(half4 a, uint b, float acc)
+{
+    return dot(float4(a), float4(unpack_s8s32(b))) + acc;
 }
 """
 
@@ -53,7 +69,20 @@ def _float32_ct2d(source):
             ct[ch2] = dot4add_i8packed(CT2D_W[b + 2], VALUES[2], ct[ch2]);
             ct[ch2] = dot4add_i8packed(CT2D_W[b + 3], VALUES[3], ct[ch2]);
         }""".replace("PHASE", phase).replace("VALUES", values)
-    replacement = block.replace("int ct[8];", "float ct[8];").replace("dot4add_i8packed(", "Fsr411PostDot4Exact(")
+    # Read the same table values from threadgroup memory. The phase differs
+    # between neighbouring lanes: per-lane constant-buffer indexing and the
+    # per-lane INT8 unpack of all 128 weight words cost about 0.15 ms per
+    # 1712x1112 POST on M5. Operands and their order stay intact.
+    replacement = """        float ct[8];
+        [unroll] for (uint ch = 0; ch < 8; ch++) ct[ch] = Fsr411PostCt2dS[PHASE * 8 + ch];
+        [unroll] for (uint ch2 = 0; ch2 < 8; ch2++)
+        {
+            uint w = (PHASE * ROWSu + ch2) * 4u;
+            ct[ch2] = Fsr411PostDot4Shared(Fsr411PostCt2dW[w], VALUES[0], ct[ch2]);
+            ct[ch2] = Fsr411PostDot4Shared(Fsr411PostCt2dW[w + 1u], VALUES[1], ct[ch2]);
+            ct[ch2] = Fsr411PostDot4Shared(Fsr411PostCt2dW[w + 2u], VALUES[2], ct[ch2]);
+            ct[ch2] = Fsr411PostDot4Shared(Fsr411PostCt2dW[w + 3u], VALUES[3], ct[ch2]);
+        }""".replace("PHASE", phase).replace("VALUES", values).replace("ROWS", str(CT2D_PHASE_ROWS))
     return _replace(source, block, replacement)
 
 
@@ -63,6 +92,9 @@ CACHE_HELPERS = r"""
 #define FSR411_POST_CACHE_SIDE 20
 groupshared float3 Fsr411PostColor[FSR411_POST_CACHE_SIDE * FSR411_POST_CACHE_SIDE];
 groupshared int2 Fsr411PostColorOrigin;
+// CT2D_W row r = phase * 8 + channel: CT2D_W[r * 4 + word] widened to half4.
+groupshared half4 Fsr411PostCt2dW[4 * CT2D_ROWS * 4];
+groupshared int Fsr411PostCt2dS[32];
 
 void Fsr411CachePostColor(uint lane, uint2 outputOrigin, float exposure)
 {
@@ -84,6 +116,14 @@ void Fsr411CachePostColor(uint lane, uint2 outputOrigin, float exposure)
                         uint2(ceil(inv_scale * 16.0f)) + 4u))
                 Fsr411PostColor[index] = ApplyMuLaw411(r_input_color[pc], exposure);
         }
+    }
+    if (lane - CT2D_FIRSTu < 32u)
+    {
+        uint row = lane - CT2D_FIRSTu;
+        uint first = ((row >> 3u) * CT2D_ROWSu + (row & 7u)) * 4u;
+        [unroll] for (uint word = 0u; word < 4u; ++word)
+            Fsr411PostCt2dW[first + word] = half4(unpack_s8s32(uint(CT2D_W[row * 4u + word])));
+        Fsr411PostCt2dS[row] = CT2D_S[row];
     }
     // All lanes, including those outside a partial output tile, reach this.
     GroupMemoryBarrierWithGroupSync();
@@ -139,7 +179,9 @@ def apply_post_optimization(source):
         "    uint pk = (outputPixel.x & 1u) | ((outputPixel.y & 1u) << 1u);\n"
     )
     source = _replace(source, COORDINATES, coordinates)
-    source = _replace(source, "[numthreads(256, 1, 1)]", CT2D_HELPER + CACHE_HELPERS + "\n[numthreads(256, 1, 1)]")
+    helpers = (CACHE_HELPERS.replace("CT2D_ROWS", str(CT2D_PHASE_ROWS))
+               .replace("CT2D_FIRST", str(CT2D_COPY_FIRST_LANE)))
+    source = _replace(source, "[numthreads(256, 1, 1)]", CT2D_HELPER + helpers + "\n[numthreads(256, 1, 1)]")
     source = source.replace("    // ---- CT2D 2x2 + epilogue per output px ----\n", "")
     source = _replace(source, "    [unroll] for (uint pk = 0; pk < 4; pk++)\n",
                       "    // ---- CT2D for this output pixel's phase + original epilogue ----\n")
