@@ -75,10 +75,42 @@ __attribute__((always_inline)) inline hmat requant(thread fmat &acc, int2 bias, 
     return r;
 }
 
-// Copy a W x H pixel window of C channels (multiple of 16) as half, zero
-// outside the logical tensor. Layout [row][column][channel].
-template <uint C, uint W, uint H, uint THREADS>
-__attribute__((always_inline)) inline void load_window(threadgroup half *tile, device const uchar *scratch,
+// Winograd windows stay INT8 in threadgroup memory: half the footprint, so
+// more threadgroups fit per core; the half conversion on read is exact.
+template <bool WINO> struct Tile { typedef half type; };
+template <> struct Tile<true> { typedef char type; };
+
+__attribute__((always_inline)) inline void store16(threadgroup half *dst, uint4 v) {
+    threadgroup half4 *d = (threadgroup half4 *)dst;
+    d[0] = half4(as_type<char4>(v.x));
+    d[1] = half4(as_type<char4>(v.y));
+    d[2] = half4(as_type<char4>(v.z));
+    d[3] = half4(as_type<char4>(v.w));
+}
+__attribute__((always_inline)) inline void store16(threadgroup char *dst, uint4 v) {
+    *(threadgroup uint4 *)dst = v;
+}
+__attribute__((always_inline)) inline half2 load2(threadgroup const half *src) {
+    return *(threadgroup const half2 *)src;
+}
+__attribute__((always_inline)) inline half2 load2(threadgroup const char *src) {
+    return half2(*(threadgroup const char2 *)src);
+}
+// A fragment whose row r starts at src + r * stride. The INT8 window builds
+// the two elements this lane owns (lane_origin) instead of simdgroup_load.
+__attribute__((always_inline)) inline void load_fragment(thread hmat &a, threadgroup const half *src, uint stride, ushort2) {
+    simdgroup_load(a, src, stride);
+}
+__attribute__((always_inline)) inline void load_fragment(thread hmat &a, threadgroup const char *src, uint stride, ushort2 lo) {
+    const half2 v = load2(src + lo.y * stride + lo.x);
+    a.thread_elements()[0] = v.x;
+    a.thread_elements()[1] = v.y;
+}
+
+// Copy a W x H pixel window of C channels (multiple of 16), zero outside the
+// logical tensor. Layout [row][column][channel].
+template <uint C, uint W, uint H, uint THREADS, typename T>
+__attribute__((always_inline)) inline void load_window(threadgroup T *tile, device const uchar *scratch,
                                                        fsr411::Tensor t, int x0, int y0, uint tid) {
     constexpr uint UNITS = C / 16u;
     for (uint i = tid; i < W * H * UNITS; i += THREADS) {
@@ -87,11 +119,7 @@ __attribute__((always_inline)) inline void load_window(threadgroup half *tile, d
         uint4 v(0);
         if (x >= 0 && y >= 0 && uint(x) < t.width && uint(y) < t.height)
             v = *(device const uint4 *)(scratch + fsr411::tensor_address(t, uint(x), uint(y), ch));
-        threadgroup half4 *dst = (threadgroup half4 *)(tile + px * C + ch);
-        dst[0] = half4(as_type<char4>(v.x));
-        dst[1] = half4(as_type<char4>(v.y));
-        dst[2] = half4(as_type<char4>(v.z));
-        dst[3] = half4(as_type<char4>(v.w));
+        store16(tile + px * C + ch, v);
     }
 }
 
@@ -153,7 +181,7 @@ template <> struct Conv3x3<false> {
 template <> struct Conv3x3<true> {
     static constexpr int at(uint i, uint k) { return i == 0u ? (k < 3u ? 1 : 0) : (k == 0u ? 0 : k == 1u ? 1 : -1); }
     template <uint NF, uint BANKS, uint MB, uint SG>
-    static __attribute__((always_inline)) inline void run(thread hmat (&a1)[MB][NF / 8u], threadgroup const half *tile,
+    static __attribute__((always_inline)) inline void run(thread hmat (&a1)[MB][NF / 8u], threadgroup const char *tile,
                                                           device const half *wh, device const uchar *weights,
                                                           FSR411_PARAMS_ADDRESS fsr411::PassParams &p, ushort sg, ushort2 lo) {
         static_assert(MB == 4u, "Winograd blocks are the four 2x2 sub-positions");
@@ -161,7 +189,7 @@ template <> struct Conv3x3<true> {
 #pragma clang loop unroll(full)
         for (uint b = 0; b < BANKS; ++b) {
             // This lane's 4x4 input patch of 2x2 tile lo.y, channels lo.x, lo.x+1.
-            threadgroup const half *base = tile + (2u * sg * WW + 2u * lo.y) * NF + b * 16u + lo.x;
+            threadgroup const char *base = tile + (2u * sg * WW + 2u * lo.y) * NF + b * 16u + lo.x;
             half2 d[2][4][4];
 #pragma clang loop unroll(full)
             for (uint kb = 0; kb < 2u; ++kb)
@@ -169,7 +197,7 @@ template <> struct Conv3x3<true> {
                 for (uint r = 0; r < 4u; ++r)
 #pragma clang loop unroll(full)
                     for (uint c = 0; c < 4u; ++c)
-                        d[kb][r][c] = *(threadgroup const half2 *)(base + (r * WW + c) * NF + kb * 8u);
+                        d[kb][r][c] = load2(base + (r * WW + c) * NF + kb * 8u);
             fmat y[4][2];
 #pragma clang loop unroll(full)
             for (uint m = 0; m < 4u; ++m) y[m][0] = y[m][1] = zero();
@@ -235,7 +263,7 @@ template <> struct Conv3x3<true> {
 template <uint NF, uint BANKS, uint MB, uint SG, bool UPSAMPLE, bool WINO = false>
 __attribute__((always_inline)) inline void block(device uchar *scratch, device const uchar *weights,
                                                  device const half *wh, FSR411_PARAMS_ADDRESS fsr411::PassParams &p,
-                                                 threadgroup half *tile, uint2 group, uint tid, ushort sg, ushort lane) {
+                                                 threadgroup typename Tile<WINO>::type *tile, uint2 group, uint tid, ushort sg, ushort lane) {
     static_assert(NF % 16u == 0 && 16u * BANKS <= NF, "conv banks must fit the block width");
     constexpr uint TW = WINO ? 16u : 8u * MB, TH = WINO ? 2u * SG : SG, WW = TW + 2u, WH = TH + 2u;
     constexpr uint KB = NF / 8u, N1 = 2u * NF, ROW = WINO ? 2u : 1u;
@@ -254,7 +282,7 @@ __attribute__((always_inline)) inline void block(device uchar *scratch, device c
 #pragma clang loop unroll(full)
     for (uint cb = 2u * BANKS; cb < KB; ++cb)
 #pragma clang loop unroll(full)
-        for (uint m = 0; m < MB; ++m) simdgroup_load(a1[m][cb], FSR411_WINDOW(m, 0u) + cb * 8u, ROW * NF);
+        for (uint m = 0; m < MB; ++m) load_fragment(a1[m][cb], FSR411_WINDOW(m, 0u) + cb * 8u, ROW * NF, lo);
 
     // ReLU expansion (NF -> 2NF), streamed one 8-channel block at a time
     // straight into the projection (2NF -> NF) accumulators.
@@ -299,7 +327,7 @@ __attribute__((always_inline)) inline void block(device uchar *scratch, device c
 #pragma clang loop unroll(full)
         for (uint m = 0; m < MB; ++m) {
             const uint2 q = pixel<WINO>(m, lo.y, sg);
-            threadgroup const half *r = FSR411_WINDOW(m, lo.y) + ch;
+            threadgroup const typename Tile<WINO>::type *r = FSR411_WINDOW(m, lo.y) + ch;
             const int v0 = int(finishf(out[m][ob].thread_elements()[0], bias.x, int(r[0]), q2));
             const int v1 = int(finishf(out[m][ob].thread_elements()[1], bias.y, int(r[1]), q2));
             if (UPSAMPLE) {
@@ -410,7 +438,7 @@ __attribute__((always_inline)) inline void downsample(device uchar *scratch, dev
 #define FSR411_SIMD_BLOCK(NAME, NF, BANKS, MB, SG, UPSAMPLE, WINO) \
 kernel void NAME(FSR411_SIMD_ARGS) { \
     FSR411_LOCAL_PARAMS; \
-    threadgroup half tile[((WINO) ? 18 * (2 * (SG) + 2) : (8 * (MB) + 2) * ((SG) + 2)) * (NF)]; \
+    threadgroup fsr411_simd::Tile<(WINO)>::type tile[((WINO) ? 18 * (2 * (SG) + 2) : (8 * (MB) + 2) * ((SG) + 2)) * (NF)]; \
     fsr411_simd::block<NF, BANKS, MB, SG, UPSAMPLE, WINO>(scratch, weights, wh, p, tile, group, tid, sg, lane); \
 }
 FSR411_SIMD_BLOCK(fsr411_simd_cnb, 16, 1, 4, 4, false, false)
