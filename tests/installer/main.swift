@@ -1,4 +1,5 @@
 // Tests for the installer app's non-UI code: make test-installer
+import Darwin
 import Foundation
 
 var failures = 0
@@ -72,6 +73,15 @@ do {
     let games = list.first { $0.name == "Игры" }
     check(games?.installed == true && games?.root == "/x" && games?.profile == "exact-fast" && games?.panel == true,
           "installed bottle: \(String(describing: games))")
+    let modern = scratch.appendingPathComponent("Modern/cxbottle.conf")
+    write("""
+    "FSR4_FRAMEWORK" = "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/lib64/apple_gptk/external/D3DMetal.framework/Versions/A/D3DMetal"
+    "FSR4_ROOT" = "/x"
+    "FSR4_PROFILE" = "int8-lite"
+    """, modern)
+    check(Bottles.bottle(conf: modern)?.installed == true, "CrossOver 26 FSR4_FRAMEWORK marks installed")
+    check(Bottles.bottle(conf: bottles.appendingPathComponent("steam/cxbottle.conf"))?.installed == false,
+          "plain bottle stays not installed")
 }
 
 // MARK: External bottle discovery (issue #11)
@@ -217,12 +227,40 @@ do {
     check(apps.map(\.lastPathComponent) == ["CrossOver Preview-20261006.app", "CrossOver_patched.app", "CrossOver.app"],
           "renamed copies found, launchers skipped: \(apps.map(\.path))")
     check(SystemCheck.d3dmetal(in: dated)?.path.hasSuffix("apple_gptk/external/D3DMetal.framework") == true, "GPTK 1 path")
+    check(SystemCheck.d3dmetal(in: dated)?.path.contains("CrossOver/lib64/") == true, "CrossOver 26 lib64 path")
     check(SystemCheck.d3dmetal(in: nested)?.path.hasSuffix("apple_gptk3/external/D3DMetal.framework") == true, "GPTK 3 path")
     check(SystemCheck.d3dmetal(in: patched) == nil, "no D3DMetal")
+    check(SystemCheck.d3dmetalPaths.count == 4, "lib64 and lib paths")
+    let legacy = scratch.appendingPathComponent("apps/legacy/CrossOver_legacy.app")
+    try! FileManager.default.createDirectory(at: legacy.appendingPathComponent(SystemCheck.crossoverMarker),
+                                             withIntermediateDirectories: true)
+    try! FileManager.default.createDirectory(at: legacy.appendingPathComponent(SystemCheck.d3dmetalPaths[2]),
+                                             withIntermediateDirectories: true)
+    check(SystemCheck.d3dmetal(in: legacy)?.path.contains("CrossOver/lib/") == true, "CrossOver 24/25 lib path")
     let standard = system.appendingPathComponent("CrossOver.app")
     try! FileManager.default.createDirectory(at: standard.appendingPathComponent(SystemCheck.crossoverMarker),
                                              withIntermediateDirectories: true)
     check(SystemCheck.crossoverApps(in: [system, home]).first?.path == standard.path, "standard name in /Applications first")
+}
+
+// MARK: Test-only CrossOver override (keeps the E2E run off /Applications)
+
+do {
+    let clone = scratch.appendingPathComponent("clone/CrossOver.app")
+    try! FileManager.default.createDirectory(at: clone.appendingPathComponent(SystemCheck.crossoverMarker),
+                                             withIntermediateDirectories: true)
+    // Restore the inherited value: the E2E block below uses the same variable.
+    let previous = ProcessInfo.processInfo.environment[SystemCheck.crossoverOverrideVariable]
+    setenv(SystemCheck.crossoverOverrideVariable, clone.path, 1)
+    defer {
+        if let previous {
+            setenv(SystemCheck.crossoverOverrideVariable, previous, 1)
+        } else {
+            unsetenv(SystemCheck.crossoverOverrideVariable)
+        }
+    }
+    check(SystemCheck.crossoverOverride?.path == clone.path, "FSR4_INSTALLER_CROSSOVER selects a copy")
+    check(SystemCheck.crossoverApps.first?.path == clone.path, "override comes first")
 }
 
 let requirements = SystemCheck.all()
@@ -238,40 +276,56 @@ for requirement in requirements {
 }
 print("  chip: \(Chip.name), neural accelerators: \(Chip.hasNeuralAccelerators)")
 
-// MARK: End to end (opt-in, about a minute)
-//   FSR4_E2E="build/.../FSR4 Installer.app/Contents/Resources/payload.tar.gz" build/tests/installer_test
+// MARK: End to end (opt-in, a few minutes)
+//   FSR4_E2E="build/.../FSR4 Installer.app/Contents/Resources/payload.tar.gz" \
+//   FSR4_INSTALLER_CROSSOVER="/path/to/a/CrossOver copy.app" build/tests/installer_test
 // Runs InstallerModel.install() and restore() on a fake bottle. Set
 // FSR4_INSTALLER_ROOT and FSR4_INSTALLER_BOTTLES to temporary folders.
+// FSR4_INSTALLER_CROSSOVER is required: on CrossOver 26 the install patches
+// D3DMetal inside the selected app, so the test must use a copy, never the
+// app in /Applications.
 
 if let archive = ProcessInfo.processInfo.environment["FSR4_E2E"] {
-    let bottles = Bottles.directory
-    let conf = bottles.appendingPathComponent("E2E Bottle/cxbottle.conf")
-    write("[EnvironmentVariables]\n\"WINEDEBUG\" = \"-all\"\n", conf)
-    let model = InstallerModel(payload: BundledPayload(info: PayloadInfo(version: "e2e", commit: "test"),
-                                                       archive: URL(fileURLWithPath: archive)))
-    model.refresh()
-    wait(60) { !model.checking }
-    model.selectedID = model.bottles.first { $0.name == "E2E Bottle" }?.id
-    check(model.canInstall, "can install: requirements \(model.requirementsMet)")
-    model.profile = .full
-    model.panel = false
-    model.install()
-    var steps = Set<String>()
-    wait(1800) { if !model.step.isEmpty { steps.insert(model.step) }; return !model.busy }
-    check(model.banner?.style == .success, "install: \(String(describing: model.banner))\n\(model.log.suffix(2000))")
-    print("  steps: \(steps.sorted())")
-    let installed = Bottles.list(in: bottles).first { $0.name == "E2E Bottle" }
-    check(installed?.installed == true && installed?.profile == "exact-fast" && installed?.panel == false,
-          "bottle after install: \(String(describing: installed))")
-    check(installed.map(model.ownsInstall) == true, "installed from the app's root")
-    check(Payload.installed(at: model.root)?.version == "e2e", "payload marker")
-    if let installed {
-        model.restore(installed)
-        wait(120) { !model.busy }
-        check(model.banner?.style == .success, "restore: \(String(describing: model.banner))")
-        check(Bottles.list(in: bottles).first { $0.name == "E2E Bottle" }?.installed == false, "bottle after restore")
+    if SystemCheck.crossoverOverride == nil {
+        print("  end to end: skipped (set FSR4_INSTALLER_CROSSOVER to a CrossOver copy)")
+    } else {
+        let bottles = Bottles.directory
+        let conf = bottles.appendingPathComponent("E2E Bottle/cxbottle.conf")
+        write("[EnvironmentVariables]\n\"WINEDEBUG\" = \"-all\"\n", conf)
+        let model = InstallerModel(payload: BundledPayload(info: PayloadInfo(version: "e2e", commit: "test"),
+                                                           archive: URL(fileURLWithPath: archive)))
+        model.refresh()
+        wait(60) { !model.checking }
+        model.selectedID = model.bottles.first { $0.name == "E2E Bottle" }?.id
+        check(model.canInstall, "can install: requirements \(model.requirementsMet)")
+        model.profile = .full
+        model.panel = false
+        model.install()
+        var steps = Set<String>()
+        wait(1800) { if !model.step.isEmpty { steps.insert(model.step) }; return !model.busy }
+        check(model.banner?.style == .success, "install: \(String(describing: model.banner))\n\(model.log.suffix(2000))")
+        print("  steps: \(steps.sorted())")
+        let installed = Bottles.list(in: bottles).first { $0.name == "E2E Bottle" }
+        check(installed?.installed == true && installed?.profile == "exact-fast" && installed?.panel == false,
+              "bottle after install: \(String(describing: installed))")
+        check(installed.map(model.ownsInstall) == true, "installed from the app's root")
+        check(Payload.installed(at: model.root)?.version == "e2e", "payload marker")
+        let installedValues = Bottles.values(in: (try? String(contentsOf: conf, encoding: .utf8)) ?? "")
+        if let framework = installedValues["FSR4_FRAMEWORK"] {
+            check(FileManager.default.fileExists(atPath: framework + ".fsr4-original"),
+                  "in-place backup next to \(framework)")
+            check(installedValues["D3DMETAL_FRAMEWORK_PATH"] == nil, "no redirect key on CrossOver 26")
+        }
+        if let installed {
+            model.restore(installed)
+            wait(120) { !model.busy }
+            check(model.banner?.style == .success, "restore: \(String(describing: model.banner))")
+            check(Bottles.list(in: bottles).first { $0.name == "E2E Bottle" }?.installed == false, "bottle after restore")
+            let restored = Bottles.values(in: (try? String(contentsOf: conf, encoding: .utf8)) ?? "")
+            check(restored["FSR4_FRAMEWORK"] == nil, "framework key removed")
+        }
+        print("  end to end: done")
     }
-    print("  end to end: done")
 }
 
 if failures > 0 {

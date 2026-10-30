@@ -69,7 +69,7 @@
 "Nothing yet." = "Пока пусто.";
 "Open App Store" = "Открыть App Store";
 "Open FSR 4 Panel" = "Открыть панель FSR 4";
-"Patching a copy of D3DMetal…" = "Патч копии D3DMetal…";
+"Patching D3DMetal…" = "Патч D3DMetal…";
 "Pick a bottle." = "Выберите бутылку.";
 "Preparing the FSR tool…" = "Подготовка FSR…";
 "Quit the game and close its bottle first: a bottle reads its settings only when it starts." = "Сначала закройте игру и её бутылку: бутылка читает настройки только при запуске.";

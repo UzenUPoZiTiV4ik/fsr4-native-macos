@@ -23,6 +23,8 @@ This zip is the same thing for Terminal users.
 - CrossOver 24+ in /Applications or ~/Applications (any name, e.g. a renamed
   copy; elsewhere: pass `--crossover`)
   with a bottle where the game runs with D3DMetal and DLSS enabled.
+  CrossOver 26 is supported: see [CrossOver 26](#crossover-26-in-place-d3dmetal)
+  below.
 - Rosetta 2 (`softwareupdate --install-rosetta`).
 - Xcode 26+ with the Metal Toolchain, and Python 3 (ships with Xcode).
 
@@ -48,12 +50,47 @@ bottle `--bottle` can be omitted; with several the installer lists them and
 asks you to pick one. A wrong name prints the list of bottles. The installer:
 
 - builds the hook and the FSR 4 panel app;
-- copies D3DMetal.framework from CrossOver into `dist/crossover/` and patches
-  only that copy (CrossOver.app itself is not modified);
-- runs the copy on a test sequence and checks the result against the CLI;
-- adds `D3DMETAL_FRAMEWORK_PATH`, `D3DM_ENABLE_METALFX=1` (DLSS via
-  MetalFX) and a few `FSR4_*` keys to the bottle's `cxbottle.conf`, backing
-  it up to `dist/crossover/backups/` first.
+- finds D3DMetal in CrossOver and prints the mode it uses,
+  `D3DMetal: … (redirect)` for CrossOver 24/25 or `(in-place)` for 26+;
+- CrossOver 24/25: copies D3DMetal.framework from CrossOver into
+  `dist/crossover/` and patches only that copy (`CrossOver.app` itself is not
+  modified);
+- CrossOver 26: patches CrossOver's own `D3DMetal.framework`, keeping the
+  original binary next to it (the app is changed only while installed; see
+  below);
+- runs the patched binary on a test sequence and checks the result against
+  the CLI;
+- adds `D3DMETAL_FRAMEWORK_PATH` (24/25) or `FSR4_FRAMEWORK` (26),
+  `D3DM_ENABLE_METALFX=1` (DLSS via MetalFX) and a few `FSR4_*` keys to the
+  bottle's `cxbottle.conf`, backing it up to `dist/crossover/backups/` first.
+
+### CrossOver 26: in-place D3DMetal
+
+CrossOver 26 keeps GPTK under `Contents/SharedSupport/CrossOver/lib64/apple_gptk/external/`
+(older builds use `lib/`, so both are searched), and its `libd3dshared.dylib`
+no longer reads `D3DMETAL_FRAMEWORK_PATH`. It loads
+`@rpath/D3DMetal.framework/D3DMetal` with `LC_RPATH @loader_path`, so the
+framework inside the app has to carry the hook. Install therefore:
+
+- patches `D3DMetal.framework/Versions/A/D3DMetal` in place and copies
+  `D3DMetal.fsr4-original` (the untouched original) next to it;
+- copies `libfsr4hook.dylib` into the same `Versions/A/` directory;
+- writes `FSR4_FRAMEWORK` (the patched binary) instead of
+  `D3DMETAL_FRAMEWORK_PATH` into the bottle.
+
+Only those two files change inside the app. The patched binary and the hook
+keep their existing ad-hoc signatures; the installer deliberately does not
+re-sign them, so restore can put the original bytes back and the framework
+still verifies. While installed, `codesign --verify --deep --strict` on the
+app reports the replaced binary — that is expected and goes away on restore.
+
+The framework is shared by every bottle. The hook does nothing unless
+`FSR4_ROOT` is set, which only bottles that installed FSR 4 have.
+
+On macOS 26, writing inside `CrossOver.app` can require the App Management
+permission. If install stops with `cannot write …/Versions/A`, allow
+**Terminal** (or **FSR 4 Installer**) in **System Settings → Privacy &
+Security → App Management**, quit CrossOver, and run install again.
 
 Bottles on an external disk are discovered from CrossOver's `BottlePath`
 setting or `CX_BOTTLE_PATH`. In the app, **Choose bottle folder…** also lets
@@ -96,7 +133,9 @@ or `--fsr-version 4.1.1 --profile lossy2` for FSR 4.1.2 Lossy after `make lossy2
 ## Update or remove
 
 Update: quit the game, unpack the new version into the same folder and run
-the install command again.
+the install command again. On CrossOver 26 the install refreshes
+`D3DMetal.fsr4-original` from the current framework if CrossOver was updated
+in the meantime.
 
 Remove from the bottle (the folder can be deleted afterwards):
 
@@ -104,10 +143,31 @@ Remove from the bottle (the folder can be deleted afterwards):
 python3 tools/crossover/crossover_fsr4.py restore --bottle "Steam"
 ```
 
+Restore puts CrossOver's original `D3DMetal` back (CrossOver 26), or removes
+the redirect keys (24/25), and prints the state. If another bottle still uses
+the same patched framework, restore leaves it in place and says which bottles
+to restore first — the last restored bottle puts the original back. Restore
+before updating CrossOver: if CrossOver was already updated, restore removes
+the stale backup and hook without overwriting the new framework.
+
+Keys written into the bottle (`D3DM_ENABLE_METALFX` is left on restore in
+case you set it yourself):
+
+| Key | CrossOver | Value |
+| --- | --- | --- |
+| `D3DMETAL_FRAMEWORK_PATH` | 24/25 | `dist/crossover/D3DMetal.framework/Versions/A/D3DMetal` |
+| `FSR4_FRAMEWORK` | 26+ | `<CrossOver.app>/…/D3DMetal.framework/Versions/A/D3DMetal` |
+| `FSR4_HOOK_LOG`, `FSR4_ROOT`, `FSR4_REPLACE`, `FSR4_VERSION`, `FSR4_PROFILE`, `FSR4_PANEL` | both | as before |
+
 ## Troubleshooting
 
 - `D3DMetal.framework not found`: pass the CrossOver you play with, e.g.
   `--crossover "$HOME/Applications/CrossOver_patched.app"`. In the app: **Choose…**.
+- `cannot write …/D3DMetal.framework/Versions/A`: allow **Terminal** or
+  **FSR 4 Installer** in **System Settings → Privacy & Security → App
+  Management**, quit CrossOver, and retry.
+- Restore says another bottle still uses the D3DMetal: restore that bottle
+  first; the framework stays patched until the last bottle is restored.
 - `xcrun: error` or `metal: not found`: install the Metal Toolchain (above).
 - Panel shows "no data": the game hasn't used DLSS yet, or the bottle wasn't
   restarted after install.
