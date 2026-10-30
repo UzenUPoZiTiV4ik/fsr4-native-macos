@@ -6,7 +6,45 @@ imported model. Transforms reject unknown source shapes instead of guessing.
 from __future__ import annotations
 import re
 
-REVISION = 2
+REVISION = 3
+
+_CT2D_PRODUCT = re.compile(
+    r"reduce_add\(int4\(as_type<char4>\((_\d+)\)\) \* int4\(as_type<char4>\((_\d+)\[([^\]]+)\]\)\)\)")
+
+
+def ct2d_float_dot(text: str) -> str:
+    """Evaluate POST's INT8 CT2D products as float dots against a float table.
+
+    Each product is four int8 x int8 terms, at most 4 * 128 * 128 = 2^16 in
+    magnitude, so every float32 product and partial sum is an exact integer
+    and int(dot) equals reduce_add for any summation order. The constant
+    weight table is widened once at compile time instead of per lane.
+    """
+    tables = sorted({match[2] for match in _CT2D_PRODUCT.finditer(text)})
+    if len(tables) != 1:
+        raise ValueError(f"Lite POST CT2D table count changed: {tables}")
+    name = tables[0]
+    declaration = re.search(r"constant spvUnsafeArray<uint, (\d+)> %s = spvUnsafeArray<uint, \d+>\(\{ ([^}]*) \}\);"
+                            % re.escape(name), text)
+    if not declaration:
+        raise ValueError("Lite POST CT2D table declaration not found")
+
+    def signed(byte):
+        return byte - 256 if byte > 127 else byte
+
+    words = [int(word.rstrip("u")) for word in declaration[2].split(", ")]
+    if len(words) != int(declaration[1]):
+        raise ValueError("Lite POST CT2D table size changed")
+    values = ", ".join("float4(%d, %d, %d, %d)" % tuple(signed((word >> (8 * i)) & 255) for i in range(4))
+                       for word in words)
+    widened = "\nconstant spvUnsafeArray<float4, %d> %sF = spvUnsafeArray<float4, %d>({ %s });" % (
+        len(words), name, len(words), values)
+    text = text[:declaration.end()] + widened + text[declaration.end():]
+    text, count = _CT2D_PRODUCT.subn(
+        lambda match: "int(dot(float4(as_type<char4>(%s)), %sF[%s]))" % (match[1], match[2], match[3]), text)
+    if count != 32:
+        raise ValueError(f"Lite POST CT2D product count changed: {count} != 32")
+    return text
 
 
 def closing(text, start, left="(", right=")"):
