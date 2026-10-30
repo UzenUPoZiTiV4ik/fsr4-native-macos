@@ -79,6 +79,9 @@ struct Options {
     bool rcas = false, allowCompile = true, ultraPerformance = false;
     // FSR 4.1.2 only: widen POST's current-frame filter where history is rejected.
     bool pixelFix = false;
+    // SIMD load_window zeroes every out-of-bounds texel, including DS/CT halos.
+    // Keep explicit padding for reference/MPP and diagnostic scratch captures.
+    bool skipSimdPadding = true;
     // Lower bound of the widening, 0..1 (1 = off); POST reads it from `pad`.
     float pixelFixFloor = 0.6f;
     // Tests only: Exact Fast/Lossy PRE/POST with ordered arithmetic, so their
@@ -465,6 +468,8 @@ public:
                 dispatch(enc,m4,*slot,*session,"prepare_color",MTLSizeMake(ceil_div(p.rw,16),ceil_div(p.rh,16),1),b);
             for (const auto &name : session->order) {
                 if (skip && name!="pre" && name!="post") continue;
+                if (options.skipSimdPadding && session->modelLite && kind==Kernels::Simd &&
+                    options.captureStages.empty() && name.rfind("pad",0)==0) continue;
                 if (name=="post" && session->externalPostCnb && !skip)
                     dispatch_native(enc,m4,*slot,*session,13,view,sizes);
                 const int pass = name.rfind("pass",0) == 0 ? std::atoi(name.c_str()+4) : 0;

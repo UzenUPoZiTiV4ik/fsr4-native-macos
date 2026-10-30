@@ -367,7 +367,7 @@ void usage() {
         "       [--auto|--reference|--scalar|--simd|--i8mpp] [--profile int8-lite] [--dump-passes|--dump-state]\n"
         "       [--capture-stages pre,pass1,pass2,pass3,post] [--bench N] [--profile-stages]\n"
         "       [--builddir dir] [--root dir] [--tier 1080|2160|4320] [--optimize 0|1] [--no-compile] [--pixelization-fix]\n"
-        "       [--pixelization-strength 0..1]\n"
+        "       [--pixelization-strength 0..1] [--keep-simd-padding]\n"
         "       fsr4mac --fsr-version 4.1.2 --backend-info [auto|reference|scalar|simd|i8mpp]\n"
         "--simd (alias --fp16): M1-M4 simdgroup half matrices with float accumulation for the INT8 model.\n"
         "--bench runs one warmup sequence and N measured sequences; only run.json is written.\n"
@@ -420,6 +420,8 @@ int fsr412_main(int argc, char **argv) {
                 pixelStrength=strength;
             }
             else if(arg=="--profile-stages") profileStages=true;
+            else if(arg=="--skip-simd-padding") options.skipSimdPadding=true;
+            else if(arg=="--keep-simd-padding") options.skipSimdPadding=false;
             else if(arg=="--optimize") {
                 const char *opt=value();
                 if(std::strcmp(opt,"0") && std::strcmp(opt,"1")) fail("--optimize must be 0 or 1");
@@ -625,6 +627,7 @@ int fsr412_main(int argc, char **argv) {
             @"measured_frames":@(times.size()),@"neural_runs":@(neuralRuns),@"reused_frames":@(reusedFrames),
             @"capture_stages":stages,@"diagnostic_gpu_copies":@(!options.captureStages.empty()),
             @"diagnostic_gpu_counters":@(profileStages),
+            @"skip_simd_padding":@(options.skipSimdPadding),
             @"missing_exposure":@"neutral one; preExposure remains independent",
             @"gpu_mean_ms":@(mean),@"gpu_min_ms":@(minimum),@"measurements":measurements} mutableCopy];
         if(profileStages) {

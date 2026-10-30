@@ -91,6 +91,9 @@ bool options_for(const Fsr4LiveFrameV2 &f,fsr412::Frame &frame,fsr412::Options &
     int compile=1;
     if(!parse_flag("FSR4_COMPILE",compile,error))return false;
     o.allowCompile=compile;
+    int skipPadding=o.skipSimdPadding;
+    if(!parse_flag("FSR4_SKIP_SIMD_PADDING",skipPadding,error))return false;
+    o.skipSimdPadding=skipPadding;
     int rcas=0; fsr4_live_get_sharpness(&o.sharpness,&rcas); o.rcas=rcas;
     return true;
 }
@@ -201,12 +204,13 @@ extern "C" int fsr412_encode_live_frame(const Fsr4LiveFrameV2 *input) {
             fsr4_logf("4.1.2 encoded owner=%p call=%llu backend=%s variant=%s "
                       "mvExtent=%ux%u normalizedMvScale=%.9g,%.9g jitterCancellation=%.9g,%.9g "
                       "effectiveReset=%u resetReasons=0x%x copyMask=0x%x "
-                      "history=%p recurrent=%p inference=%s neural=%llu reused=%llu cpuMs=%.3f",
+                      "history=%p recurrent=%p inference=%s neural=%llu reused=%llu padding=%s cpuMs=%.3f",
                       f.owner,(unsigned long long)trace.calls,owner->backendLabel.c_str(),owner->variantKey.c_str(),
                       p.mvW,p.mvH,p.mvScale[0],p.mvScale[1],p.jitterCancellation[0],p.jitterCancellation[1],
                       p.reset,p.resetReasons,p.copyMask,(__bridge void *)owner->history,(__bridge void *)owner->recurrent,
                       owner->skippedInference?"reuse":"full",(unsigned long long)owner->neuralRuns,
-                      (unsigned long long)owner->reusedFrames,time-start);
+                      (unsigned long long)owner->reusedFrames,
+                      options.skipSimdPadding && owner->backendLabel=="int8-simd" && options.captureStages.empty()?"elided":"explicit",time-start);
         }
         return 1;
     }
