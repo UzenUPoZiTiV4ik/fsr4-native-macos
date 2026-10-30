@@ -83,6 +83,11 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
         s->kernels.emplace(stage,std::move(k));
     }
     for(const auto &name:order)if(!s->kernels.count(name)) {error="incomplete FSR 4.1.2 graph: "+name;return nullptr;}
+    if(NSDictionary *tile=entries[@"post_tile"]) {
+        const unsigned side=[tile[@"tile_side"] unsignedIntValue];
+        if(!s->preparedColor || side<8 || side>40) {error="invalid FSR 4.1.2 tiled POST";return nullptr;}
+        s->postTileSide=side;
+    }
     for(const char *name:{"ae","ae_finalize","rcas"})if(!s->kernels.count(name)) {error="missing FSR 4.1.2 exposure/sharpening stage";return nullptr;}
     auto result=s.get();sessions_.emplace(cacheKey,std::move(s));return result;
 }

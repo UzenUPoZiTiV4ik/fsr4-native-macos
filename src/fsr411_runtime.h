@@ -225,6 +225,8 @@ struct Session {
     std::string key;
     int tier = 0;
     uint32_t postPixelsPerGroup = 32;
+    // FSR 4.1.2: tile side of the optional tiled POST ("post_tile"), 0 if absent.
+    uint32_t postTileSide = 0;
     bool splitAutoExposure = false;
     bool modelLite = false;
     size_t scratchBytes = 0;
@@ -489,7 +491,7 @@ public:
                     // bundles specialize only the already-authorized reuse
                     // path, with its own bindings on both Metal APIs.
                     const std::string stage = skip && name=="pre" && session->kernels.count("pre_reuse")
-                        ? "pre_reuse" : name;
+                        ? "pre_reuse" : name=="post" && lite_post_tile_fits(*session,p) ? "post_tile" : name;
                     dispatch(enc, m4, *slot, *session, stage, groups, b);
                 }
                 const auto capture = view.captures.find(name);
@@ -1166,15 +1168,24 @@ private:
         if(name=="Fsr411LossyMotion") return {b.view->lossyMotion,0};
         if(name=="Fsr411LossyPlane") return {b.view->lossyPlane,0};
         if(name=="InitializerBuffer" || name=="t18_initializer") return {s.initializer,0};
-        if(name=="MLSR_Optimized_Constants") return {slot.constants,(stage=="pre" || stage=="pre_reuse" || stage=="post" || stage=="prepare_color")?0:kTensor};
+        if(name=="MLSR_Optimized_Constants") return {slot.constants,(stage=="pre" || stage=="pre_reuse" || stage=="post" || stage=="post_tile" || stage=="prepare_color")?0:kTensor};
         if(name=="CsTensorSizes") return {slot.constants,kTensor};
         if(name=="AutoExposureSPDConstants") return {slot.constants,kSpd};
         if(name=="cbRCAS") return {slot.constants,kRcas};
         if(name=="rw_spd_global_atomic_atomic") return {b.view->spdAtomic,0};
         [NSException raise:@"FSR411Binding" format:@"Unknown buffer %s",name.c_str()]; return {nil,0};
     }
+    // The FSR 4.1.2 tiled POST covers every colour tap only while
+    // ceil(32 * inv_scale) + 6 fits its tile (tools/fsr412/optimization.py);
+    // the same float expression as the shader, from the uploaded constants.
+    static bool lite_post_tile_fits(const Session &s,const Fsr4InputPrepared &p) {
+        if(!s.modelLite || !s.postTileSide) return false;
+        const float inv[2]={float(p.rw)/p.alignedUW,float(p.rh)/p.alignedUH};
+        for(float v:inv) if(!(v>0.f) || std::ceil(v*32.f)+6.f>float(s.postTileSide)) return false;
+        return true;
+    }
     void dispatch(id __strong &enc,bool m4,FrameSlot &slot,const Session &s,const std::string &name,MTLSize groups,const Bindings &b) {
-        if(slot.stageProfiler) slot.stageProfiler->begin_stage(enc,name=="pre_reuse"?"pre":name);
+        if(slot.stageProfiler) slot.stageProfiler->begin_stage(enc,name=="pre_reuse"?"pre":name=="post_tile"?"post":name);
         const auto &k=s.kernels.at(name);
         if(m4) {
             id<MTL4ArgumentTable> t=slot.tables[ns(name)];

@@ -47,6 +47,73 @@ def ct2d_float_dot(text: str) -> str:
     return text
 
 
+POST_TILE_SIDE = 28
+_TAP_READ = re.compile(
+    r"r_prepared_color\.read\(uint2\(uint2\(clamp\(int2\(uint2\((_\d+), (_\d+)\)\), int2\(0\), (_\d+)\)\)\), 0u\)\.xyz")
+_CELL = re.compile(r"^( +)uint2 (_\d+) = uint2\(\(\(_\d+ % 8u\) << 1u\) \| \(gl_LocalInvocationID\.x & 1u\), "
+                   r"\(\(_\d+ / 8u\) << 1u\) \| \(\(gl_LocalInvocationID\.x & 3u\) >> 1u\)\) \+ "
+                   r"\(gl_WorkGroupID\.xy \* uint2\(16u\)\);\n\1if \(any\(\2 >= _\d+\)\)\n", re.M)
+
+
+def post_color_tile(text: str) -> str:
+    """Specialize POST to read its nine prepared-colour taps from a tile.
+
+    Returns a second POST kernel ("post_tile"); the host selects it only
+    when ceil(32 * inv_scale) + 6 <= POST_TILE_SIDE on both axes, i.e. for
+    render/output ratios up to 0.6875 (Quality and below). A group covers
+    16x16 cells = 32x32 output pixels. Every lane copies part of the clamped
+    prepared-colour footprint into threadgroup memory before the first early
+    exit; the taps then read the tile unconditionally.
+
+    Coverage: with T the group's first output pixel, the tile starts at
+    floor(T * inv + jitter) - 3. A tap is rint(p) - 1 .. rint(p) + 1 with
+    p = (o + 0.5) * inv + jitter - 0.5, T <= o <= T + 31, so its cell lies
+    in [1, 31.5 * inv + 5] and below ceil(32 * inv) + 6. The tile holds the
+    texel at clamp(origin + cell), the same clamp the texture path applies,
+    so every tap reads identical float3 values.
+
+    The original statements stay branch-free: a per-tap or per-statement
+    branch between tile and texture let the compiler contract the weighted
+    sum differently, which changed output bits. The cell index is clamped to
+    the tile for memory safety only; the host check makes it a no-op.
+    """
+    reads = list(_TAP_READ.finditer(text))
+    if len(reads) != 9 or len({match[3] for match in reads}) != 1:
+        raise ValueError("Lite POST colour taps changed")
+    cell = _CELL.search(text)
+    entry = "uint3 gl_LocalInvocationID [[thread_position_in_threadgroup]])\n{\n"
+    if not cell or text.count(entry) != 1 or "fsr412PostTile" in text:
+        raise ValueError("Lite POST group mapping changed")
+    indent = cell[1]
+    side = POST_TILE_SIDE
+    fill = (f"{indent}// Clamped prepared colour of this group's 32x32-pixel footprint.\n"
+            f"{indent}const int2 fsr412TileOrigin = int2(floor(float2(gl_WorkGroupID.xy * uint2(32u)) * "
+            f"MLSR_Optimized_Constants.inv_scale + MLSR_Optimized_Constants.jitter)) - int2(3);\n"
+            f"{indent}const int2 fsr412TileExtent = min(int2(ceil(MLSR_Optimized_Constants.inv_scale * 32.0)) + int2(6), int2({side}));\n"
+            f"{indent}const int2 fsr412TileMax = int2(int(MLSR_Optimized_Constants.width_lr - 1u), "
+            f"int(MLSR_Optimized_Constants.height_lr - 1u));\n"
+            f"{indent}for (uint fsr412Index = gl_LocalInvocationID.x; fsr412Index < {side * side}u; fsr412Index += 256u)\n"
+            f"{indent}{{\n"
+            f"{indent}    const int2 fsr412Cell = int2(int(fsr412Index % {side}u), int(fsr412Index / {side}u));\n"
+            f"{indent}    if (all(fsr412Cell < fsr412TileExtent))\n"
+            f"{indent}        fsr412PostTile[fsr412Index] = r_prepared_color.read(uint2(clamp(fsr412TileOrigin + fsr412Cell, "
+            f"int2(0), fsr412TileMax)), 0u).xyz;\n"
+            f"{indent}}}\n"
+            f"{indent}threadgroup_barrier(mem_flags::mem_threadgroup);\n")
+    text = text[:cell.start()] + cell[0][:cell[0].index("\n") + 1] + fill + cell[0][cell[0].index("\n") + 1:] + text[cell.end():]
+    text = text.replace(entry, entry + f"    threadgroup float3 fsr412PostTile[{side * side}];\n", 1)
+    helper = ("static inline uint fsr412_tile_index(int2 origin, uint x, uint y)\n{\n"
+              f"    const int2 cell = clamp(int2(uint2(x, y)) - origin, int2(0), int2({side - 1}));\n"
+              f"    return uint(cell.y) * {side}u + uint(cell.x);\n}}\n")
+    kernel = text.index("kernel void ")
+    text = text[:kernel] + helper + "\n" + text[kernel:]
+    text, count = _TAP_READ.subn(
+        lambda tap: f"fsr412PostTile[fsr412_tile_index(fsr412TileOrigin, {tap[1]}, {tap[2]})]", text)
+    if count != 9:
+        raise ValueError("Lite POST colour tap rewrite failed")
+    return text
+
+
 def closing(text, start, left="(", right=")"):
     assert text[start] == left
     depth = 0

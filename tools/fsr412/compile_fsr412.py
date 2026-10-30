@@ -13,7 +13,8 @@ from __future__ import annotations
 import argparse, fcntl, hashlib, json, os, re, shutil, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from fsr412.optimization import REVISION, input_color_cache, color_cache_source, pixelization_fix, ct2d_float_dot
+from fsr412.optimization import (REVISION, POST_TILE_SIDE, input_color_cache, color_cache_source, pixelization_fix,
+                                 ct2d_float_dot, post_color_tile)
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "tools" / "fsr412" / "shader_catalog.json"
@@ -252,6 +253,15 @@ def main():
         elif stage=="pre":info["tile"]=[16,16]
         elif stage=="post":info["tile"]=[16,16]; info["post_pixels_per_group"]=32
         kernels[stage]=info
+        if stage=="post" and prepared:
+            # Same POST with its colour taps read from a threadgroup tile;
+            # the host selects it when the tile covers every tap.
+            tile=out/"post_tile"
+            tile.with_suffix(".metal").write_text(post_color_tile(generated.read_text()))
+            run(["xcrun","metal","-std=macos-metal2.3","-O3","-c",tile.with_suffix(".metal"),"-o",tile.with_suffix(".air")])
+            run(["xcrun","metallib",tile.with_suffix(".air"),"-o",tile.with_suffix(".metallib")])
+            kernels["post_tile"]=dict(info,stage="post_tile",library="post_tile.metallib",
+                                      tile_side=POST_TILE_SIDE)
     if prepared:
         base=out/"prepare_color"
         run(["xcrun","metal","-std=macos-metal2.3","-O3","-c",base.with_suffix(".metal"),"-o",base.with_suffix(".air")])
