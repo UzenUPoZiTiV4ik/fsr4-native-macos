@@ -25,11 +25,28 @@ FSR 4.1.2 Lossy: retrained weights and a speck clamp from upstream
 - Panel and installer labels: **FSR 4.1.2 Exact** (`exact-fast`) and
   **FSR 4.1.2 Lossy** (`lossy2`). Profile names and saved settings are
   unchanged.
-- Speed: the neural frame is unchanged (about 3.97 ms on M5,
-  `tc_game_balanced`); reuse frames are 2.5% slower (1.40 -> 1.435 ms) for the
-  depth probes. The plain `lossy` profile compiles to the same shaders as
-  before.
-- Checks: `make test`, `make test-fsr411-lossy`, `make test-fsr411-cadence`,
+- Faster POST, same picture. The CT2D weights are widened to half once per
+  threadgroup in threadgroup memory instead of in every lane; INT8 values and
+  the half-to-float widening are exact, so every float product and sum is
+  unchanged. The Lossy classify and depth-edge probes now issue their loads
+  together. M5, synthetic 24-frame 1000x648 -> 1712x1112 scene, 6
+  interleaved rounds against v2.2's code with the new weights: Lossy reuse
+  frames 1.451 -> 1.220 ms median (-16%), neural frames 3.727 -> 3.600 ms,
+  mean over all frames 2.956 -> 2.758 ms. The POST change is shared, so FSR
+  4.1.2 Exact gets it too. Output is byte-identical to v2.2's for lossy2,
+  lossy, exact, exact-fast and int8-lite (i8mpp, and simd for lossy2,
+  exact-fast and int8-lite).
+- Same scene, FSR 4.1.2 Lite: 2.552 ms median, 2.886 ms mean. Lossy is 5%
+  cheaper on average but uneven: a 3.6 ms neural frame, then a 1.2 ms reuse
+  frame. On the nine synthetic diagnostic scenes Lite scores higher on eight
+  (by 0.6 to 4.2 dB; thin lines in a pan 29.94 against 25.74 dB); Lossy
+  wins only the bar over a moving background (33.60 against 32.85 dB).
+  These scenes have no foliage against distant depth, where the speck
+  clamp works.
+- The plain `lossy` profile compiles to the same shaders as before.
+- Checks: `make test`, `make test-fsr411-gpu` (the CLI suite now pins
+  FSR 4.1.1 explicitly; it still assumed the pre-v2.0 default),
+  `make test-fsr411-lossy`, `make test-fsr411-cadence`,
   the new `tools/fsr411/test_lossy412.py` (decoder round trip on synthetic
   DXIL, reproducible npz, speck rule only in the `lossy2` POST) and
   `test_lossy2.py` with the new weights.
