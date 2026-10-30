@@ -54,7 +54,8 @@ class Ct2dFloatDot(unittest.TestCase):
 
 class PostColorTile(unittest.TestCase):
     def posts(self):
-        found = sorted((ROOT / "build").glob("fsr412_*_o1_*_pc1_v3*/post.metal"))
+        found = sorted(path for path in (ROOT / "build").glob("fsr412_*_o1_*_pc1_v*/post.metal")
+                       if (path.parent / "post_tile.metal").is_file())
         if not found:
             self.skipTest("no compiled FSR 4.1.2 POST in build/")
         return found
