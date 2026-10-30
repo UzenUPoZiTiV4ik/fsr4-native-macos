@@ -13,6 +13,16 @@ build/tests/fsr412_padding_test: tests/fsr412_padding_test.mm tests/fsr412_optim
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -Wextra -Werror -fobjc-arc -isysroot $(SDKROOT) $< $(FRAMEWORKS) -o $@
 
+build/tests/fsr412_runtime_ab_test: tests/fsr412_runtime_ab_test.mm tests/fsr412_optimization_test.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr412_session.inc Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -Wextra -Werror -fobjc-arc -isysroot $(SDKROOT) $< $(FRAMEWORKS) -o $@
+
+# PRE's constant-address weights must not change a single bit.
+test-fsr412-pre-weights: build/tests/fsr412_runtime_ab_test
+	python3 tests/run_fsr412_runtime_ab.py --disable constant_initializer
+
+.PHONY: test-fsr412-pre-weights
+
 build/tests/fsr412_simd_parity_test: tests/fsr412_simd_parity_test.mm tests/fsr412_optimization_test.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr411_simd.metal src/fsr411_model.h src/fsr412_session.inc Makefile
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -Wextra -Werror -fobjc-arc -isysroot $(SDKROOT) $< $(FRAMEWORKS) -o $@
