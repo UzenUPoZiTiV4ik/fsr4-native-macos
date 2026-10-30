@@ -36,11 +36,11 @@
 "FSR 4 is installed in “%@”" = "FSR 4 установлен в «%@»";
 "FSR 4 is removed from “%@”" = "FSR 4 удалён из «%@»";
 "FSR 4 not installed" = "FSR 4 не установлен";
-"FSR 4.1" = "FSR 4.1";
-"FSR 4.1 Lossy" = "FSR 4.1 Lossy";
+"FSR 4.1.2 Exact" = "FSR 4.1.2 Exact";
+"FSR 4.1.2 Lossy" = "FSR 4.1.2 Lossy";
 "FSR 4.1.2 Lite" = "FSR 4.1.2 Lite";
 "Fix the requirements above first." = "Сначала исправьте пункты выше.";
-"Formerly Lite 2. Uses trained layers and reuses inference on suitable frames." = "Бывший Lite 2. Обученные слои и повторное использование вычислений на подходящих кадрах.";
+"Six retrained layers, network on every other frame. Fewer specks in foliage." = "Шесть переобученных слоёв, сеть через кадр. Меньше точек в листве.";
 "Full network every frame, best quality." = "Полная сеть на каждом кадре, лучшее качество.";
 "Game Log" = "Лог игры";
 "Guide" = "Инструкция";
@@ -52,9 +52,9 @@
 "Installed Xcode is too old. Update it in the App Store." = "Установленный Xcode слишком старый. Обновите его в App Store.";
 "Installed from another folder (%@). Reinstall to switch to this app." = "Установлен из другой папки (%@). Переустановите, чтобы перейти на это приложение.";
 "Installed · FSR 4" = "Установлен · FSR 4";
-"Installed · FSR 4.1" = "Установлен · FSR 4.1";
-"Installed · FSR 4.1 (bit-exact)" = "Установлен · FSR 4.1 (битово-точный)";
-"Installed · FSR 4.1 Lossy" = "Установлен · FSR 4.1 Lossy";
+"Installed · FSR 4.1.2 Exact" = "Установлен · FSR 4.1.2 Exact";
+"Installed · FSR 4.1.2 Exact (bit-exact)" = "Установлен · FSR 4.1.2 Exact (битово-точный)";
+"Installed · FSR 4.1.2 Lossy" = "Установлен · FSR 4.1.2 Lossy";
 "Installed · FSR 4.1.2 Lite" = "Установлен · FSR 4.1.2 Lite";
 "Installed · Previous FSR model" = "Установлена предыдущая модель FSR";
 "Installing into “%@”" = "Установка в «%@»";

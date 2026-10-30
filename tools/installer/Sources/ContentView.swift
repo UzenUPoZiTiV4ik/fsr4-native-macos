@@ -169,10 +169,10 @@ struct ContentView: View {
             return String(localized: "Installed from another folder (\(bottle.root ?? "?")). Reinstall to switch to this app.")
         }
         switch bottle.profile {
-        case FSRProfile.full.rawValue: return String(localized: "Installed · FSR 4.1")
-        case "exact": return String(localized: "Installed · FSR 4.1 (bit-exact)")
+        case FSRProfile.full.rawValue: return String(localized: "Installed · FSR 4.1.2 Exact")
+        case "exact": return String(localized: "Installed · FSR 4.1.2 Exact (bit-exact)")
         case "fsr4": return String(localized: "Installed · FSR 4")
-        case FSRProfile.lossy.rawValue: return String(localized: "Installed · FSR 4.1 Lossy")
+        case FSRProfile.lossy.rawValue: return String(localized: "Installed · FSR 4.1.2 Lossy")
         case FSRProfile.lite.rawValue: return String(localized: "Installed · FSR 4.1.2 Lite")
         default: return String(localized: "Installed · Previous FSR model")
         }
@@ -184,8 +184,8 @@ struct ContentView: View {
         Section {
             Picker("Starting mode", selection: $model.profile) {
                 Text("FSR 4.1.2 Lite").tag(FSRProfile.lite)
-                Text("FSR 4.1 Lossy").tag(FSRProfile.lossy)
-                Text("FSR 4.1").tag(FSRProfile.full)
+                Text("FSR 4.1.2 Lossy").tag(FSRProfile.lossy)
+                Text("FSR 4.1.2 Exact").tag(FSRProfile.full)
             }
             .pickerStyle(.segmented)
             .disabled(model.busy)
@@ -193,7 +193,7 @@ struct ContentView: View {
                 if model.profile == .lite {
                     Text("AMD's compact INT8 model. Runs the network every frame.")
                 } else if model.profile == .lossy {
-                    Text("Formerly Lite 2. Uses trained layers and reuses inference on suitable frames.")
+                    Text("Six retrained layers, network on every other frame. Fewer specks in foliage.")
                 } else {
                     Text("Full network every frame, best quality.")
                 }

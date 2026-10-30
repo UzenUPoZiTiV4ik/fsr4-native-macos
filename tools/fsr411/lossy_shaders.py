@@ -213,6 +213,49 @@ float3 Fsr411LossyResolve(float3 current, float3 history, float3 minimum, float3
     bool darkEdge = !atRest && all(history <= max(current * 0.1f, 0.0f));
     return (darkEdge || uncovered) ? current : result;
 }
+
+// FSR 4.1.2 Lossy (dll-2026-10-29): a block whose depth differs by more than
+// 2% from a cell 1..3 cells away along x or y, or whose own depth is absent
+// (full-resolution motion vectors record none), counts as a depth edge.
+bool Fsr411LossyDepthEdge(int2 cell, uint4 own)
+{
+    if (own.z == 0u)
+        return true;
+    float depth = abs(asfloat(own.z));
+    static const int2 offsets[12] = {
+        int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1),
+        int2(2, 0), int2(-2, 0), int2(0, 2), int2(0, -2),
+        int2(3, 0), int2(-3, 0), int2(0, 3), int2(0, -3)
+    };
+    bool edge = false;
+    [unroll] for (uint probe = 0u; probe < 12u; ++probe)
+    {
+        uint neighbour = Fsr411LossyReadMotion(cell + offsets[probe]).z;
+        float other = asfloat(neighbour);
+        edge = edge || (neighbour != 0u && abs(other - asfloat(own.z)) > max(abs(other), depth) * 0.02f);
+    }
+    return edge;
+}
+
+// At a depth edge in motion, keep a skipped frame's result within 0.9x..1.5x
+// of the history unless the nine current samples moved that far themselves.
+// This removes dark and bright specks that the reused weights leave in
+// foliage against a distant background.
+float3 Fsr411LossySpeck(float3 result, float3 current, float3 history, float3 mean,
+                        bool atRest, bool uncovered, bool depthEdge)
+{
+    bool darkEdge = !atRest && all(history <= max(current * 0.1f, 0.0f));
+    if (atRest || uncovered || darkEdge || !depthEdge)
+        return result;
+    [unroll] for (uint channel = 0u; channel < 3u; ++channel)
+    {
+        if (mean[channel] >= history[channel] * 0.7f)
+            result[channel] = max(result[channel], history[channel] * 0.9f);
+        if (mean[channel] <= history[channel] * 1.7f)
+            result[channel] = min(result[channel], history[channel] * 1.5f);
+    }
+    return result;
+}
 """
 
 
@@ -254,15 +297,16 @@ def reuse_only_pre(source):
     return marker + source
 
 
-def apply_lossy_post(source, tier):
+def apply_lossy_post(source, tier, speck=False):
     """Consume original or externally split POST; read its native CNB cache.
 
     Per destination pixel p, select CNB cell floor((p + D) / 2) and the CT2D
     coefficients for parity(p + D). Clamping applies to the cell, preserving
     parity for odd motion at the viewport edge as in the reference policy.
+    speck adds the FSR 4.1.2 Lossy depth-edge speck clamp (lossy2 profile).
     """
     _tier(tier)
-    marker = "// fsr411-generated-lossy-post: tier=%d\n" % tier
+    marker = "// fsr411-generated-lossy-post: tier=%d speck=%d\n" % (tier, int(speck))
     if source.startswith(marker):
         return source
     if "fsr411-generated-lossy-post:" in source:
@@ -280,17 +324,20 @@ def apply_lossy_post(source, tier):
     uint4 externalCnb = ScratchBuffer.Load4(%du + uint(iy) * %du + uint(ix) * 16u);
     uint packedVss[4] = {externalCnb.x, externalCnb.y, externalCnb.z, externalCnb.w};
     uint4 lossyOwn = uint4(0u, 0u, 0u, 0u);
-    bool lossyAtRest = false, lossyUncovered = false, lossyOtherMotion = false;
+    bool lossyAtRest = false, lossyUncovered = false, lossyOtherMotion = false, lossyDepthEdge = false;
     if (lossySkip != 0u)
     {
         lossyOwn = Fsr411LossyReadMotion(int2(ix, iy));
         Fsr411LossyClassify(int2(ix, iy), lossyOwn, lossyAtRest, lossyUncovered, lossyOtherMotion);
+        if (FSR411_LOSSY_SPECK)
+            lossyDepthEdge = Fsr411LossyDepthEdge(int2(ix, iy), lossyOwn);
     }
 
 """ % (offset, stride)
     source = source[:start] + initial + source[end:]
     source = _replace(source, "[numthreads(256, 1, 1)]",
-                      _declarations(tier) + POST_HELPERS + "\n[numthreads(256, 1, 1)]")
+                      _declarations(tier) + "static const bool FSR411_LOSSY_SPECK = %s;\n" % ("true" if speck else "false")
+                      + POST_HELPERS + "\n[numthreads(256, 1, 1)]")
     coords = "        uint2 tid = uint2((uint)(ix * 2) + (uint)off.x, (uint)(iy * 2) + (uint)off.y);"
     displaced = """
         uint4 pixelCnb = uint4(packedVss[0], packedVss[1], packedVss[2], packedVss[3]);
@@ -310,19 +357,23 @@ def apply_lossy_post(source, tier):
         old = "packedVss[%d], ct[ch2]);" % word
         source = _replace(source, old, "pixelCnb[%d], ct[ch2]);" % word)
     source = _replace(source, "        float3 up = 0.0f;", "        float3 up = 0.0f;\n"
-                      "        float3 lossyMinimum = 3.402823466e+38f, lossyMaximum = -3.402823466e+38f;")
+                      "        float3 lossyMinimum = 3.402823466e+38f, lossyMaximum = -3.402823466e+38f, lossySum = 0.0f;")
     source = _replace(source, "                up += ApplyMuLaw411(r_input_color[pc], exposure) * g;", """                float3 currentSample = ApplyMuLaw411(r_input_color[pc], exposure);
                 up += currentSample * g;
                 if (lossySkip != 0u)
                 {
                     lossyMinimum = min(lossyMinimum, currentSample);
                     lossyMaximum = max(lossyMaximum, currentSample);
+                    lossySum += currentSample;
                 }""")
     mix = "        float3 res = up * (1.0f - bf) + reproj * bf;"
     source = _replace(source, mix, mix + "\n" + r"""        if (lossySkip != 0u)
         {
             res = Fsr411LossyResolve(up, reproj, lossyMinimum, lossyMaximum, 1.0f - bf,
                                     lossyAtRest, lossyOtherMotion, lossyUncovered);
+            if (FSR411_LOSSY_SPECK)
+                res = Fsr411LossySpeck(res, up, reproj, lossySum * (1.0f / 9.0f),
+                                       lossyAtRest, lossyUncovered, lossyDepthEdge);
         }
 """)
     return marker + source
@@ -347,7 +398,9 @@ void Fsr411LossyClassifyCells(uint lane, uint2 groupId)
     bool atRest, uncovered, otherMotion;
     Fsr411LossyClassify(cell, own, atRest, uncovered, otherMotion);
     Fsr411LossyCellMotion[local] = own.xy;
-    Fsr411LossyCellFlags[local] = (atRest ? 1u : 0u) | (uncovered ? 2u : 0u) | (otherMotion ? 4u : 0u);
+    bool depthEdge = FSR411_LOSSY_SPECK && Fsr411LossyDepthEdge(cell, own);
+    Fsr411LossyCellFlags[local] = (atRest ? 1u : 0u) | (uncovered ? 2u : 0u) | (otherMotion ? 4u : 0u)
+                                | (depthEdge ? 8u : 0u);
 }
 """
 
@@ -374,10 +427,13 @@ def apply_lossy_post_cells(source):
                       "    GroupMemoryBarrierWithGroupSync();")
     source = _replace(source,
                       "        lossyOwn = Fsr411LossyReadMotion(int2(ix, iy));\n"
-                      "        Fsr411LossyClassify(int2(ix, iy), lossyOwn, lossyAtRest, lossyUncovered, lossyOtherMotion);",
+                      "        Fsr411LossyClassify(int2(ix, iy), lossyOwn, lossyAtRest, lossyUncovered, lossyOtherMotion);\n"
+                      "        if (FSR411_LOSSY_SPECK)\n"
+                      "            lossyDepthEdge = Fsr411LossyDepthEdge(int2(ix, iy), lossyOwn);",
                       "        uint cellIndex = ((outputPixel.y >> 1u) & 7u) * 8u + ((outputPixel.x >> 1u) & 7u);\n"
                       "        lossyOwn.xy = Fsr411LossyCellMotion[cellIndex];\n"
                       "        lossyAtRest = (Fsr411LossyCellFlags[cellIndex] & 1u) != 0u;\n"
                       "        lossyUncovered = (Fsr411LossyCellFlags[cellIndex] & 2u) != 0u;\n"
-                      "        lossyOtherMotion = (Fsr411LossyCellFlags[cellIndex] & 4u) != 0u;")
+                      "        lossyOtherMotion = (Fsr411LossyCellFlags[cellIndex] & 4u) != 0u;\n"
+                      "        lossyDepthEdge = (Fsr411LossyCellFlags[cellIndex] & 8u) != 0u;")
     return marker + source

@@ -219,17 +219,17 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     NSMutableArray *modes = [NSMutableArray arrayWithCapacity:5];
     [modes addObject:@"FSR 4.1.2 Lite"];
     if (g_has402) [modes addObject:@"FSR 4"];
-    [modes addObject:@"FSR 4.1"];
-    if (g_has_lossy2) [modes addObject:@"FSR 4.1 Lossy"];
+    [modes addObject:@"FSR 4.1.2 Exact"];
+    if (g_has_lossy2) [modes addObject:@"FSR 4.1.2 Lossy"];
     self.profile = [NSSegmentedControl segmentedControlWithLabels:modes
         trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(changed:)];
     self.profile.frame = NSMakeRect(62, y - 4, W - 74, 26);
     self.profile.selectedSegment = segment_for_profile(profile);
     self.profile.toolTip = [NSString stringWithFormat:@"FSR 4.1.2 Lite: AMD's smaller INT8 architecture, evaluated every frame. "
-                           @"%@FSR 4.1: the earlier network with fast PRE/POST math. "
+                           @"%@FSR 4.1.2 Exact: the full network every frame, fast PRE/POST math. "
                            @"%@Switching resets history.",
                            g_has402 ? @"FSR 4: the previous 4.0.2 model. " : @"",
-                           g_has_lossy2 ? @"FSR 4.1 Lossy (formerly Lite 2): six trained layers and inference reuse on eligible frames. " : @""];
+                           g_has_lossy2 ? @"FSR 4.1.2 Lossy: the full network with six retrained layers, run on every other frame. " : @""];
     self.profile.accessibilityLabel = @"FSR mode";
     [v addSubview:self.profile]; y -= 34;
     [v addSubview:label(@"Sharpness", 12, y, 70, NO)];
@@ -383,9 +383,9 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
         : profile == 5 ? @"FSR 4.1.2 INT8 Lite: AMD's smaller model, evaluated every frame."
         : profile == 6 ? @"FSR 4.1.2 Lite with pixelization fix: wider filter where history is rejected."
         : profile == 3 ? @"FSR 4: previous model (4.0.2)."
-        : profile == 2 ? @"FSR 4.1.1: legacy model with fast PRE/POST math."
-        : profile == 4 ? @"FSR 4.1 Lossy: the former Lite 2 model with six trained layers."
-        : profile == 1 ? @"This saved mode was removed. Select FSR 4.1 Lossy or FSR 4.1.2 Lite."
+        : profile == 2 ? @"FSR 4.1.2 Exact: the full network every frame, fast PRE/POST math."
+        : profile == 4 ? @"FSR 4.1.2 Lossy: six retrained layers, fewer specks in foliage."
+        : profile == 1 ? @"This saved mode was removed. Select FSR 4.1.2 Lossy or FSR 4.1.2 Lite."
         : @"FSR 4.1.1 Exact (bit-exact reference), set by FSR4_PROFILE.");
     self.sharpVal.stringValue = [NSString stringWithFormat:@"%.2f", s];
     if (!self.slider.highlighted && fabs(self.slider.doubleValue - s) > 1e-3) self.slider.doubleValue = s;

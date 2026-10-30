@@ -542,7 +542,9 @@ def cmd_install(args):
     if (args.profile == "fsr4" or args.fsr_version == "4.0.2") and not FSR402_WEIGHTS.is_file():
         raise SystemExit("this copy has no FSR 4.0.2 weights (FSR 4.1-only release); "
                          "use --profile exact-fast, lossy or lossy2")
-    if args.profile == "lossy2" and not (ROOT / "build/fsr411_lossy2/weights_lossy2.npz").is_file():
+    # FSR 4.1.2 Lossy: fetch on request, and refresh weights left by an older
+    # release (the fetcher returns at once when the pinned file is present).
+    if args.profile == "lossy2" or (ROOT / "build/fsr411_lossy2/weights_lossy2.npz").is_file():
         run([sys.executable, str(ROOT / "tools/fsr411/fetch_lossy2_weights.py")], cwd=ROOT)
     if args.no_bottle:
         bottle = None

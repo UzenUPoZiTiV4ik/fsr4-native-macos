@@ -243,7 +243,7 @@ def build(args) -> dict:
                     if path.name.startswith("pre_rev_"):
                         source = apply_lossy_pre(source, tier)
                     elif path.name.startswith("post_rev_"):
-                        source = apply_lossy_post(source, tier)
+                        source = apply_lossy_post(source, tier, speck=args.profile == "lossy2")
                 if (path.name.startswith("post_rev_") and path.suffix == ".hlsl"
                         and args.external_post_cnb and args.optimize):
                     source = apply_post_optimization(source)

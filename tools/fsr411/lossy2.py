@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Trained weights for six of the twelve neural passes (upstream dll-2026-10-19).
+"""Trained weights for six of the twelve neural passes (FSR 4.1.2 Lossy).
 
-The lossy2 network of zgauthier2000's project is the lossy network with new
-integer weights in passes 1, 2, 4, 5, 10 and 12; everything else (layer
-arithmetic, folded October 7 policy, frame skip) stays lossy's. This module
-maps those integer weights onto the AMD-layout literal tables of the imported
-MIT sources. It reads the upstream weight archive at build time and does not
-vendor it: that archive is GPL-2.0-or-later, this repository is MIT. Run
-tools/fsr411/fetch_lossy2_weights.py to fetch the pinned file.
+The profile keeps its internal name lossy2. Since upstream release
+dll-2026-10-29 its weights are that release's retrained `lossy` (the former
+lossy2 trained further): new integer weights in passes 1, 2, 4, 5, 10 and 12;
+layer arithmetic, folding policy and Ultra Performance stay lossy's. This
+module maps those integer weights onto the AMD-layout literal tables of the
+imported MIT sources. The weights are GPL-2.0-or-later data and are not
+vendored: tools/fsr411/fetch_lossy2_weights.py recovers them once from the
+pinned release DLL (tools/fsr411/lossy412_weights.py) into build/.
 
 Layouts are the exact inverses of the decoders in tools/gen_fsr411_native.py
 (parse_cnb/parse_fnb), which are themselves validated against AMD's shaders.
@@ -22,11 +23,37 @@ from pathlib import Path
 import zipfile
 
 DEFAULT_WEIGHTS = Path("build/fsr411_lossy2/weights_lossy2.npz")
-UPSTREAM_COMMIT = "69cc9b9979a8fe90b97b1ed2f20e94487df261e2"
-UPSTREAM_URL = ("https://raw.githubusercontent.com/zgauthier2000/"
-                "fsr4-shader-performance-overrides/" + UPSTREAM_COMMIT +
-                "/research/lossy2/weights_lossy2.npz")
-UPSTREAM_SHA256 = "9a458f65812848b273dace03edcbd346d66364d5d41a99d0963adaa601a3c93c"
+UPSTREAM_RELEASE = "dll-2026-10-29"
+UPSTREAM_URL = ("https://github.com/zgauthier2000/fsr4-shader-performance-overrides/releases/download/"
+                "dll-2026-10-29/fsr4.1.2-cyboman-rx7000-2026-10-29.7z")
+UPSTREAM_ARCHIVE_SHA256 = "140249629eb4867737a60fb400a801aaa9900d24d857bbe5d12b8156c28d2121"
+UPSTREAM_DLL_MEMBER = "lossy/amd_fidelityfx_upscaler_dx12.dll"
+UPSTREAM_DLL_SHA256 = "00a25500a9ed49f1b4d35f40c5c493453e9171442ed5580bb7d53030fab7a42a"
+# The 18 trained-pass DXBC containers of that DLL (six passes x three tiers).
+UPSTREAM_CONTAINERS = frozenset((
+    "383dbaa787fb50d8b10ffc943e702e64f618322c1342028a052198569ba1c042",
+    "393e9780dcf4a646c3f586f89c6f886c5c1700854f5a683163d52b2c077c63ab",
+    "58fa1ee4d1df6de20243e89a4f95f3607dcd6f5027e7283298d99e413a441789",
+    "59b8ae87e91f3f911bdef780f66724119781994bd10a34af7512fead267daf31",
+    "761f15ffb8f10b7e76b2c7651e1165b2c7fdca45d0a74a72fe5d66e1534073be",
+    "85ca7382cca01d1afe5b953c3c6503d5ac73bd71c42991e8096613f4642fa877",
+    "93c2dbb7ae1fcb1ed5dbfbe52638630a485df43a9efc396755f0a39ae9caef93",
+    "a4a96dc87bf45ed90b0456e83c7348936f895927e380cd03e654f440d77c0da1",
+    "ab88a6fbbc7b47aa7c822f5d66742e4fb3ae75133ce951e2b6d263e91386b8e3",
+    "b7a00f9936ecaa8a59db81bbf657d62f58e3b395b4c8882254b87b157b394392",
+    "b99831b6510d0b70ca3fd3d9bc4de6668a268c2a6511693957b94a5db491ad16",
+    "c5d7a09adc8f114bc9a44d721e74af5553bd7e5eabcf2f010c13514be9c4aefc",
+    "cd19fb3cfeb9351f684a0f10e34e8089bd10d0d241caf1c0cc3ce78ed23b3c38",
+    "cd9290238679e37e133299a4ad3e1fd4103546d63b089dcfbc1ea07560c8e715",
+    "d87b32e365e90140034213145b45ace6539203df08dfce0ffa09053fc76e25de",
+    "e0fbaaf1eb94bcb9c7f52a3aa8bab0e95af63e28bd7c5399e0f196a4f89a5381",
+    "e9d3d1b2e41e2df704f5c823246deda3c569b8473cab59aa5c5c190a2875bbb3",
+    "eb3f9572de8a935c6dcbacf28d08e7844b3fe3913743725c0ed66b8cc26a8ad7",
+))
+# SHA-256 of the byte-reproducible .npz written from them.
+UPSTREAM_SHA256 = "1e619693f4a3e191e8128946a133560e317ed425b04724637ebedec8d2deaa35"
+# Previous pin (dll-2026-10-19 lossy2), still accepted through --lossy2-weights.
+PREVIOUS_SHA256 = "9a458f65812848b273dace03edcbd346d66364d5d41a99d0963adaa601a3c93c"
 
 # logical pass -> (kind, 3x3 table, expansion table, contraction table)
 TABLES = {
@@ -64,8 +91,7 @@ def resolve_path(root, path=None):
     if candidate is None:
         candidate = Path(root) / DEFAULT_WEIGHTS
     if not candidate.is_file():
-        raise ValueError("lossy2 weights not found: %s (run python3 "
-                         "tools/fsr411/fetch_lossy2_weights.py)" % candidate)
+        raise ValueError("lossy2 weights not found: %s (run make lossy2-weights)" % candidate)
     return candidate
 
 
