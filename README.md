@@ -19,7 +19,7 @@ sequence, 40% less. Method and limits: [FSR 4.1.2 stability](docs/FSR412_STABILI
 
 ## Easiest: the FSR4 Installer app
 
-1. Download **FSR4-Installer-v2.2.dmg** from the
+1. Download **FSR4-Installer-v2.3.dmg** from the
    [latest release](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/releases/latest)
    and drag **FSR4 Installer** to Applications.
 2. First launch: the app is not notarized, so macOS blocks it. Open
@@ -57,14 +57,15 @@ The **FSR 4** panel lets you switch modes on the fly:
 | Panel mode | What it is | Speed on M5* |
 | --- | --- | ---: |
 | FSR 4.1.2 Lite | Three-pass AMD INT8 Lite model (default) | 2.70 ms mean* |
-| FSR 4.1 Lossy | Former Lite 2, six trained layers (`lossy2`) | 2.78 ms mean with reuse* |
-| FSR 4.1 | Full quality, fast math | ~4.3 ms |
+| FSR 4.1.2 Lossy | Six retrained layers, speck clamp on depth edges (`lossy2`) | 2.78 ms mean with reuse* |
+| FSR 4.1.2 Exact | Full quality, fast math (`exact-fast`) | ~4.3 ms |
 | FSR 4 | Older 4.0.2 model, for comparison | ~4.5 ms |
 
 \* Recorded 864×560 → 1712×1112 sequence on M5, 480 measured frames per model,
 interleaved runs, RCAS off. FSR 4.1.2: P99 3.87 ms, maximum 4.93 ms, full
-inference on every frame. FSR 4.1 Lossy: maximum 5.56 ms, 240 neural frames
-and 240 inference reuses. [Method and validation](docs/FSR412_STABILITY.md).
+inference on every frame. Lossy: maximum 5.56 ms, 240 neural frames
+and 240 inference reuses, measured before the 4.1.2 weights; the depth-edge
+speck clamp makes reuse frames about 2.5% slower. [Method and validation](docs/FSR412_STABILITY.md).
 These are standalone replay GPU times, not a guaranteed ceiling in a running game.
 The old FSR 4.1 Lite mode has been removed from the panel.
 
@@ -93,12 +94,12 @@ tools/bin/fsr4mac testcases/quality411 out/bench --fsr-version 4.1.2 --profile i
 ```
 
 Output: PNG previews, RGBA16F `.bin` files and `run.json`.
-FSR 4.1.2 uses `int8-lite` (default). FSR 4.1 Lossy retains its internal
+FSR 4.1.2 uses `int8-lite` (default). FSR 4.1.2 Lossy retains its internal
 `lossy2` name (six trained layers, see
 [docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md)). Use `--fsr-version 4.1.1`
 for `lossy2`, `exact-fast`, `exact` (bit-exact reference) or the retired `lossy` profile.
-`make lossy2-weights` fetches the pinned trained weights
-once into `build/`; they are not distributed with this MIT repository.
+`make lossy2-weights` downloads the pinned upstream release once and decodes
+its trained weights into `build/`; they are not distributed with this MIT repository.
 
 ## Tests
 
@@ -118,7 +119,7 @@ Build the installer app and DMG: `make installer INSTALLER_VERSION=v1.8`
 | --- | --- |
 | Performance and validation | [docs/FSR411_PERFORMANCE.md](docs/FSR411_PERFORMANCE.md) |
 | Lite image quality update | [docs/FSR411_QUALITY_UPDATE.md](docs/FSR411_QUALITY_UPDATE.md) |
-| FSR 4.1 Lossy (formerly Lite 2) | [docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md) |
+| FSR 4.1.2 Lossy (formerly Lite 2) | [docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md) |
 | Latest memory optimization and timing limits | [docs/FSR411_MEMORY_OPTIMIZATION.md](docs/FSR411_MEMORY_OPTIMIZATION.md) |
 | Benchmark method | [BENCHMARK.md](BENCHMARK.md) |
 | Input format | [docs/FSR411_INPUT_CONTRACT.md](docs/FSR411_INPUT_CONTRACT.md) |

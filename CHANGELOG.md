@@ -1,5 +1,39 @@
 # Releases
 
+## v2.3 (2026-10-30)
+
+FSR 4.1.2 Lossy: retrained weights and a speck clamp from upstream
+`dll-2026-10-29`.
+
+- **FSR 4.1.2 Lossy** (profile `lossy2`, panel label was "FSR 4.1 Lossy").
+  New weights for passes 1, 2, 4, 5, 10 and 12, and the upstream rule for
+  dark specks in foliage: on frames that reuse inference, POST probes depth
+  1-3 cells along each axis; where it jumps by more than 2% and the picture
+  moves, the result is clamped to 0.9x-1.5x of history. Upstream counts about
+  460 dark specks per frame instead of 3,824 in a recorded Black Myth: Wukong
+  clip. Synthetic scenes: +0.3 to +1.4 dB on thin lines, particles and
+  moving objects, -1 dB on heavy grain. Brightening is slower: about 3.7
+  frames behind against 1.5 before.
+- `make lossy2-weights` now downloads the pinned upstream archive (about
+  9 MB), extracts the lossy DLL with `bsdtar` and decodes the 18 pinned DXIL
+  containers with the vendored `dxc` (`tools/fsr411/lossy412_weights.py`).
+  Upstream does not publish these weights as a file. Every step is pinned by
+  SHA-256; the DLL is not executed and the weights stay out of this MIT
+  repository. The decoder reproduces the published 2026-10-19 weights byte
+  for byte from the older DLL. The CrossOver installer refreshes weights left
+  by an older release.
+- Panel and installer labels: **FSR 4.1.2 Exact** (`exact-fast`) and
+  **FSR 4.1.2 Lossy** (`lossy2`). Profile names and saved settings are
+  unchanged.
+- Speed: the neural frame is unchanged (about 3.97 ms on M5,
+  `tc_game_balanced`); reuse frames are 2.5% slower (1.40 -> 1.435 ms) for the
+  depth probes. The plain `lossy` profile compiles to the same shaders as
+  before.
+- Checks: `make test`, `make test-fsr411-lossy`, `make test-fsr411-cadence`,
+  the new `tools/fsr411/test_lossy412.py` (decoder round trip on synthetic
+  DXIL, reproducible npz, speck rule only in the `lossy2` POST) and
+  `test_lossy2.py` with the new weights.
+
 ## v2.2 (2026-10-26)
 
 Adjustable FSR 4.1.2 Lite pixelization fix.

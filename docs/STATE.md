@@ -1,6 +1,13 @@
 # FSR4-Metal — project state & handoff
 
-Last updated: **2026-10-25**, **FSR 4.1.2 INT8 Lite**.
+Last updated: **2026-10-30**, **FSR 4.1.2 Lossy**.
+
+2026-10-30: `lossy2` (panel **FSR 4.1.2 Lossy**) ports the retrained weights
+and the depth-edge speck clamp of upstream `dll-2026-10-29`. The weights are
+decoded from the pinned DLL's DXIL by `tools/fsr411/lossy412_weights.py`
+(`make lossy2-weights`), not vendored. Panel labels are now FSR 4.1.2 Exact
+(`exact-fast`) and FSR 4.1.2 Lossy; profile names did not change. See
+[FSR411_LOSSY2.md](FSR411_LOSSY2.md).
 
 2026-10-25: the default model is AMD 4.1.2 INT8 Lite from the pinned driver
 DLLs. Its three-stage network runs every frame; linear PRE/POST share a
