@@ -45,11 +45,33 @@ __attribute__((always_inline)) inline fmat zero() {
     return make_filled_simdgroup_matrix<float, 8, 8>(0.f);
 }
 
+#ifndef FSR411_FLOAT_EPILOGUE
+#define FSR411_FLOAT_EPILOGUE 0
+#endif
+// fsr411::finish on an exact integer float accumulator, returned as float.
+// The host defines FSR411_FLOAT_EPILOGUE only after proving, for every pass,
+// |accumulator| + |bias| + (128 << residualShift) < 2^24: every float sum is
+// then the exact integer, no 32-bit wrap can occur, scaling by 2^-k is exact,
+// rint is round-half-even and floor(x + 0.5) round-half-up. Shifted or
+// INT16-narrowed epilogues keep the integer sequence (folded per pass).
+__attribute__((always_inline)) inline float finishf(float acc, int bias, int residual, fsr411::Epilogue q) {
+#if FSR411_FLOAT_EPILOGUE
+    if (q.accumulatorShift == 0u && !(q.flags & fsr411::kNarrowInt16)) {
+        float v = acc + float(bias) + float(residual) * float(1u << q.residualShift);
+        if (q.flags & fsr411::kReluBeforeRound) v = max(v, 0.f);
+        const float s = as_type<float>((127u - q.rightShift) << 23u);
+        v = (q.flags & fsr411::kRoundHalfUp) ? floor(v * s + 0.5f) : rint(v * s);
+        return clamp(v, -128.f, 127.f);
+    }
+#endif
+    return float(fsr411::finish(int(acc), bias, residual, q));
+}
+
 // Requantize one accumulator fragment into an INT8-valued half fragment.
 __attribute__((always_inline)) inline hmat requant(thread fmat &acc, int2 bias, fsr411::Epilogue q) {
     hmat r;
-    r.thread_elements()[0] = half(fsr411::finish(int(acc.thread_elements()[0]), bias.x, 0, q));
-    r.thread_elements()[1] = half(fsr411::finish(int(acc.thread_elements()[1]), bias.y, 0, q));
+    r.thread_elements()[0] = half(finishf(acc.thread_elements()[0], bias.x, 0, q));
+    r.thread_elements()[1] = half(finishf(acc.thread_elements()[1], bias.y, 0, q));
     return r;
 }
 
@@ -278,8 +300,8 @@ __attribute__((always_inline)) inline void block(device uchar *scratch, device c
         for (uint m = 0; m < MB; ++m) {
             const uint2 q = pixel<WINO>(m, lo.y, sg);
             threadgroup const half *r = FSR411_WINDOW(m, lo.y) + ch;
-            const int v0 = fsr411::finish(int(out[m][ob].thread_elements()[0]), bias.x, int(r[0]), q2);
-            const int v1 = fsr411::finish(int(out[m][ob].thread_elements()[1]), bias.y, int(r[1]), q2);
+            const int v0 = int(finishf(out[m][ob].thread_elements()[0], bias.x, int(r[0]), q2));
+            const int v1 = int(finishf(out[m][ob].thread_elements()[1], bias.y, int(r[1]), q2));
             if (UPSAMPLE) {
                 a3[m][ob].thread_elements()[0] = half(v0);
                 a3[m][ob].thread_elements()[1] = half(v1);
@@ -315,8 +337,8 @@ __attribute__((always_inline)) inline void block(device uchar *scratch, device c
             int2 residual(0);
             if (ox < p.skip.width && oy < p.skip.height)
                 residual = int2(as_type<char2>(*(device const ushort *)(scratch + fsr411::tensor_address(p.skip, ox, oy, oc))));
-            const int v0 = fsr411::finish(int(t.thread_elements()[0]), bias.x, residual.x, q);
-            const int v1 = fsr411::finish(int(t.thread_elements()[1]), bias.y, residual.y, q);
+            const int v0 = int(finishf(t.thread_elements()[0], bias.x, residual.x, q));
+            const int v1 = int(finishf(t.thread_elements()[1], bias.y, residual.y, q));
             *(device ushort *)(scratch + fsr411::tensor_address(p.output, ox, oy, oc)) = pack2(v0, v1);
         }
     }
@@ -368,8 +390,8 @@ __attribute__((always_inline)) inline void downsample(device uchar *scratch, dev
         for (uint m = 0; m < MB; ++m) {
             const uint x = uint(x0) + m * 8u + lo.y;
             if (x >= p.output.width) continue;
-            const int v0 = fsr411::finish(int(acc[m][nb].thread_elements()[0]), bias.x, 0, q);
-            const int v1 = fsr411::finish(int(acc[m][nb].thread_elements()[1]), bias.y, 0, q);
+            const int v0 = int(finishf(acc[m][nb].thread_elements()[0], bias.x, 0, q));
+            const int v1 = int(finishf(acc[m][nb].thread_elements()[1], bias.y, 0, q));
             *(device ushort *)(scratch + fsr411::tensor_address(p.output, x, y, ch)) = pack2(v0, v1);
         }
     }
