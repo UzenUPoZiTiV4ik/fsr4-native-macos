@@ -343,9 +343,11 @@ public:
         Session *session = options.modelLite ? ensure_lite_session(tier,p,options,kind,error)
                                              : ensure_session(tier,p,options,kind,error);
         if (!session && kind==Kernels::Simd && options.backend==Backend::Auto) {
-            // Never retry a failed simd setup on this device; scalar is exact too.
+            // Missing shaders or other variant-specific failures do not prove
+            // that SIMD is broken for every resolution on this device.
             fsr4_logf("FSR 4.1.1 simd backend unavailable (%s); using scalar", error.c_str());
-            simdFailed_ = true; kind = Kernels::Scalar; error.clear();
+            if (simdVerified_ == 0) simdFailed_ = true;
+            kind = Kernels::Scalar; error.clear();
             session = options.modelLite ? ensure_lite_session(tier,p,options,kind,error)
                                         : ensure_session(tier,p,options,kind,error);
         }
