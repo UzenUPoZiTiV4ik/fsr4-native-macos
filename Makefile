@@ -9,6 +9,16 @@ BINDIR   := tools/bin
 
 all: $(BINDIR)/fsr4mac $(BINDIR)/gen_testcase $(BINDIR)/compare $(BINDIR)/bilin $(BINDIR)/bin2png
 
+build/tests/fsr412_runtime_ab_test: tests/fsr412_runtime_ab_test.mm tests/fsr412_optimization_test.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr412_session.inc Makefile src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -Wextra -Werror -fobjc-arc -isysroot $(SDKROOT) $< $(FRAMEWORKS) -o $@
+
+# PRE's constant-address weights must not change a single bit.
+test-fsr412-pre-weights: build/tests/fsr412_runtime_ab_test
+	python3 tests/run_fsr412_runtime_ab.py --disable constant_initializer
+
+.PHONY: test-fsr412-pre-weights
+
 test: test-input test-settings test-fsr411-math test-installer test-fsr411-layout test-fsr411-cache test-fsr411-mpp-policy
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) tests/backend_policy_test.cpp -o build/tests/backend_policy_test
