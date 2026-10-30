@@ -3,6 +3,7 @@
 //   bin2png <in.bin> <w> <h> <out.png> [colorspace: linear|srgb]
 #include "pngio.h"
 #include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <vector>
 

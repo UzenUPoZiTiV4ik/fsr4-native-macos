@@ -6,6 +6,7 @@
 #include "fsr411_runtime.h"
 #include "fsr411_capture_io.h"
 #include <chrono>
+#include <cstdlib>
 #include <mutex>
 
 namespace {
