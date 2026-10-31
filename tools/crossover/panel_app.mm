@@ -51,7 +51,7 @@ static int profile_from_name(const std::string &name, int fallback) {
     if (name == "exact-fast" || name == "2") return 2;
     if (name == "lossy2" || name == "4") return 4;
     if (name == "int8-lite" || name == "lite" || name == "5") return 5;
-    if (name == "int8-lite-pixfix" || name == "lite-pixfix" || name == "6") return 6;
+    if (name == "int8-lite-pixfix" || name == "lite-pixfix" || name == "int8-lite-hair" || name == "lite-hair" || name == "6") return 6;
     if (name == "fsr4" || name == "3") return 3;
     return fallback;
 }

@@ -16,6 +16,8 @@
 #include "fsr4_input.h"
 #include "fsr4_log.h"
 #include "fsr411_model.h"
+#include "fsr411_mpp_policy.h"
+#include "fsr411_simd_weights.h"
 #include "fsr411_scratch_layout.h"
 
 namespace fsr411 {
@@ -220,11 +222,13 @@ struct NativePass {
     unsigned inputSlot = 0, outputSlot = 0, skipSlot = 0;
     unsigned tileX = 1, tileY = 1, threads = 128, offset = 0;
     bool inputDispatch = false, hasSkip = false;
+    bool winograd = false, mppFast = false;
 };
 struct Session {
     std::string key;
     int tier = 0;
     uint32_t postPixelsPerGroup = 32;
+    uint32_t mppFeatures = 0, mppFastPasses = 0;
     // FSR 4.1.2: tile side of the optional tiled POST ("post_tile"), 0 if absent.
     uint32_t postTileSide = 0;
     bool splitAutoExposure = false;
@@ -236,7 +240,7 @@ struct Session {
     PostCnbScratchLayout scratchLayout = {};
     Profile profile = Profile::Exact;
     // halfWeights: Simd only, nativeWeights widened element-wise to half.
-    id<MTLBuffer> initializer = nil, nativeWeights = nil, halfWeights = nil;
+    id<MTLBuffer> initializer = nil, nativeWeights = nil, halfWeights = nil, winogradWeights = nil;
     std::map<std::string, Kernel> kernels;
     std::map<int, NativePass> native;
     std::map<std::string,std::vector<int>> nativeSequence;
@@ -262,6 +266,7 @@ struct View {
     Fsr4InputHistory inputHistory = {};
     Fsr4InputPrepared prepared = {};
     std::string variantKey, backendLabel;
+    uint32_t mppFeatures = 0, mppFastPasses = 0;
     bool postCnbAlias = false;
     PostCnbScratchLayout scratchLayout = {};
     id<MTLTexture> history = nil, reprojected = nil, recurrent = nil, autoExposure = nil;
@@ -527,6 +532,7 @@ public:
         view.prepared = p;
         view.variantKey = session->key;
         view.backendLabel = kernels_label(kind);
+        view.mppFeatures=session->mppFeatures;view.mppFastPasses=session->mppFastPasses;
         view.postCnbAlias = session->postCnbAlias;
         view.scratchLayout = session->scratchLayout;
         view.cacheValid=session->externalPostCnb;
@@ -552,10 +558,10 @@ private:
     id<MTLSamplerState> sampler_ = nil;
     id<MTLTexture> exposureOne_ = nil;
     // Simd probe result per Runtime (one device): -1 unknown, 0 failed, 1 ok.
-    int simdVerified_ = -1;
+    int simdVerified_ = -1, winogradVerified_ = -1;
+    int mppEnabled_ = -1;
+    std::map<int,uint32_t> mppVerified_; // same library descriptors, one probe per tier
     bool simdFailed_ = false;
-    // Winograd-range probe passed and FSR411_SIMD_WINOGRAD is not 0.
-    bool winogradOk_ = false;
 
     bool native_capable() const {
         if (@available(macOS 26.0,*)) return [device_ supportsFamily:static_cast<MTLGPUFamily>(1010)]
@@ -563,59 +569,123 @@ private:
         return false;
     }
     bool simd_family() const { return [device_ supportsFamily:MTLGPUFamilyApple7]; }
+    bool mpp_tuning_enabled() {
+        if (mppEnabled_ < 0) {
+            // Pin the opt-out before the first MPP session. Never switch a
+            // live stream's numerical/dispatch contract halfway through it.
+            const char *setting = std::getenv("FSR4_MPP_OPTIMIZE");
+            mppEnabled_ = !(setting && (!std::strcmp(setting,"0") || !strcasecmp(setting,"false")
+                || !strcasecmp(setting,"off") || !strcasecmp(setting,"no")));
+        }
+        return mppEnabled_ == 1;
+    }
+    uint32_t verify_mpp(id<MTLLibrary> lib, int tier) {
+        if (!mpp_tuning_enabled()) return 0;
+        auto previous=mppVerified_.find(tier);
+        if (previous!=mppVerified_.end()) return previous->second;
+        mppVerified_.emplace(tier,0);
+        // The probe and real entries instantiate exactly the same fixed
+        // descriptors and operand types in this tier's library. Dimensions,
+        // model weights and epilogues do not determine register ownership.
+        NSError *e=nil;
+        auto fn=[lib newFunctionWithName:@"fsr411_mpp_chain_probe"];
+        MTLComputePipelineDescriptor *d=[MTLComputePipelineDescriptor new];
+        d.computeFunction=fn;d.maxTotalThreadsPerThreadgroup=32;
+        d.threadGroupSizeIsMultipleOfThreadExecutionWidth=YES;
+        auto pso=fn?[device_ newComputePipelineStateWithDescriptor:d options:MTLPipelineOptionNone reflection:nil error:&e]:nil;
+        if (!pso || pso.threadExecutionWidth!=32 || pso.maxTotalThreadsPerThreadgroup<32
+            || pso.staticThreadgroupMemoryLength!=0) {
+            fsr4_logf("FSR INT8 MPP: register-layout probe unavailable; keeping established kernels");return 0;
+        }
+        std::vector<uint8_t> zeros(kMppProbeDummyBytes,0);
+        const uint32_t sentinel=~0u;
+        auto dummy=[device_ newBufferWithBytes:zeros.data() length:zeros.size() options:MTLResourceStorageModeShared];
+        auto features=[device_ newBufferWithBytes:&sentinel length:sizeof(sentinel) options:MTLResourceStorageModeShared];
+        auto queue=[device_ newCommandQueue];auto cb=[queue commandBuffer];auto enc=[cb computeCommandEncoder];
+        if (!dummy || !features || !enc) {
+            if(enc)[enc endEncoding];
+            fsr4_logf("FSR INT8 MPP: cannot allocate layout probe; keeping established kernels");return 0;
+        }
+        [enc setComputePipelineState:pso];[enc setBuffer:features offset:0 atIndex:0];[enc setBuffer:dummy offset:0 atIndex:1];
+        [enc dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+        [enc endEncoding];[cb commit];[cb waitUntilCompleted];
+        const uint32_t mask=*(const uint32_t *)features.contents;
+        if(cb.status!=MTLCommandBufferStatusCompleted || (mask & ~kMppChainKnownMask)) {
+            fsr4_logf("FSR INT8 MPP: layout probe failed; keeping established kernels");return 0;
+        }
+        mppVerified_[tier]=mask;
+        fsr4_logf("FSR INT8 MPP: register-layout mask 0x%02x verified for tier %d",mask,tier);
+        return mask;
+    }
     // Confirms the lane ownership the simd epilogue relies on and that half
-    // products accumulate exactly in float on this GPU: INT8 extremes for the
-    // direct kernels, then Winograd-range operands (|a| <= 512, |b| <= 2048,
-    // sums near 2^24) for the transformed convolutions.
+    // products of INT8 extremes accumulate exactly in float on this GPU.
     bool verify_simd(id<MTLLibrary> lib, std::string &error) {
         if (simdVerified_ >= 0) { if (!simdVerified_) error = "simdgroup probe failed on this GPU"; return simdVerified_ == 1; }
         simdVerified_ = 0;
+        int ai[64], bi[64]; uint32_t r = 0x4117u;
+        for (int i = 0; i < 64; ++i) {
+            r = r * 1664525u + 1013904223u;
+            ai[i] = i % 3 == 0 ? -128 : i % 3 == 1 ? 127 : int(r >> 24) - 128;
+            bi[i] = i % 5 == 0 ? 127 : -128;
+        }
+        if (!run_simd_probe(lib, ai, bi, error)) return false;
+        simdVerified_ = 1; return true;
+    }
+    // Winograd multiplies transformed inputs (|v|<=512) by transformed
+    // weights (|w|<=1152). Products exceed half's range, so confirm on this
+    // device that they are formed and accumulated exactly in float.
+    bool verify_winograd(id<MTLLibrary> lib) {
+        if (winogradVerified_ >= 0) return winogradVerified_ == 1;
+        winogradVerified_ = 0;
+        // Read once per Runtime, before its first SIMD session is loaded.
+        const char *setting = std::getenv("FSR4_SIMD_WINOGRAD");
+        if(!setting) setting=std::getenv("FSR411_SIMD_WINOGRAD"); // pre-v2.5 compatibility
+        if (setting && (!std::strcmp(setting, "0") || !strcasecmp(setting, "false") ||
+                        !strcasecmp(setting, "off") || !strcasecmp(setting, "no"))) return false;
+        int ai[64], bi[64]; uint32_t r = 0x4119u;
+        for (int i = 0; i < 64; ++i) {
+            r = r * 1664525u + 1013904223u;
+            ai[i] = i % 4 == 0 ? -512 : i % 4 == 1 ? 510 : int(r >> 22) - 512;
+            bi[i] = i % 3 == 0 ? 1152 : i % 3 == 1 ? -1152 : int((r >> 8) % 2305u) - 1152;
+        }
+        std::string ignored;
+        if (!run_simd_probe(lib, ai, bi, ignored)) {
+            fsr4_logf("FSR 4.1 simd Winograd probe failed (%s); using direct 3x3", ignored.c_str());
+            return false;
+        }
+        winogradVerified_ = 1; return true;
+    }
+    // All values are exact half integers and every 2*8-term sum is < 2^24.
+    // This confirms products are formed and summed in float on this GPU;
+    // exactness of larger sums below 2^24 then follows from IEEE fp32.
+    bool run_simd_probe(id<MTLLibrary> lib, const int *ai, const int *bi, std::string &error) {
         NSError *e = nil;
         id<MTLFunction> fn = [lib newFunctionWithName:@"fsr411_simd_probe"];
         id<MTLComputePipelineState> pso = fn ? [device_ newComputePipelineStateWithFunction:fn error:&e] : nil;
         if (!pso || pso.maxTotalThreadsPerThreadgroup < 32 || pso.threadExecutionWidth != 32) {
             error = "simdgroup probe pipeline: " + (e ? metal_error(e) : std::string("needs SIMD32")); return false;
         }
+        _Float16 a[64], b[64];
+        for (int i = 0; i < 64; ++i) { a[i] = (_Float16)ai[i]; b[i] = (_Float16)bi[i]; }
+        id<MTLBuffer> A = [device_ newBufferWithBytes:a length:sizeof a options:MTLResourceStorageModeShared];
+        id<MTLBuffer> B = [device_ newBufferWithBytes:b length:sizeof b options:MTLResourceStorageModeShared];
+        id<MTLBuffer> out = [device_ newBufferWithLength:96 * sizeof(int) options:MTLResourceStorageModeShared];
         id<MTLCommandQueue> queue = [device_ newCommandQueue];
-        auto probe = [&](bool wide, std::string &why) {
-            _Float16 a[64], b[64]; int ai[64], bi[64]; uint32_t r = wide ? 0x5eedu : 0x4117u;
-            for (int i = 0; i < 64; ++i) {
-                r = r * 1664525u + 1013904223u;
-                if (wide) {
-                    // 2 * 8 * 511 * 2047 < 2^24 plus odd low terms in column 7.
-                    ai[i] = i % 8 == 7 ? int(r >> 29) - 4 : (i % 2 ? -511 : 511);
-                    bi[i] = i % 8 == 7 ? int(r >> 28) - 8 : (i / 8 % 2 ? -2047 : 2047);
-                } else {
-                    ai[i] = i % 3 == 0 ? -128 : i % 3 == 1 ? 127 : int(r >> 24) - 128;
-                    bi[i] = i % 5 == 0 ? 127 : -128;
-                }
-                a[i] = (_Float16)ai[i]; b[i] = (_Float16)bi[i];
-            }
-            id<MTLBuffer> A = [device_ newBufferWithBytes:a length:sizeof a options:MTLResourceStorageModeShared];
-            id<MTLBuffer> B = [device_ newBufferWithBytes:b length:sizeof b options:MTLResourceStorageModeShared];
-            id<MTLBuffer> out = [device_ newBufferWithLength:96 * sizeof(int) options:MTLResourceStorageModeShared];
-            id<MTLCommandBuffer> cb = [queue commandBuffer];
-            id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
-            [enc setComputePipelineState:pso]; [enc setBuffer:A offset:0 atIndex:0];
-            [enc setBuffer:B offset:0 atIndex:1]; [enc setBuffer:out offset:0 atIndex:2];
-            [enc dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
-            [enc endEncoding]; [cb commit]; [cb waitUntilCompleted];
-            if (cb.status != MTLCommandBufferStatusCompleted) { why = "simdgroup probe did not complete"; return false; }
-            const int *v = (const int *)out.contents;
-            for (int i = 0; i < 8; ++i) for (int j = 0; j < 8; ++j) {
-                int s = 0; for (int k = 0; k < 8; ++k) s += ai[i*8+k] * bi[k*8+j];
-                if (v[i*8+j] != 2 * s) { why = "simdgroup half products do not accumulate exactly in float"; return false; }
-            }
-            for (int lane = 0; lane < 32; ++lane)
-                if (v[64+lane] != 1) { why = "simdgroup element layout differs from the verified Apple7+ layout"; return false; }
-            return true;
-        };
-        if (!probe(false, error)) return false;
-        std::string why;
-        const char *disable = getenv("FSR411_SIMD_WINOGRAD");
-        winogradOk_ = !(disable && !std::strcmp(disable, "0")) && probe(true, why);
-        if (!winogradOk_ && !why.empty()) fsr4_logf("FSR 4.1.1 simd Winograd disabled (%s); direct kernels", why.c_str());
-        simdVerified_ = 1; return true;
+        id<MTLCommandBuffer> cb = [queue commandBuffer];
+        id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
+        [enc setComputePipelineState:pso]; [enc setBuffer:A offset:0 atIndex:0];
+        [enc setBuffer:B offset:0 atIndex:1]; [enc setBuffer:out offset:0 atIndex:2];
+        [enc dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+        [enc endEncoding]; [cb commit]; [cb waitUntilCompleted];
+        if (cb.status != MTLCommandBufferStatusCompleted) { error = "simdgroup probe did not complete"; return false; }
+        const int *v = (const int *)out.contents;
+        for (int i = 0; i < 8; ++i) for (int j = 0; j < 8; ++j) {
+            int s = 0; for (int k = 0; k < 8; ++k) s += ai[i*8+k] * bi[k*8+j];
+            if (v[i*8+j] != 2 * s) { error = "simdgroup half products do not accumulate exactly in float"; return false; }
+        }
+        for (int lane = 0; lane < 32; ++lane)
+            if (v[64+lane] != 1) { error = "simdgroup element layout differs from the verified Apple7+ layout"; return false; }
+        return true;
     }
     static bool depth_format(MTLPixelFormat format) {
         return format == MTLPixelFormatDepth16Unorm || format == MTLPixelFormatDepth32Float
@@ -796,15 +866,6 @@ private:
             std::vector<_Float16> widened(weights.length);
             const int8_t *bytes=(const int8_t *)weights.bytes;
             for (size_t i=0;i<widened.size();++i) widened[i]=(_Float16)bytes[i];
-            // Winograd regions hold int16 values at the same starting index.
-            NSMutableArray *entries=[[manifest[@"passes"] allValues] mutableCopy];
-            if (manifest[@"auxiliary_passes"][@"post_cnb"]) [entries addObject:manifest[@"auxiliary_passes"][@"post_cnb"]];
-            for (NSDictionary *entry in entries) {
-                NSDictionary *w=entry[@"simd"][@"winograd"]; if (!w) continue;
-                const size_t at=[w[@"weights0"] unsignedLongLongValue], count=[w[@"weights0_count"] unsignedLongLongValue];
-                if (at+2*count>weights.length) { error="native 4.1.1 Winograd weights out of range"; return false; }
-                for (size_t i=0;i<count;++i) { int16_t v; memcpy(&v,bytes+at+2*i,2); widened[at+i]=(_Float16)v; }
-            }
             s.halfWeights=[device_ newBufferWithBytes:widened.data() length:widened.size()*sizeof(_Float16) options:MTLResourceStorageModeShared];
             if (!s.halfWeights) { error="cannot allocate simd half weights"; return false; }
         }
@@ -824,6 +885,12 @@ private:
         id<MTLLibrary> lib=[device_ newLibraryWithSource:source options:co error:&e];
         if (!lib) { error=metal_error(e); return false; }
         if (useSimd && !verify_simd(lib,error)) return false;
+        s.mppFeatures=useMpp?verify_mpp(lib,s.tier):0;
+        // Exact F(2x2,3x3) only for CNB16 and FNB32 (faster on forced-SIMD M5;
+        // check M1-M4 with `make bench-fsr-pre-m5`). CT32 keeps direct 3x3
+        // (2-4% slower with Winograd on M5), NF64/DS are ineligible.
+        const bool winogradDevice=useSimd && verify_winograd(lib);
+        std::vector<_Float16> transformed;
         std::map<std::string,id<MTLComputePipelineState>> states;
         NSMutableDictionary *passes=[manifest[@"passes"] mutableCopy];
         if(s.externalPostCnb) {
@@ -843,17 +910,32 @@ private:
             NSDictionary *entry=passes[key]; NativePass np;
             NSDictionary *dispatch=useMpp?entry:useSimd?entry[@"simd"]:entry[@"reference"];
             if (!dispatch) { error="native 4.1.1 manifest predates the simd kernels; regenerate this model"; return false; }
-            NSDictionary *wino=useSimd && winogradOk_ ? dispatch[@"winograd"] : nil;
-            if (wino) dispatch=wino;
-            const std::string name=utf8(useMpp?entry[@"kernel"]:dispatch[@"function"]);
+            std::string name=utf8(useMpp?entry[@"kernel"]:dispatch[@"function"]);
+            np.tileX=[dispatch[@"tile"][0] unsignedIntValue];np.tileY=[dispatch[@"tile"][1] unsignedIntValue];
+            np.threads=[dispatch[@"threads"] unsignedIntValue];
+            if(!np.tileX || !np.tileY || !np.threads || np.threads>1024) {error="invalid native dispatch geometry";return false;}
+            if(useMpp) {
+                const auto tuned=mpp_fast_dispatch(name.c_str(),np.tileX,np.tileY,np.threads,s.mppFeatures);
+                if(tuned.feature) {
+                    name=tuned.function;np.tileX=tuned.tileX;np.tileY=tuned.tileY;np.threads=tuned.threads;
+                    np.mppFast=true;++s.mppFastPasses;
+                }
+            }
             np.offset=[entry[@"parameter_offset"] unsignedIntValue];
             if (np.offset+sizeof(PassParams)>params.length || kNative+np.offset+sizeof(PassParams)>8192) { error="native parameter region overflow"; return false; }
             memcpy(&np.parameters,(const uint8_t *)params.bytes+np.offset,sizeof(PassParams));
+            if (winogradDevice && ([entry[@"kind"] isEqual:@"cnb"] || [entry[@"kind"] isEqual:@"fnb"])
+                && (name=="fsr411_simd_cnb" || name=="fsr411_simd_fnb32")
+                && [dispatch[@"tile"][0] unsignedIntValue]==32 && [dispatch[@"tile"][1] unsignedIntValue]==4
+                && [dispatch[@"threads"] unsignedIntValue]==128) {
+                uint32_t bound=0;
+                if (prepare_simd_winograd_weights((const uint8_t *)weights.bytes,weights.length,np.parameters,transformed,&bound)) {
+                    name+="_winograd"; np.winograd=true;
+                } else fsr4_logf("FSR 4.1 simd: pass %s keeps direct 3x3 (Winograd bound %u >= 2^24 or invalid)",utf8(key).c_str(),bound);
+            }
             if([key intValue]==13 && !s.modelLite && !post_cnb_tensors_match_layout(np.parameters,s.scratchLayout)) {
                 error="native 4.1.1 POST CNB tensors do not match the scratch layout";return false;
             }
-            // Winograd reads its transformed 3x3 weights from the half copy.
-            if (wino) np.parameters.weights[0]=[wino[@"weights0"] unsignedIntValue];
             // Shared entry names have different weights, strides and epilogues
             // for each logical pass. Dimensions remain per-frame parameters.
             const std::string pipelineKey=name+(specialize?"/"+utf8(key):"");
@@ -867,16 +949,21 @@ private:
                     fn=[lib newFunctionWithName:ns(name) constantValues:values error:&e];
                 } else fn=[lib newFunctionWithName:ns(name)];
                 id<MTLComputePipelineState> pso=nil;
-                if (fn && s.modelLite) {
+                // Fixed dispatch contracts, including verified register-only
+                // MPP entries. Never budget for unused 1024-thread groups.
+                if (fn && (s.modelLite || useSimd || (useMpp && mpp_tuning_enabled()))) {
                     MTLComputePipelineDescriptor *descriptor=[MTLComputePipelineDescriptor new];
                     descriptor.computeFunction=fn;
-                    descriptor.maxTotalThreadsPerThreadgroup=[dispatch[@"threads"] unsignedIntValue];
+                    descriptor.maxTotalThreadsPerThreadgroup=np.threads;
                     descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth=descriptor.maxTotalThreadsPerThreadgroup%32u==0;
                     pso=[device_ newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&e];
                 } else if (fn) pso=[device_ newComputePipelineStateWithFunction:fn error:&e];
                 if (!pso) { error=metal_error(e); return false; }
-                if (pso.maxTotalThreadsPerThreadgroup < [dispatch[@"threads"] unsignedIntValue]) {
+                if (pso.maxTotalThreadsPerThreadgroup < np.threads) {
                     error="pipeline "+name+" supports fewer threads than its tile needs"; return false;
+                }
+                if ((useSimd || useMpp) && (pso.threadExecutionWidth != 32 || pso.staticThreadgroupMemoryLength > device_.maxThreadgroupMemoryLength)) {
+                    error="pipeline "+name+" exceeds the verified SIMD32/shared-memory contract"; return false;
                 }
                 states.emplace(pipelineKey,pso);
             }
@@ -884,11 +971,17 @@ private:
             if ([key intValue]==13) np.parameters.output.offset+=uint32_t(s.scratchLayout.cacheOffset);
             np.inputSlot=[entry[@"input_slot"] unsignedIntValue]; np.outputSlot=[entry[@"output_slot"] unsignedIntValue];
             np.hasSkip=entry[@"skip_slot"]!=nil; np.skipSlot=[entry[@"skip_slot"] unsignedIntValue];
-            np.tileX=[dispatch[@"tile"][0] unsignedIntValue]; np.tileY=[dispatch[@"tile"][1] unsignedIntValue];
-            np.threads=[dispatch[@"threads"] unsignedIntValue]; np.inputDispatch=[entry[@"dispatch_space"] isEqual:@"input"];
+            np.inputDispatch=[entry[@"dispatch_space"] isEqual:@"input"];
             if (np.inputSlot>=17 || np.outputSlot>=17 || np.skipSlot>=17 || !np.tileX || !np.tileY || !np.threads) { error="invalid native dispatch metadata"; return false; }
             s.native.emplace([key intValue],np);
         }
+        if (!transformed.empty()) {
+            s.winogradWeights=[device_ newBufferWithBytes:transformed.data() length:transformed.size()*sizeof(_Float16) options:MTLResourceStorageModeShared];
+            if (!s.winogradWeights) { error="cannot allocate simd Winograd weights"; return false; }
+            unsigned count=0; for (const auto &n:s.native) count+=n.second.winograd;
+            fsr4_logf("FSR 4.1 simd: exact Winograd 3x3 in %u of %zu neural passes",count,s.native.size());
+        }
+        if(s.mppFastPasses) fsr4_logf("FSR INT8 MPP: register-only chains in %u of %zu neural passes",s.mppFastPasses,s.native.size());
         return s.nativeWeights && !s.native.empty();
     }
     #include "fsr412_session.inc"
@@ -987,7 +1080,14 @@ private:
             auto lib=[device_ newLibraryWithURL:url error:&e];
             if (!lib) { error=metal_error(e); return nullptr; }
             auto fn=[lib newFunctionWithName:entry[@"entry"]];
-            auto pso=fn?[device_ newComputePipelineStateWithFunction:fn error:&e]:nil;
+            id<MTLComputePipelineState> pso=nil;
+            NSArray *launch=entry[@"wgsize"];
+            if(fn && kind==Kernels::Mpp && mpp_tuning_enabled() && launch.count==3) {
+                auto descriptor=[MTLComputePipelineDescriptor new];descriptor.computeFunction=fn;
+                descriptor.maxTotalThreadsPerThreadgroup=[launch[0] unsignedIntValue]*[launch[1] unsignedIntValue]*[launch[2] unsignedIntValue];
+                descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth=descriptor.maxTotalThreadsPerThreadgroup%32u==0;
+                pso=[device_ newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&e];
+            } else if(fn) pso=[device_ newComputePipelineStateWithFunction:fn error:&e];
             if (!pso) { error="pipeline "+utf8(name)+": "+metal_error(e); return nullptr; }
             Kernel k; k.pso=pso; NSArray *wg=entry[@"wgsize"];
             if(NSString *tables=entry[@"literal_tables"]) {
@@ -1079,7 +1179,7 @@ private:
     void retain_resources(FrameSlot &slot,const Session &s,const View &v,const Frame &f) {
         // The owner may resize on the next CPU encode while this frame is on
         // the GPU. Keep the old resources alive until its retirement token.
-        const id resources[]={slot.constants,s.initializer,s.nativeWeights,s.halfWeights,v.history,v.reprojected,v.recurrent,v.autoExposure,
+        const id resources[]={slot.constants,s.initializer,s.nativeWeights,s.halfWeights,s.winogradWeights,v.history,v.reprojected,v.recurrent,v.autoExposure,
             v.scratch,v.spdAtomic,v.spdAtomicTexture,v.luma,v.colorCopy,v.depthCopy,v.motionCopy,v.outputCopy,v.rcasTemp,v.lossyMotion,v.lossyPlane,
             f.color,f.depth,f.motion,f.output,f.exposure,exposureOne_,v.preparedColor};
         for (id resource:resources) if(resource && ![slot.resources containsObject:resource]) [slot.resources addObject:resource];
@@ -1210,12 +1310,14 @@ private:
             [t setAddress:v.scratch.gpuAddress atIndex:0]; [t setAddress:s.nativeWeights.gpuAddress atIndex:1];
             [t setAddress:slot.constants.gpuAddress+kNative+n.offset atIndex:2];
             if (s.halfWeights) [t setAddress:s.halfWeights.gpuAddress atIndex:3];
+            if (n.winograd) [t setAddress:s.winogradWeights.gpuAddress atIndex:4];
             [enc setArgumentTable:t];
         } else {
             auto ce=(id<MTLComputeCommandEncoder>)enc;
             [ce setBuffer:v.scratch offset:0 atIndex:0]; [ce setBuffer:s.nativeWeights offset:0 atIndex:1];
             [ce setBuffer:slot.constants offset:kNative+n.offset atIndex:2];
             if (s.halfWeights) [ce setBuffer:s.halfWeights offset:0 atIndex:3];
+            if (n.winograd) [ce setBuffer:s.winogradWeights offset:0 atIndex:4];
         }
         [enc setComputePipelineState:n.pso];
         [enc dispatchThreadgroups:MTLSizeMake(ceil_div(sizes.v[shape][0],n.tileX),ceil_div(sizes.v[shape][1],n.tileY),1)

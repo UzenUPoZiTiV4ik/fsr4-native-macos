@@ -1,0 +1,663 @@
+{
+  "date": "2026-10-30",
+  "device": "Apple M5",
+  "os": "macOS 27.0.1",
+  "backend": "int8-simd",
+  "hardware_validation": "M5 forced SIMD only; no physical M1-M4 validation",
+  "power": "Battery, approximately 21-23%; background desktop applications running",
+  "input": "testcases/tc_game_balanced",
+  "render": [
+    1000,
+    648
+  ],
+  "output": [
+    1712,
+    1112
+  ],
+  "protocol": "4 serial rounds, reversed order on alternate rounds, 1 warmup sequence, 20 measured 2-frame sequences per CLI invocation, median of round means",
+  "scope": "Full GPU command buffer. Same current host pipeline cap for baseline and candidate. Shader-only comparison.",
+  "limitations": [
+    "Exploratory; high variance and overlapping round ranges prevent a firm speed claim",
+    "Lossy has 1 reset/inference + 1 reuse frame per sequence; no non-reset full inference measured",
+    "No model or reuse policy changes",
+    "Temporary raw run.json paths may be removed by the OS"
+  ],
+  "baseline_shader_sha256": "d80d20f1448bda454c8c997af74416cf9053318793d1f48ff5c3a877c133df80",
+  "measured_candidate_shader_sha256": "ba35f72df155ddfc72d1dbe1155c02bccf5d7b7117ea3b099651b80e9f8b2a2e",
+  "final_candidate_shader_sha256": "f1cb34435f1cdc2e47109fb7890a91b67cf1dde6bb26beab865de61c02e9282d",
+  "candidate_hash_note": "Final candidate differs only by top-level documentation comments from timed candidate",
+  "summary": [
+    {
+      "name": "exact",
+      "before_ms": 11.764352606041939,
+      "after_ms": 10.769906250425265,
+      "change_percent": -8.453047854974571,
+      "before_rounds": [
+        12.734305211779429,
+        12.971015628136229,
+        10.791243751737056,
+        10.79440000030445
+      ],
+      "after_rounds": [
+        10.834138540667482,
+        10.705673960183049,
+        10.617107291909633,
+        13.902266664081253
+      ]
+    },
+    {
+      "name": "lossy412",
+      "before_ms": 6.277725521431421,
+      "after_ms": 5.848120312293759,
+      "change_percent": -6.843325782101184,
+      "before_rounds": [
+        6.224755208677379,
+        5.957836458401289,
+        6.3306958341854624,
+        6.776364587130956
+      ],
+      "after_rounds": [
+        8.374251042550895,
+        5.828938540071249,
+        5.781811455381103,
+        5.867302084516268
+      ]
+    },
+    {
+      "name": "lite",
+      "before_ms": 6.5589656252996065,
+      "after_ms": 5.4642213548504515,
+      "change_percent": -16.690806645280265,
+      "before_rounds": [
+        8.884063540608622,
+        7.047152084123809,
+        5.7035156241909135,
+        6.070779166475404
+      ],
+      "after_rounds": [
+        5.252762499731034,
+        5.387859375332482,
+        5.718418749165721,
+        5.540583334368421
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "name": "exact",
+      "version": "4.1.1",
+      "profile": "exact",
+      "variant": "before",
+      "shaderRoot": "/tmp/fsr-simd-before",
+      "round": 1,
+      "run_json": "/tmp/fsr-simd-full-exact-before-r1/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 12.734305211779429
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 12.847327085910365
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 12.621283337648492
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "exact",
+      "version": "4.1.1",
+      "profile": "exact",
+      "variant": "after",
+      "shaderRoot": "/Users/pozitiv4ik/Documents/fsr4mac/firsttest",
+      "round": 1,
+      "run_json": "/tmp/fsr-simd-full-exact-after-r1/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 10.834138540667482
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 10.719206248177215
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 10.949070833157748
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "lossy412",
+      "version": "4.1.1",
+      "profile": "lossy2",
+      "variant": "before",
+      "shaderRoot": "/tmp/fsr-simd-before",
+      "round": 1,
+      "run_json": "/tmp/fsr-simd-full-lossy412-before-r1/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 6.224755208677379
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 10.912566666956991
+      },
+      "full": {
+        "count": 0
+      },
+      "reuse": {
+        "count": 20,
+        "mean_ms": 1.5369437503977679
+      }
+    },
+    {
+      "name": "lossy412",
+      "version": "4.1.1",
+      "profile": "lossy2",
+      "variant": "after",
+      "shaderRoot": "/Users/pozitiv4ik/Documents/fsr4mac/firsttest",
+      "round": 1,
+      "run_json": "/tmp/fsr-simd-full-lossy412-after-r1/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 8.374251042550895
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 14.706956250302028
+      },
+      "full": {
+        "count": 0
+      },
+      "reuse": {
+        "count": 20,
+        "mean_ms": 2.041545834799763
+      }
+    },
+    {
+      "name": "lite",
+      "version": "4.1.2",
+      "profile": "int8-lite",
+      "variant": "before",
+      "shaderRoot": "/tmp/fsr-simd-before",
+      "round": 1,
+      "run_json": "/tmp/fsr-simd-full-lite-before-r1/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 8.884063540608622
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 9.234614581509959
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 8.533512499707285
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "lite",
+      "version": "4.1.2",
+      "profile": "int8-lite",
+      "variant": "after",
+      "shaderRoot": "/Users/pozitiv4ik/Documents/fsr4mac/firsttest",
+      "round": 1,
+      "run_json": "/tmp/fsr-simd-full-lite-after-r1/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 5.252762499731034
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 5.507079167000484
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 4.998445832461584
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "lite",
+      "version": "4.1.2",
+      "profile": "int8-lite",
+      "variant": "after",
+      "shaderRoot": "/Users/pozitiv4ik/Documents/fsr4mac/firsttest",
+      "round": 2,
+      "run_json": "/tmp/fsr-simd-full-lite-after-r2/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 5.387859375332482
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 5.7446249993517995
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 5.031093751313165
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "lite",
+      "version": "4.1.2",
+      "profile": "int8-lite",
+      "variant": "before",
+      "shaderRoot": "/tmp/fsr-simd-before",
+      "round": 2,
+      "run_json": "/tmp/fsr-simd-full-lite-before-r2/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 7.047152084123809
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 7.433906249934807
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 6.66039791831281
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "lossy412",
+      "version": "4.1.1",
+      "profile": "lossy2",
+      "variant": "after",
+      "shaderRoot": "/Users/pozitiv4ik/Documents/fsr4mac/firsttest",
+      "round": 2,
+      "run_json": "/tmp/fsr-simd-full-lossy412-after-r2/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 5.828938540071249
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 10.106327083485667
+      },
+      "full": {
+        "count": 0
+      },
+      "reuse": {
+        "count": 20,
+        "mean_ms": 1.5515499966568314
+      }
+    },
+    {
+      "name": "lossy412",
+      "version": "4.1.1",
+      "profile": "lossy2",
+      "variant": "before",
+      "shaderRoot": "/tmp/fsr-simd-before",
+      "round": 2,
+      "run_json": "/tmp/fsr-simd-full-lossy412-before-r2/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 5.957836458401289
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 10.445727083424572
+      },
+      "full": {
+        "count": 0
+      },
+      "reuse": {
+        "count": 20,
+        "mean_ms": 1.4699458333780058
+      }
+    },
+    {
+      "name": "exact",
+      "version": "4.1.1",
+      "profile": "exact",
+      "variant": "after",
+      "shaderRoot": "/Users/pozitiv4ik/Documents/fsr4mac/firsttest",
+      "round": 2,
+      "run_json": "/tmp/fsr-simd-full-exact-after-r2/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 10.705673960183049
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 10.789187504269648
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 10.622160416096449
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "exact",
+      "version": "4.1.1",
+      "profile": "exact",
+      "variant": "before",
+      "shaderRoot": "/tmp/fsr-simd-before",
+      "round": 2,
+      "run_json": "/tmp/fsr-simd-full-exact-before-r2/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 12.971015628136229
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 13.062443750095554
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 12.879587506176904
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "exact",
+      "version": "4.1.1",
+      "profile": "exact",
+      "variant": "before",
+      "shaderRoot": "/tmp/fsr-simd-before",
+      "round": 3,
+      "run_json": "/tmp/fsr-simd-full-exact-before-r3/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 10.791243751737056
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 10.799281252548099
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 10.783206250926014
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "exact",
+      "version": "4.1.1",
+      "profile": "exact",
+      "variant": "after",
+      "shaderRoot": "/Users/pozitiv4ik/Documents/fsr4mac/firsttest",
+      "round": 3,
+      "run_json": "/tmp/fsr-simd-full-exact-after-r3/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 10.617107291909633
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 10.612918747938238
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 10.621295835881028
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "lossy412",
+      "version": "4.1.1",
+      "profile": "lossy2",
+      "variant": "before",
+      "shaderRoot": "/tmp/fsr-simd-before",
+      "round": 3,
+      "run_json": "/tmp/fsr-simd-full-lossy412-before-r3/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 6.3306958341854624
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 11.188962501182687
+      },
+      "full": {
+        "count": 0
+      },
+      "reuse": {
+        "count": 20,
+        "mean_ms": 1.4724291671882384
+      }
+    },
+    {
+      "name": "lossy412",
+      "version": "4.1.1",
+      "profile": "lossy2",
+      "variant": "after",
+      "shaderRoot": "/Users/pozitiv4ik/Documents/fsr4mac/firsttest",
+      "round": 3,
+      "run_json": "/tmp/fsr-simd-full-lossy412-after-r3/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 5.781811455381103
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 9.921864578791428
+      },
+      "full": {
+        "count": 0
+      },
+      "reuse": {
+        "count": 20,
+        "mean_ms": 1.6417583319707774
+      }
+    },
+    {
+      "name": "lite",
+      "version": "4.1.2",
+      "profile": "int8-lite",
+      "variant": "before",
+      "shaderRoot": "/tmp/fsr-simd-before",
+      "round": 3,
+      "run_json": "/tmp/fsr-simd-full-lite-before-r3/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 5.7035156241909135
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 6.033879166352563
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 5.373152082029264
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "lite",
+      "version": "4.1.2",
+      "profile": "int8-lite",
+      "variant": "after",
+      "shaderRoot": "/Users/pozitiv4ik/Documents/fsr4mac/firsttest",
+      "round": 3,
+      "run_json": "/tmp/fsr-simd-full-lite-after-r3/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 5.718418749165721
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 6.07344166492112
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 5.363395833410323
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "lite",
+      "version": "4.1.2",
+      "profile": "int8-lite",
+      "variant": "after",
+      "shaderRoot": "/Users/pozitiv4ik/Documents/fsr4mac/firsttest",
+      "round": 4,
+      "run_json": "/tmp/fsr-simd-full-lite-after-r4/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 5.540583334368421
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 5.6917666704976
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 5.3893999982392415
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "lite",
+      "version": "4.1.2",
+      "profile": "int8-lite",
+      "variant": "before",
+      "shaderRoot": "/tmp/fsr-simd-before",
+      "round": 4,
+      "run_json": "/tmp/fsr-simd-full-lite-before-r4/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 6.070779166475404
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 6.373960417113267
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 5.767597915837541
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "lossy412",
+      "version": "4.1.1",
+      "profile": "lossy2",
+      "variant": "after",
+      "shaderRoot": "/Users/pozitiv4ik/Documents/fsr4mac/firsttest",
+      "round": 4,
+      "run_json": "/tmp/fsr-simd-full-lossy412-after-r4/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 5.867302084516268
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 10.274531252798624
+      },
+      "full": {
+        "count": 0
+      },
+      "reuse": {
+        "count": 20,
+        "mean_ms": 1.460072916233912
+      }
+    },
+    {
+      "name": "lossy412",
+      "version": "4.1.1",
+      "profile": "lossy2",
+      "variant": "before",
+      "shaderRoot": "/tmp/fsr-simd-before",
+      "round": 4,
+      "run_json": "/tmp/fsr-simd-full-lossy412-before-r4/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 6.776364587130956
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 11.932958338002209
+      },
+      "full": {
+        "count": 0
+      },
+      "reuse": {
+        "count": 20,
+        "mean_ms": 1.619770836259704
+      }
+    },
+    {
+      "name": "exact",
+      "version": "4.1.1",
+      "profile": "exact",
+      "variant": "after",
+      "shaderRoot": "/Users/pozitiv4ik/Documents/fsr4mac/firsttest",
+      "round": 4,
+      "run_json": "/tmp/fsr-simd-full-exact-after-r4/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 13.902266664081253
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 13.890712497232016
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 13.91382083093049
+      },
+      "reuse": {
+        "count": 0
+      }
+    },
+    {
+      "name": "exact",
+      "version": "4.1.1",
+      "profile": "exact",
+      "variant": "before",
+      "shaderRoot": "/tmp/fsr-simd-before",
+      "round": 4,
+      "run_json": "/tmp/fsr-simd-full-exact-before-r4/run.json",
+      "all": {
+        "count": 40,
+        "mean_ms": 10.79440000030445
+      },
+      "reset": {
+        "count": 20,
+        "mean_ms": 10.830897916457616
+      },
+      "full": {
+        "count": 20,
+        "mean_ms": 10.757902084151283
+      },
+      "reuse": {
+        "count": 0
+      }
+    }
+  ]
+}

@@ -364,13 +364,13 @@ FSR411_FNB(fsr411_ct32_16x1_sg1, 32, 16, 1, true, 1)
 #endif
 
 namespace fsr411_chain {
-template <uint I, uint COUNT, bool CONV, class Source, class Destination>
+template <uint I, uint COUNT, bool CONV, uint TW, class Source, class Destination>
 __attribute__((always_inline)) inline bool matching_elements(thread Source &src, thread Destination &dst) {
     const auto s = src.get_multidimensional_index(I);
     const auto d = dst.get_multidimensional_index(I);
     bool matches = src.is_valid_element(I) && dst.is_valid_element(I);
     if constexpr (CONV)
-        matches = matches && s[0] == d[0] && s[1] + 32 * s[2] == d[1] && s[3] == 0;
+        matches = matches && s[0] == d[0] && s[1] + int(TW) * s[2] == d[1] && s[3] == 0;
     else
         matches = matches && s[0] == d[0] && s[1] == d[1];
     // The vector quantizer loads one bias quartet for four adjacent channels.
@@ -380,14 +380,14 @@ __attribute__((always_inline)) inline bool matching_elements(thread Source &src,
         if constexpr (CONV) matches = matches && s[2] == first[2] && s[3] == first[3];
     } else matches = matches && (s[0] & 3) == 0;
     if constexpr (I + 1u < COUNT)
-        matches = matching_elements<I + 1u, COUNT, CONV>(src, dst) && matches;
+        matches = matching_elements<I + 1u, COUNT, CONV, TW>(src, dst) && matches;
     return matches;
 }
 
-template <uint COUNT, bool CONV, class Source, class Destination>
+template <uint COUNT, bool CONV, uint TW, class Source, class Destination>
 __attribute__((always_inline)) inline bool matching_layout(thread Source &src, thread Destination &dst) {
     bool matches = !FSR411_CHAIN_FORCE_FALLBACK && src.get_capacity() == COUNT && dst.get_capacity() == COUNT;
-    if (matches) matches = matching_elements<0, COUNT, CONV>(src, dst);
+    if (matches) matches = matching_elements<0, COUNT, CONV, TW>(src, dst);
     return simd_all(matches);
 }
 
@@ -406,12 +406,12 @@ __attribute__((always_inline)) inline void quantize_into(thread Source &src, thr
         quantize_into<I + 4u, COUNT, RELU>(src, dst, weights, bias_offset, q);
 }
 
-template <uint I, class Result>
+template <uint I, uint TW, uint TH, class Result>
 __attribute__((always_inline)) inline void store_scalar(thread Result &result, device uchar *scratch,
     device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
     if (result.is_valid_element(I)) {
         const auto c = result.get_multidimensional_index(I);
-        const uint channel = uint(c[0]), x = group.x * 32u + uint(c[1]), y = group.y;
+        const uint channel = uint(c[0]), x = group.x * TW + uint(c[1]) % TW, y = group.y * TH + uint(c[1]) / TW;
         if (x < p.output.width && y < p.output.height && channel < 16u) {
             const int bias = p.biases[2] == fsr411::kNoOffset ? 0 : *(device int *)(weights + p.biases[2] + channel * 4u);
             int residual = 0;
@@ -423,7 +423,7 @@ __attribute__((always_inline)) inline void store_scalar(thread Result &result, d
     }
 }
 
-template <uint I, uint COUNT, class Result>
+template <uint I, uint COUNT, uint TW, uint TH, class Result>
 __attribute__((always_inline)) inline void store_result(thread Result &result, device uchar *scratch,
     device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
     const auto c0 = result.get_multidimensional_index(I);
@@ -435,7 +435,7 @@ __attribute__((always_inline)) inline void store_result(thread Result &result, d
         && (c0[0] & 3) == 0 && c1[0] == c0[0] + 1 && c2[0] == c0[0] + 2 && c3[0] == c0[0] + 3
         && c1[1] == c0[1] && c2[1] == c0[1] && c3[1] == c0[1];
     if (quartet) {
-        const uint channel = uint(c0[0]), x = group.x * 32u + uint(c0[1]), y = group.y;
+        const uint channel = uint(c0[0]), x = group.x * TW + uint(c0[1]) % TW, y = group.y * TH + uint(c0[1]) / TW;
         if (x < p.output.width && y < p.output.height) {
             const int4 bias = fsr411_gpu::load_bias(weights, p.biases[2], channel);
             int4 residual(0);
@@ -446,24 +446,26 @@ __attribute__((always_inline)) inline void store_result(thread Result &result, d
             *(device uint *)(scratch + fsr411::tensor_address(p.output, x, y, channel)) = value;
         }
     } else {
-        store_scalar<I>(result, scratch, weights, p, group);
-        store_scalar<I + 1u>(result, scratch, weights, p, group);
-        store_scalar<I + 2u>(result, scratch, weights, p, group);
-        store_scalar<I + 3u>(result, scratch, weights, p, group);
+        store_scalar<I, TW, TH>(result, scratch, weights, p, group);
+        store_scalar<I + 1u, TW, TH>(result, scratch, weights, p, group);
+        store_scalar<I + 2u, TW, TH>(result, scratch, weights, p, group);
+        store_scalar<I + 3u, TW, TH>(result, scratch, weights, p, group);
     }
     if constexpr (I + 4u < COUNT)
-        store_result<I + 4u, COUNT>(result, scratch, weights, p, group);
+        store_result<I + 4u, COUNT, TW, TH>(result, scratch, weights, p, group);
 }
 
+template <uint TW = 32, uint TH = 1>
 __attribute__((always_inline)) inline bool cnb(device uchar *scratch, device uchar *weights,
     FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
-    constexpr auto expansion_descriptor = matmul2d_descriptor(32, 32, 16, false, false, false, matmul2d_descriptor::mode::multiply);
-    constexpr auto projection_descriptor = matmul2d_descriptor(32, 16, 32, false, false, false, matmul2d_descriptor::mode::multiply);
+    constexpr uint T = TW * TH;
+    constexpr auto expansion_descriptor = matmul2d_descriptor(T, 32, 16, false, false, false, matmul2d_descriptor::mode::multiply);
+    constexpr auto projection_descriptor = matmul2d_descriptor(T, 16, 32, false, false, false, matmul2d_descriptor::mode::multiply);
     matmul2d<expansion_descriptor, execution_simdgroup> expansion;
     matmul2d<projection_descriptor, execution_simdgroup> projection;
-    auto projection_input = projection.get_left_input_cooperative_tensor<int8_t, int8_t, int>();
+    auto projection_input = projection.template get_left_input_cooperative_tensor<int8_t, int8_t, int>();
     {
-        auto expansion_input = expansion.get_left_input_cooperative_tensor<int8_t, int8_t, int>();
+        auto expansion_input = expansion.template get_left_input_cooperative_tensor<int8_t, int8_t, int>();
         {
             auto input = tensor<device int8_t, dextents<int,4>, tensor_inline>(
                 (device int8_t *)(scratch + fsr411::tensor_address(p.input, 0, 0, 0)),
@@ -472,29 +474,29 @@ __attribute__((always_inline)) inline bool cnb(device uchar *scratch, device uch
             auto weight = tensor<device int8_t, extents<int,16,16,3,3>, tensor_inline>(
                 (device int8_t *)(weights + p.weights[0]), extents<int,16,16,3,3>());
             constexpr auto descriptor = convolution2d_descriptor(
-                int4(16,32,1,1), int4(16,FSR411_MAXW,FSR411_MAXH,1), int2(3),
+                int4(16,TW,TH,1), int4(16,FSR411_MAXW,FSR411_MAXH,1), int2(3),
                 convolution2d_activation_layout::nhwc, convolution2d_weights_layout::hwio,
                 int2(1), int2(1), 1, false, convolution2d_descriptor::mode::multiply);
             convolution2d<descriptor, execution_simdgroup> convolution;
-            auto result = convolution.get_destination_cooperative_tensor<decltype(input), decltype(weight), int>();
-            if (!matching_layout<16, true>(result, expansion_input)) return false;
-            convolution.set_offsets(int2(group * uint2(32,1)));
+            auto result = convolution.template get_destination_cooperative_tensor<decltype(input), decltype(weight), int>();
+            if (!matching_layout<T / 2u, true, TW>(result, expansion_input)) return false;
+            convolution.set_offsets(int2(group * uint2(TW,TH)));
             convolution.run(input, weight, result);
-            quantize_into<0, 16, false>(result, expansion_input, weights, p.biases[0], p.q[0]);
+            quantize_into<0, T / 2u, false>(result, expansion_input, weights, p.biases[0], p.q[0]);
         }
         auto weight = tensor<device int8_t, extents<int,32,16>, tensor_inline>(
             (device int8_t *)(weights + p.weights[1]), extents<int,32,16>());
-        auto result = expansion.get_destination_cooperative_tensor<decltype(expansion_input), decltype(weight), int>();
-        if (!matching_layout<32, false>(result, projection_input)) return false;
+        auto result = expansion.template get_destination_cooperative_tensor<decltype(expansion_input), decltype(weight), int>();
+        if (!matching_layout<T, false, TW>(result, projection_input)) return false;
         expansion.run(expansion_input, weight, result);
-        quantize_into<0, 32, true>(result, projection_input, weights, p.biases[1], p.q[1]);
+        quantize_into<0, T, true>(result, projection_input, weights, p.biases[1], p.q[1]);
     }
     auto weight = tensor<device int8_t, extents<int,16,32>, tensor_inline>(
         (device int8_t *)(weights + p.weights[2]), extents<int,16,32>());
-    auto result = projection.get_destination_cooperative_tensor<decltype(projection_input), decltype(weight), int>();
-    if (!simd_all(result.get_capacity() == 16u)) return false;
+    auto result = projection.template get_destination_cooperative_tensor<decltype(projection_input), decltype(weight), int>();
+    if (!simd_all(result.get_capacity() == T / 2u)) return false;
     projection.run(projection_input, weight, result);
-    store_result<0,16>(result, scratch, weights, p, group);
+    store_result<0,T / 2u,TW,TH>(result, scratch, weights, p, group);
     return true;
 }
 } // namespace fsr411_chain
@@ -544,88 +546,98 @@ __attribute__((always_inline)) inline bool matching_layout(thread Source &src, t
     return simd_all(matches);
 }
 
-template <uint I, class Source, class Destination>
-__attribute__((always_inline)) inline bool concat_element(thread Source &src, thread Destination &dst) {
+template <uint I, uint COUNT, uint TW, uint TH, uint NF, class Source, class Destination>
+__attribute__((always_inline)) inline bool concat_element(thread Source &src, thread Destination &dst, uint bank) {
     const auto s = src.get_multidimensional_index(I);
-    const auto lower = dst.get_multidimensional_index(I);
-    const auto upper = dst.get_multidimensional_index(I + 8u);
-    bool matches = src.is_valid_element(I) && dst.is_valid_element(I) && dst.is_valid_element(I + 8u)
-        && s[0] >= 0 && s[0] < 16 && s[1] >= 0 && s[1] < 16 && s[2] == 0 && s[3] == 0
-        && lower[0] == s[0] && lower[1] == s[1]
-        && upper[0] == s[0] + 16 && upper[1] == s[1];
-    if constexpr ((I & 3u) == 0u) {
-        matches = matches && (s[0] & 3) == 0;
-    } else {
+    const uint target = bank * COUNT + I;
+    const auto d = dst.get_multidimensional_index(target);
+    bool matches = src.is_valid_element(I) && dst.is_valid_element(target)
+        && s[0] >= 0 && s[0] < 16 && s[1] >= 0 && s[1] < int(TW)
+        && s[2] >= 0 && s[2] < int(TH) && s[3] == 0
+        && d[0] == s[0] + int(bank * 16u) && d[1] == s[1] + int(TW) * s[2];
+    if constexpr ((I & 3u) == 0u) matches = matches && (s[0] & 3) == 0;
+    else {
         const auto first = src.get_multidimensional_index(I & ~3u);
         matches = matches && s[0] == first[0] + int(I & 3u) && s[1] == first[1]
             && s[2] == first[2] && s[3] == first[3];
     }
-    if constexpr (I + 1u < 8u) matches = concat_element<I + 1u>(src, dst) && matches;
+    if constexpr (I + 1u < COUNT) matches = concat_element<I + 1u,COUNT,TW,TH,NF>(src,dst,bank) && matches;
     return matches;
 }
 
-template <class Source, class Destination>
-__attribute__((always_inline)) inline bool concat_layout(thread Source &src, thread Destination &dst) {
-    bool matches = !FSR411_CHAIN_FORCE_FALLBACK && src.get_capacity() == 8u && dst.get_capacity() == 16u;
-    if (matches) matches = concat_element<0>(src, dst);
+template <uint I, uint COUNT, uint NF, uint T, class Tensor>
+__attribute__((always_inline)) inline bool bypass_element(thread Tensor &value) {
+    const auto c = value.get_multidimensional_index(I);
+    bool matches = quartet_element<I>(value) && c[0] >= int(NF / 2u) && c[0] < int(NF)
+        && c[1] >= 0 && c[1] < int(T);
+    if constexpr (I + 1u < COUNT) matches = bypass_element<I + 1u,COUNT,NF,T>(value) && matches;
+    return matches;
+}
+
+template <uint NF, uint TW, uint TH, class Source, class Destination>
+__attribute__((always_inline)) inline bool concat_layout(thread Source &src, thread Destination &dst, uint bank) {
+    constexpr uint T = TW * TH, COUNT = T / 2u, TOTAL = T * NF / 32u;
+    bool matches = !FSR411_CHAIN_FORCE_FALLBACK && src.get_capacity() == COUNT && dst.get_capacity() == TOTAL;
+    if (matches) matches = concat_element<0,COUNT,TW,TH,NF>(src,dst,bank)
+        && bypass_element<TOTAL / 2u,TOTAL,NF,T>(dst);
     return simd_all(matches);
 }
 
 template <uint I, uint COUNT, bool RELU, class Source, class Destination>
 __attribute__((always_inline)) inline void quantize_into(thread Source &src, thread Destination &dst,
-    device uchar *weights, uint bias_offset, fsr411::Epilogue q) {
+    device uchar *weights, uint bias_offset, fsr411::Epilogue q, uint target_offset = 0, uint bias_channel = 0) {
     const auto c = src.get_multidimensional_index(I);
     const int4 accumulator(src[I], src[I + 1u], src[I + 2u], src[I + 3u]);
-    const int4 bias = fsr411_gpu::load_bias(weights, bias_offset, uint(c[0]));
+    const int4 bias = fsr411_gpu::load_bias(weights, bias_offset, uint(c[0]) + bias_channel);
     const char4 value = as_type<char4>(fsr411_gpu::quantize_cnb_intermediate<RELU>(accumulator, bias, q));
-    dst[I] = value.x;
-    dst[I + 1u] = value.y;
-    dst[I + 2u] = value.z;
-    dst[I + 3u] = value.w;
+    dst[target_offset + I] = value.x;
+    dst[target_offset + I + 1u] = value.y;
+    dst[target_offset + I + 2u] = value.z;
+    dst[target_offset + I + 3u] = value.w;
     if constexpr (I + 4u < COUNT)
-        quantize_into<I + 4u, COUNT, RELU>(src, dst, weights, bias_offset, q);
+        quantize_into<I + 4u, COUNT, RELU>(src, dst, weights, bias_offset, q, target_offset, bias_channel);
 }
 
-template <uint I, class Destination>
+template <uint I, uint TW, uint TH, uint NF, class Destination>
 __attribute__((always_inline)) inline void load_bypass(thread Destination &dst, device uchar *scratch,
     FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
     const auto c = dst.get_multidimensional_index(I);
-    const uint channel = uint(c[0]), x = group.x * 16u + uint(c[1]), y = group.y;
+    const uint channel = uint(c[0]), x = group.x * TW + uint(c[1]) % TW, y = group.y * TH + uint(c[1]) / TW;
     const char4 value = char4(fsr411_gpu::read_pixel(scratch, p.input, x, y, channel));
     dst[I] = value.x;
     dst[I + 1u] = value.y;
     dst[I + 2u] = value.z;
     dst[I + 3u] = value.w;
-    if constexpr (I + 4u < 16u) load_bypass<I + 4u>(dst, scratch, p, group);
+    if constexpr (I + 4u < TW * TH * NF / 32u) load_bypass<I + 4u, TW, TH, NF>(dst, scratch, p, group);
 }
 
-template <uint I, class Source, class Destination>
+template <uint I, uint TW, uint TH, uint NF, class Source, class Destination>
 __attribute__((always_inline)) inline void residual_into(thread Source &src, thread Destination &dst,
     device uchar *scratch, device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
     const auto c = src.get_multidimensional_index(I);
-    const uint channel = uint(c[0]), x = group.x * 16u + uint(c[1]), y = group.y;
+    const uint channel = uint(c[0]), x = group.x * TW + uint(c[1]) % TW, y = group.y * TH + uint(c[1]) / TW;
     const int4 accumulator(src[I], src[I + 1u], src[I + 2u], src[I + 3u]);
     const int4 bias = fsr411_gpu::load_bias(weights, p.biases[2], channel);
     const int4 residual = fsr411_gpu::read_pixel(scratch, p.input, x, y, channel);
-    const char4 value = as_type<char4>(fsr411_gpu::quantize(accumulator, bias, residual, channel < 16u ? p.q[2] : p.q[3]));
+    const char4 value = as_type<char4>(fsr411_gpu::quantize(accumulator, bias, residual, channel < NF / 2u ? p.q[2] : p.q[3]));
     dst[I] = value.x;
     dst[I + 1u] = value.y;
     dst[I + 2u] = value.z;
     dst[I + 3u] = value.w;
-    if constexpr (I + 4u < 16u) residual_into<I + 4u>(src, dst, scratch, weights, p, group);
+    if constexpr (I + 4u < TW * TH * NF / 32u) residual_into<I + 4u, TW, TH, NF>(src, dst, scratch, weights, p, group);
 }
 
-template <uint I, bool UPSAMPLE, class Result>
+template <uint I, bool UPSAMPLE, uint TW, uint TH, uint NF, class Result>
 __attribute__((always_inline)) inline void store_scalar(thread Result &result, device uchar *scratch,
     device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
     if (result.is_valid_element(I)) {
         const auto c = result.get_multidimensional_index(I);
-        const uint raw_channel = uint(c[0]), ix = group.x * 16u + uint(c[1]), iy = group.y;
-        const uint channel = UPSAMPLE ? raw_channel % 16u : raw_channel;
-        const uint tap = raw_channel / 16u;
+        const uint raw_channel = uint(c[0]), ix = group.x * TW + uint(c[1]) % TW, iy = group.y * TH + uint(c[1]) / TW;
+        const uint channel = UPSAMPLE ? raw_channel % (NF / 2u) : raw_channel;
+        const uint tap = raw_channel / (NF / 2u);
         const uint x = UPSAMPLE ? ix * 2u + (tap & 1u) : ix;
         const uint y = UPSAMPLE ? iy * 2u + (tap >> 1u) : iy;
-        if (raw_channel >= (UPSAMPLE ? 64u : 32u) || x >= p.output.width || y >= p.output.height) return;
+        if (raw_channel >= (UPSAMPLE ? 2u * NF : NF) || x >= p.output.width || y >= p.output.height) return;
         if (UPSAMPLE && (ix >= p.input.width || iy >= p.input.height)) return;
         const uint bias_offset = UPSAMPLE ? p.biases[3] : p.biases[2];
         const int bias = bias_offset == fsr411::kNoOffset ? 0 : *(device int *)(weights + bias_offset + channel * 4u);
@@ -633,13 +645,13 @@ __attribute__((always_inline)) inline void store_scalar(thread Result &result, d
         int residual = 0;
         if (x < residual_tensor.width && y < residual_tensor.height)
             residual = *(device char *)(scratch + fsr411::tensor_address(residual_tensor, x, y, channel));
-        const fsr411::Epilogue q = UPSAMPLE ? (channel < 8u ? p.q[4] : p.q[5]) : (channel < 16u ? p.q[2] : p.q[3]);
+        const fsr411::Epilogue q = UPSAMPLE ? (channel < NF / 4u ? p.q[4] : p.q[5]) : (channel < NF / 2u ? p.q[2] : p.q[3]);
         const int value = fsr411::finish(result[I], bias, residual, q);
         *(device char *)(scratch + fsr411::tensor_address(p.output, x, y, channel)) = char(value);
     }
 }
 
-template <uint I, uint COUNT, bool UPSAMPLE, class Result>
+template <uint I, uint COUNT, bool UPSAMPLE, uint TW, uint TH, uint NF, class Result>
 __attribute__((always_inline)) inline void store_result(thread Result &result, device uchar *scratch,
     device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
     const auto c0 = result.get_multidimensional_index(I);
@@ -651,86 +663,90 @@ __attribute__((always_inline)) inline void store_result(thread Result &result, d
         && (c0[0] & 3) == 0 && c1[0] == c0[0] + 1 && c2[0] == c0[0] + 2 && c3[0] == c0[0] + 3
         && c1[1] == c0[1] && c2[1] == c0[1] && c3[1] == c0[1];
     if (quartet) {
-        const uint raw_channel = uint(c0[0]), ix = group.x * 16u + uint(c0[1]), iy = group.y;
-        const uint channel = UPSAMPLE ? raw_channel % 16u : raw_channel;
-        const uint tap = raw_channel / 16u;
+        const uint raw_channel = uint(c0[0]), ix = group.x * TW + uint(c0[1]) % TW, iy = group.y * TH + uint(c0[1]) / TW;
+        const uint channel = UPSAMPLE ? raw_channel % (NF / 2u) : raw_channel;
+        const uint tap = raw_channel / (NF / 2u);
         const uint x = UPSAMPLE ? ix * 2u + (tap & 1u) : ix;
         const uint y = UPSAMPLE ? iy * 2u + (tap >> 1u) : iy;
-        if (raw_channel < (UPSAMPLE ? 64u : 32u) && x < p.output.width && y < p.output.height
+        if (raw_channel < (UPSAMPLE ? 2u * NF : NF) && x < p.output.width && y < p.output.height
             && (!UPSAMPLE || (ix < p.input.width && iy < p.input.height))) {
             const int4 accumulator(result[I], result[I + 1u], result[I + 2u], result[I + 3u]);
             const int4 bias = fsr411_gpu::load_bias(weights, UPSAMPLE ? p.biases[3] : p.biases[2], channel);
             const int4 residual = fsr411_gpu::read_pixel(scratch, UPSAMPLE ? p.skip : p.input, x, y, channel);
-            const fsr411::Epilogue q = UPSAMPLE ? (channel < 8u ? p.q[4] : p.q[5]) : (channel < 16u ? p.q[2] : p.q[3]);
+            const fsr411::Epilogue q = UPSAMPLE ? (channel < NF / 4u ? p.q[4] : p.q[5]) : (channel < NF / 2u ? p.q[2] : p.q[3]);
             const uint value = fsr411_gpu::quantize(accumulator, bias, residual, q);
             *(device uint *)(scratch + fsr411::tensor_address(p.output, x, y, channel)) = value;
         }
     } else {
-        store_scalar<I, UPSAMPLE>(result, scratch, weights, p, group);
-        store_scalar<I + 1u, UPSAMPLE>(result, scratch, weights, p, group);
-        store_scalar<I + 2u, UPSAMPLE>(result, scratch, weights, p, group);
-        store_scalar<I + 3u, UPSAMPLE>(result, scratch, weights, p, group);
+        store_scalar<I, UPSAMPLE, TW, TH, NF>(result, scratch, weights, p, group);
+        store_scalar<I + 1u, UPSAMPLE, TW, TH, NF>(result, scratch, weights, p, group);
+        store_scalar<I + 2u, UPSAMPLE, TW, TH, NF>(result, scratch, weights, p, group);
+        store_scalar<I + 3u, UPSAMPLE, TW, TH, NF>(result, scratch, weights, p, group);
     }
     if constexpr (I + 4u < COUNT)
-        store_result<I + 4u, COUNT, UPSAMPLE>(result, scratch, weights, p, group);
+        store_result<I + 4u, COUNT, UPSAMPLE, TW, TH, NF>(result, scratch, weights, p, group);
 }
 
-template <bool UPSAMPLE>
+template <bool UPSAMPLE, uint TW = 16, uint TH = 1, uint NF = 32>
 __attribute__((always_inline)) inline bool fnb(device uchar *scratch, device uchar *weights,
     FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
-    constexpr auto expansion_descriptor = matmul2d_descriptor(16, 64, 32, false, false, false, matmul2d_descriptor::mode::multiply);
-    constexpr auto projection_descriptor = matmul2d_descriptor(16, 32, 64, false, false, false, matmul2d_descriptor::mode::multiply);
+    static_assert(NF == 32u || NF == 64u, "Only imported NF32/NF64 blocks are supported");
+    constexpr uint T = TW * TH, C = T * NF / 32u;
+    constexpr auto expansion_descriptor = matmul2d_descriptor(T, 2u * NF, NF, false, false, false, matmul2d_descriptor::mode::multiply);
+    constexpr auto projection_descriptor = matmul2d_descriptor(T, NF, 2u * NF, false, false, false, matmul2d_descriptor::mode::multiply);
     matmul2d<expansion_descriptor, execution_simdgroup> expansion;
     matmul2d<projection_descriptor, execution_simdgroup> projection;
     auto projection_input = projection.template get_left_input_cooperative_tensor<int8_t, int8_t, int>();
     {
         auto expansion_input = expansion.template get_left_input_cooperative_tensor<int8_t, int8_t, int>();
-        {
+
+#pragma unroll
+        for (uint bank = 0; bank < NF / 32u; ++bank) {
             auto input = tensor<device int8_t, dextents<int,4>, tensor_inline>(
-                (device int8_t *)(scratch + fsr411::tensor_address(p.input, 0, 0, 0)),
+                (device int8_t *)(scratch + fsr411::tensor_address(p.input, 0, 0, bank * 16u)),
                 dextents<int,4>(16, int(p.input.width), int(p.input.height), 1),
                 array<int,4>{1, int(p.input.strideX), int(p.input.strideY), int(p.input.strideY * p.input.height)});
             auto weight = tensor<device int8_t, extents<int,16,16,3,3>, tensor_inline>(
-                (device int8_t *)(weights + p.weights[0]), extents<int,16,16,3,3>());
+                (device int8_t *)(weights + p.weights[0] + bank * 9u * 16u * 16u), extents<int,16,16,3,3>());
             constexpr auto descriptor = convolution2d_descriptor(
-                int4(16,16,1,1), int4(16,FSR411_MAXW,FSR411_MAXH,1), int2(3),
+                int4(16,TW,TH,1), int4(16,FSR411_MAXW,FSR411_MAXH,1), int2(3),
                 convolution2d_activation_layout::nhwc, convolution2d_weights_layout::hwio,
                 int2(1), int2(1), 1, false, convolution2d_descriptor::mode::multiply);
             convolution2d<descriptor, execution_simdgroup> convolution;
             auto result = convolution.template get_destination_cooperative_tensor<decltype(input), decltype(weight), int>();
-            if (!concat_layout(result, expansion_input)) return false;
-            convolution.set_offsets(int2(group * uint2(16,1)));
+            if (!concat_layout<NF,TW,TH>(result, expansion_input, bank)) return false;
+            convolution.set_offsets(int2(group * uint2(TW,TH)));
             convolution.run(input, weight, result);
-            quantize_into<0, 8, false>(result, expansion_input, weights, p.biases[0], p.q[0]);
+            quantize_into<0, T / 2u, false>(result, expansion_input, weights, p.biases[0], p.q[0], bank * T / 2u, bank * 16u);
         }
-        load_bypass<8>(expansion_input, scratch, p, group);
-        auto weight = tensor<device int8_t, extents<int,64,32>, tensor_inline>(
-            (device int8_t *)(weights + p.weights[1]), extents<int,64,32>());
+        load_bypass<C / 2u,TW,TH,NF>(expansion_input, scratch, p, group);
+        auto weight = tensor<device int8_t, extents<int,2u * NF,NF>, tensor_inline>(
+            (device int8_t *)(weights + p.weights[1]), extents<int,2u * NF,NF>());
         auto result = expansion.template get_destination_cooperative_tensor<decltype(expansion_input), decltype(weight), int>();
-        if (!matching_layout<32>(result, projection_input)) return false;
+        if (!matching_layout<2u * C>(result, projection_input)) return false;
         expansion.run(expansion_input, weight, result);
-        quantize_into<0, 32, true>(result, projection_input, weights, p.biases[1], p.q[1]);
+        quantize_into<0, 2u * C, true>(result, projection_input, weights, p.biases[1], p.q[1]);
     }
-    auto weight = tensor<device int8_t, extents<int,32,64>, tensor_inline>(
-        (device int8_t *)(weights + p.weights[2]), extents<int,32,64>());
+    auto weight = tensor<device int8_t, extents<int,NF,2u * NF>, tensor_inline>(
+        (device int8_t *)(weights + p.weights[2]), extents<int,NF,2u * NF>());
     auto result = projection.template get_destination_cooperative_tensor<decltype(projection_input), decltype(weight), int>();
     if constexpr (UPSAMPLE) {
-        constexpr auto descriptor = matmul2d_descriptor(16, 64, 32, false, false, false, matmul2d_descriptor::mode::multiply);
+        constexpr auto descriptor = matmul2d_descriptor(T, 2u * NF, NF, false, false, false, matmul2d_descriptor::mode::multiply);
         matmul2d<descriptor, execution_simdgroup> transpose;
         auto transpose_input = transpose.template get_left_input_cooperative_tensor<int8_t, int8_t, int>();
-        if (!matching_layout<16>(result, transpose_input)) return false;
+        if (!matching_layout<C>(result, transpose_input)) return false;
         projection.run(projection_input, weight, result);
-        residual_into<0>(result, transpose_input, scratch, weights, p, group);
-        auto transpose_weight = tensor<device int8_t, extents<int,64,32>, tensor_inline>(
-            (device int8_t *)(weights + p.weights[3]), extents<int,64,32>());
+        residual_into<0,TW,TH,NF>(result, transpose_input, scratch, weights, p, group);
+        auto transpose_weight = tensor<device int8_t, extents<int,2u * NF,NF>, tensor_inline>(
+            (device int8_t *)(weights + p.weights[3]), extents<int,2u * NF,NF>());
         auto transpose_result = transpose.template get_destination_cooperative_tensor<decltype(transpose_input), decltype(transpose_weight), int>();
-        if (!simd_all(transpose_result.get_capacity() == 32u)) return false;
+        if (!simd_all(transpose_result.get_capacity() == 2u * C)) return false;
         transpose.run(transpose_input, transpose_weight, transpose_result);
-        store_result<0,32,true>(transpose_result, scratch, weights, p, group);
+        store_result<0,2u * C,true,TW,TH,NF>(transpose_result, scratch, weights, p, group);
     } else {
-        if (!simd_all(result.get_capacity() == 16u)) return false;
+        if (!simd_all(result.get_capacity() == C)) return false;
         projection.run(projection_input, weight, result);
-        store_result<0,16,false>(result, scratch, weights, p, group);
+        store_result<0,C,false,TW,TH,NF>(result, scratch, weights, p, group);
     }
     return true;
 }
@@ -750,3 +766,127 @@ kernel void NAME(device uchar *scratch [[buffer(0)]], device uchar *weights [[bu
 FSR411_FNB_CHAIN(fsr411_fnb32_coop_chain_16x1, false)
 FSR411_FNB_CHAIN(fsr411_ct32_coop_chain_16x1, true)
 #undef FSR411_FNB_CHAIN
+
+// Register-resident stride-2 convolutions. Each SIMD owns a small output
+// tile and gathers its four INT8 taps directly into the matmul left operand.
+// No activation/accumulator threadgroup buffers or barriers are needed.
+namespace fsr411_ds_chain {
+template <uint I, uint COUNT, class Tensor>
+__attribute__((always_inline)) inline bool quartet_layout(thread Tensor &value) {
+    bool matches = fsr411_fnb_chain::quartet_element<I>(value);
+    if constexpr (I + 1u < COUNT) matches = quartet_layout<I + 1u, COUNT>(value) && matches;
+    return matches;
+}
+
+template <uint COUNT, class Tensor>
+__attribute__((always_inline)) inline bool valid_layout(thread Tensor &value) {
+    bool matches = !FSR411_CHAIN_FORCE_FALLBACK && value.get_capacity() == COUNT;
+    if (matches) matches = quartet_layout<0, COUNT>(value);
+    return simd_all(matches);
+}
+
+template <uint I, uint COUNT, uint CIN, uint TW, uint TH, class Tensor>
+__attribute__((always_inline)) inline void load_input(thread Tensor &value, device uchar *scratch,
+    FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    const auto c = value.get_multidimensional_index(I);
+    const uint tap = uint(c[0]) / CIN, channel = uint(c[0]) % CIN, pixel = uint(c[1]);
+    const uint x = 2u * (group.x * TW + pixel % TW) + (tap & 1u);
+    const uint y = 2u * (group.y * TH + pixel / TW) + (tap >> 1u);
+    const char4 v = char4(fsr411_gpu::read_pixel(scratch, p.input, x, y, channel));
+    value[I] = v.x; value[I + 1u] = v.y; value[I + 2u] = v.z; value[I + 3u] = v.w;
+    if constexpr (I + 4u < COUNT) load_input<I + 4u, COUNT, CIN, TW, TH>(value, scratch, p, group);
+}
+
+template <uint I, uint COUNT, uint COUT, uint TW, uint TH, class Tensor>
+__attribute__((always_inline)) inline void store_result(thread Tensor &value, device uchar *scratch,
+    device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    const auto c = value.get_multidimensional_index(I);
+    const uint channel = uint(c[0]), pixel = uint(c[1]);
+    const uint x = group.x * TW + pixel % TW, y = group.y * TH + pixel / TW;
+    if (x < p.output.width && y < p.output.height) {
+        const int4 acc(value[I], value[I + 1u], value[I + 2u], value[I + 3u]);
+        const int4 bias = fsr411_gpu::load_bias(weights, p.biases[0], channel);
+        const uint packed = fsr411_gpu::quantize(acc, bias, int4(0), channel < COUT / 2u ? p.q[4] : p.q[5]);
+        *(device uint *)(scratch + fsr411::tensor_address(p.output, x, y, channel)) = packed;
+    }
+    if constexpr (I + 4u < COUNT) store_result<I + 4u, COUNT, COUT, TW, TH>(value, scratch, weights, p, group);
+}
+
+template <uint CIN, uint COUT, uint TW, uint TH = 1>
+__attribute__((always_inline)) inline bool downsample(device uchar *scratch, device uchar *weights,
+    FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    constexpr uint T = TW * TH, K = 4u * CIN;
+    constexpr auto descriptor = matmul2d_descriptor(T, COUT, K, false, false, false, matmul2d_descriptor::mode::multiply);
+    matmul2d<descriptor, execution_simdgroup> op;
+    auto input = op.template get_left_input_cooperative_tensor<int8_t, int8_t, int>();
+    auto weight = tensor<device int8_t, extents<int,COUT,K>, tensor_inline>(
+        (device int8_t *)(weights + p.weights[0]), extents<int,COUT,K>());
+    auto result = op.template get_destination_cooperative_tensor<decltype(input), decltype(weight), int>();
+    if (!valid_layout<T * K / 32u>(input) || !valid_layout<T * COUT / 32u>(result)) return false;
+    load_input<0,T * K / 32u,CIN,TW,TH>(input, scratch, p, group);
+    op.run(input, weight, result);
+    store_result<0,T * COUT / 32u,COUT,TW,TH>(result, scratch, weights, p, group);
+    return true;
+}
+} // namespace fsr411_ds_chain
+
+#define FSR411_DS_FAST(NAME, CIN, COUT, TW, TH) \
+kernel void NAME(device uchar *scratch [[buffer(0)]], device uchar *weights [[buffer(1)]], \
+    constant fsr411::PassParams &raw [[buffer(2)]], uint2 group [[threadgroup_position_in_grid]]) { \
+    FSR411_LOCAL_PARAMS; \
+    fsr411_ds_chain::downsample<CIN,COUT,TW,TH>(scratch, weights, p, group); \
+}
+FSR411_DS_FAST(fsr411_ds32_coop_fast_16x1, 32, 64, 16, 1)
+#undef FSR411_DS_FAST
+
+// These entry points deliberately have no shared-memory fallback. The host
+// must first run fsr411_mpp_chain_probe and select them only for layouts that
+// pass its SIMD-wide checks. Keep the established entry points above for old
+// caches, unverified devices/toolchains and the explicit opt-out.
+#define FSR411_CNB_FAST(NAME, TW, TH) \
+kernel void NAME(device uchar *scratch [[buffer(0)]], device uchar *weights [[buffer(1)]], \
+    constant fsr411::PassParams &raw [[buffer(2)]], uint2 group [[threadgroup_position_in_grid]]) { \
+    FSR411_LOCAL_PARAMS; \
+    fsr411_chain::cnb<TW,TH>(scratch, weights, p, group); \
+}
+FSR411_CNB_FAST(fsr411_cnb_coop_fast_32x1, 32, 1)
+#undef FSR411_CNB_FAST
+
+#define FSR411_FNB_FAST(NAME, NF, TW, TH, UPSAMPLE) \
+kernel void NAME(device uchar *scratch [[buffer(0)]], device uchar *weights [[buffer(1)]], \
+    constant fsr411::PassParams &raw [[buffer(2)]], uint2 group [[threadgroup_position_in_grid]]) { \
+    FSR411_LOCAL_PARAMS; \
+    fsr411_fnb_chain::fnb<UPSAMPLE,TW,TH,NF>(scratch, weights, p, group); \
+}
+FSR411_FNB_FAST(fsr411_fnb32_coop_fast_16x1, 32, 16, 1, false)
+FSR411_FNB_FAST(fsr411_ct32_coop_fast_16x1, 32, 16, 1, true)
+FSR411_FNB_FAST(fsr411_fnb64_coop_fast_16x1, 64, 16, 1, false)
+FSR411_FNB_FAST(fsr411_ct64_coop_fast_16x1, 64, 16, 1, true)
+#undef FSR411_FNB_FAST
+
+// One SIMD group executes the same layout checks as the real chains, with
+// zero dummy weights and a 1x1 input. Zero output dimensions suppress stores.
+// The caller supplies 16384 initialized bytes at buffer(1), enough for every
+// matrix read; the probe does not access any real model or temporal state.
+constant fsr411::PassParams fsr411_mpp_probe_parameters = {
+    {0,64,64,1,1,64,0}, {}, {}, {0,0,0,0},
+    {fsr411::kNoOffset,fsr411::kNoOffset,fsr411::kNoOffset,fsr411::kNoOffset}, {}
+};
+kernel void fsr411_mpp_chain_probe(device uint *features [[buffer(0)]], device uchar *dummy [[buffer(1)]],
+    uint lane [[thread_index_in_simdgroup]]) {
+#if FSR411_SPECIALIZE
+    const fsr411::PassParams p = fsr411_mpp_probe_parameters;
+#else
+    constant fsr411::PassParams &p = fsr411_mpp_probe_parameters;
+#endif
+    const bool cnb = fsr411_chain::cnb(dummy, dummy, p, uint2(0));
+    const bool fnb32 = fsr411_fnb_chain::fnb<false>(dummy, dummy, p, uint2(0));
+    const bool ct32 = fsr411_fnb_chain::fnb<true>(dummy, dummy, p, uint2(0));
+    const bool fnb64 = fsr411_fnb_chain::fnb<false,16,1,64>(dummy, dummy, p, uint2(0));
+    const bool ct64 = fsr411_fnb_chain::fnb<true,16,1,64>(dummy, dummy, p, uint2(0));
+    const bool ds32 = fsr411_ds_chain::downsample<32,64,16>(dummy, dummy, p, uint2(0));
+    if (!lane) features[0] = (cnb ? fsr411::kMppChainCnb : 0u)
+        | (fnb32 ? fsr411::kMppChainFnb32 : 0u) | (ct32 ? fsr411::kMppChainCt32 : 0u)
+        | (fnb64 ? fsr411::kMppChainFnb64 : 0u) | (ct64 ? fsr411::kMppChainCt64 : 0u)
+        | (ds32 ? fsr411::kMppChainDs32 : 0u);
+}

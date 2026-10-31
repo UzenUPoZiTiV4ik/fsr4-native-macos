@@ -1,0 +1,525 @@
+{
+ "date": "2026-10-31",
+ "device": "Apple M5 (forced --simd; NOT M1-M4 hardware)",
+ "power": "mixed AC/battery; every comparison interleaved, see method",
+ "full_frame_ab": {
+  "tool": "build/tests/fsr411_simd_ab (make bench-fsr-pre-m5)",
+  "method": "one process, two Runtimes (FSR4_SIMD_WINOGRAD=0 vs default), alternating ABBA per frame, 30 rounds, 2-frame reset/jitter sequence like tc_game_balanced, byte-identical output/history/recurrent asserted",
+  "results": [
+   {
+    "case": "1000x648->1712x1112 run 2",
+    "device": "Apple M5",
+    "rounds": 30,
+    "models": [
+     {
+      "model": "lite",
+      "neural_direct_median_ms": 6.4637,
+      "paired_change_percent": -15.5939,
+      "byte_identical": true,
+      "neural_winograd_median_ms": 5.5096
+     },
+     {
+      "model": "exact",
+      "neural_direct_median_ms": 14.3698,
+      "paired_change_percent": -14.3662,
+      "byte_identical": true,
+      "neural_winograd_median_ms": 12.1879
+     },
+     {
+      "model": "lossy2",
+      "neural_direct_median_ms": 13.3672,
+      "paired_change_percent": -15.5844,
+      "byte_identical": true,
+      "neural_winograd_median_ms": 10.9768
+     }
+    ]
+   },
+   {
+    "case": "1280x720->1920x1080",
+    "device": "Apple M5",
+    "rounds": 30,
+    "models": [
+     {
+      "model": "lite",
+      "neural_direct_median_ms": 6.0773,
+      "paired_change_percent": -14.7152,
+      "byte_identical": true,
+      "neural_winograd_median_ms": 4.9629
+     },
+     {
+      "model": "exact",
+      "neural_direct_median_ms": 13.0867,
+      "paired_change_percent": -14.9771,
+      "byte_identical": true,
+      "neural_winograd_median_ms": 11.1134
+     },
+     {
+      "model": "lossy2",
+      "neural_direct_median_ms": 11.8446,
+      "paired_change_percent": -15.2735,
+      "byte_identical": true,
+      "neural_winograd_median_ms": 10.0031
+     }
+    ]
+   }
+  ]
+ },
+ "isolated_passes": {
+  "tool": "build/tests/fsr411_simd_bench --compare-root <HEAD sources> --winograd",
+  "method": "HEAD and current PSOs alternated in one process, 20 rounds x 8 dispatches, 1080 tier, two runs per model; CT32 Winograd entry measured but NOT used in production",
+  "runs": {
+   "lite": [
+    {
+     "1": {
+      "kind": "cnb16",
+      "before_ms": 0.9738,
+      "after_ms": 0.6665,
+      "change_percent": -32.8,
+      "winograd_entry": true
+     },
+     "2": {
+      "kind": "fnb32",
+      "before_ms": 0.4709,
+      "after_ms": 0.3903,
+      "change_percent": -17.3,
+      "winograd_entry": true
+     },
+     "3": {
+      "kind": "ct32",
+      "before_ms": 0.9191,
+      "after_ms": 0.9264,
+      "change_percent": 2.4,
+      "winograd_entry": true
+     },
+     "4": {
+      "kind": "ds16",
+      "before_ms": 0.1579,
+      "after_ms": 0.1596,
+      "change_percent": 1.0,
+      "winograd_entry": false
+     },
+     "post_cnb": {
+      "kind": "cnb16",
+      "before_ms": 1.0149,
+      "after_ms": 0.6441,
+      "change_percent": -36.3,
+      "winograd_entry": true
+     }
+    },
+    {
+     "1": {
+      "kind": "cnb16",
+      "before_ms": 0.9774,
+      "after_ms": 0.6624,
+      "change_percent": -34.2,
+      "winograd_entry": true
+     },
+     "2": {
+      "kind": "fnb32",
+      "before_ms": 0.471,
+      "after_ms": 0.3923,
+      "change_percent": -16.5,
+      "winograd_entry": true
+     },
+     "3": {
+      "kind": "ct32",
+      "before_ms": 0.9188,
+      "after_ms": 0.9465,
+      "change_percent": 3.3,
+      "winograd_entry": true
+     },
+     "4": {
+      "kind": "ds16",
+      "before_ms": 0.1579,
+      "after_ms": 0.1596,
+      "change_percent": 1.1,
+      "winograd_entry": false
+     },
+     "post_cnb": {
+      "kind": "cnb16",
+      "before_ms": 0.9933,
+      "after_ms": 0.662,
+      "change_percent": -34.7,
+      "winograd_entry": true
+     }
+    }
+   ],
+   "exact": [
+    {
+     "1": {
+      "kind": "cnb16",
+      "before_ms": 1.0442,
+      "after_ms": 0.6581,
+      "change_percent": -36.6,
+      "winograd_entry": true
+     },
+     "2": {
+      "kind": "cnb16",
+      "before_ms": 1.0169,
+      "after_ms": 0.6125,
+      "change_percent": -39.8,
+      "winograd_entry": true
+     },
+     "3": {
+      "kind": "ds16",
+      "before_ms": 0.1475,
+      "after_ms": 0.1492,
+      "change_percent": 1.1,
+      "winograd_entry": false
+     },
+     "4": {
+      "kind": "fnb32",
+      "before_ms": 0.4573,
+      "after_ms": 0.4245,
+      "change_percent": -15.4,
+      "winograd_entry": true
+     },
+     "5": {
+      "kind": "fnb32",
+      "before_ms": 0.4651,
+      "after_ms": 0.3752,
+      "change_percent": -17.1,
+      "winograd_entry": true
+     },
+     "6": {
+      "kind": "ds32",
+      "before_ms": 0.1478,
+      "after_ms": 0.1478,
+      "change_percent": -0.1,
+      "winograd_entry": false
+     },
+     "7": {
+      "kind": "fnb64",
+      "before_ms": 0.3914,
+      "after_ms": 0.41,
+      "change_percent": 1.4,
+      "winograd_entry": false
+     },
+     "8": {
+      "kind": "fnb64",
+      "before_ms": 0.3932,
+      "after_ms": 0.3916,
+      "change_percent": -0.1,
+      "winograd_entry": false
+     },
+     "9": {
+      "kind": "ct64",
+      "before_ms": 1.1757,
+      "after_ms": 1.1721,
+      "change_percent": -0.2,
+      "winograd_entry": false
+     },
+     "10": {
+      "kind": "fnb32",
+      "before_ms": 0.4519,
+      "after_ms": 0.3766,
+      "change_percent": -16.6,
+      "winograd_entry": true
+     },
+     "11": {
+      "kind": "ct32",
+      "before_ms": 0.8853,
+      "after_ms": 0.9009,
+      "change_percent": 2.5,
+      "winograd_entry": true
+     },
+     "12": {
+      "kind": "cnb16",
+      "before_ms": 0.9484,
+      "after_ms": 0.6155,
+      "change_percent": -34.3,
+      "winograd_entry": true
+     },
+     "post_cnb": {
+      "kind": "cnb16",
+      "before_ms": 0.9362,
+      "after_ms": 0.6132,
+      "change_percent": -34.4,
+      "winograd_entry": true
+     }
+    },
+    {
+     "1": {
+      "kind": "cnb16",
+      "before_ms": 0.9672,
+      "after_ms": 0.6131,
+      "change_percent": -34.4,
+      "winograd_entry": true
+     },
+     "2": {
+      "kind": "cnb16",
+      "before_ms": 0.9513,
+      "after_ms": 0.6129,
+      "change_percent": -34.5,
+      "winograd_entry": true
+     },
+     "3": {
+      "kind": "ds16",
+      "before_ms": 0.1475,
+      "after_ms": 0.1491,
+      "change_percent": 1.1,
+      "winograd_entry": false
+     },
+     "4": {
+      "kind": "fnb32",
+      "before_ms": 0.4515,
+      "after_ms": 0.3759,
+      "change_percent": -16.8,
+      "winograd_entry": true
+     },
+     "5": {
+      "kind": "fnb32",
+      "before_ms": 0.4518,
+      "after_ms": 0.3757,
+      "change_percent": -16.8,
+      "winograd_entry": true
+     },
+     "6": {
+      "kind": "ds32",
+      "before_ms": 0.1482,
+      "after_ms": 0.1482,
+      "change_percent": -0.0,
+      "winograd_entry": false
+     },
+     "7": {
+      "kind": "fnb64",
+      "before_ms": 0.4036,
+      "after_ms": 0.4,
+      "change_percent": -0.0,
+      "winograd_entry": false
+     },
+     "8": {
+      "kind": "fnb64",
+      "before_ms": 0.4138,
+      "after_ms": 0.4248,
+      "change_percent": 0.3,
+      "winograd_entry": false
+     },
+     "9": {
+      "kind": "ct64",
+      "before_ms": 1.1761,
+      "after_ms": 1.1888,
+      "change_percent": -0.3,
+      "winograd_entry": false
+     },
+     "10": {
+      "kind": "fnb32",
+      "before_ms": 0.4722,
+      "after_ms": 0.3899,
+      "change_percent": -16.6,
+      "winograd_entry": true
+     },
+     "11": {
+      "kind": "ct32",
+      "before_ms": 1.0059,
+      "after_ms": 1.0085,
+      "change_percent": -2.2,
+      "winograd_entry": true
+     },
+     "12": {
+      "kind": "cnb16",
+      "before_ms": 1.0982,
+      "after_ms": 0.6724,
+      "change_percent": -35.2,
+      "winograd_entry": true
+     },
+     "post_cnb": {
+      "kind": "cnb16",
+      "before_ms": 1.0404,
+      "after_ms": 0.6908,
+      "change_percent": -35.8,
+      "winograd_entry": true
+     }
+    }
+   ],
+   "lossy": [
+    {
+     "1": {
+      "kind": "cnb16",
+      "before_ms": 0.9549,
+      "after_ms": 0.6188,
+      "change_percent": -34.5,
+      "winograd_entry": true
+     },
+     "2": {
+      "kind": "cnb16",
+      "before_ms": 0.9333,
+      "after_ms": 0.6337,
+      "change_percent": -34.5,
+      "winograd_entry": true
+     },
+     "3": {
+      "kind": "ds16",
+      "before_ms": 0.1475,
+      "after_ms": 0.1491,
+      "change_percent": 1.1,
+      "winograd_entry": false
+     },
+     "4": {
+      "kind": "fnb32",
+      "before_ms": 0.451,
+      "after_ms": 0.3719,
+      "change_percent": -17.5,
+      "winograd_entry": true
+     },
+     "5": {
+      "kind": "fnb32",
+      "before_ms": 0.4507,
+      "after_ms": 0.3715,
+      "change_percent": -17.6,
+      "winograd_entry": true
+     },
+     "6": {
+      "kind": "ds32",
+      "before_ms": 0.1481,
+      "after_ms": 0.1482,
+      "change_percent": 0.1,
+      "winograd_entry": false
+     },
+     "7": {
+      "kind": "fnb64",
+      "before_ms": 0.398,
+      "after_ms": 0.4027,
+      "change_percent": 0.1,
+      "winograd_entry": false
+     },
+     "8": {
+      "kind": "fnb64",
+      "before_ms": 0.3981,
+      "after_ms": 0.3982,
+      "change_percent": -0.0,
+      "winograd_entry": false
+     },
+     "9": {
+      "kind": "ct64",
+      "before_ms": 1.1679,
+      "after_ms": 1.1701,
+      "change_percent": 0.3,
+      "winograd_entry": false
+     },
+     "10": {
+      "kind": "fnb32",
+      "before_ms": 0.4513,
+      "after_ms": 0.3745,
+      "change_percent": -17.3,
+      "winograd_entry": true
+     },
+     "11": {
+      "kind": "ct32",
+      "before_ms": 0.921,
+      "after_ms": 0.9273,
+      "change_percent": 3.1,
+      "winograd_entry": true
+     },
+     "12": {
+      "kind": "cnb16",
+      "before_ms": 0.958,
+      "after_ms": 0.6274,
+      "change_percent": -33.5,
+      "winograd_entry": true
+     },
+     "post_cnb": {
+      "kind": "cnb16",
+      "before_ms": 1.0014,
+      "after_ms": 0.6386,
+      "change_percent": -35.6,
+      "winograd_entry": true
+     }
+    },
+    {
+     "1": {
+      "kind": "cnb16",
+      "before_ms": 0.9922,
+      "after_ms": 0.6151,
+      "change_percent": -37.0,
+      "winograd_entry": true
+     },
+     "2": {
+      "kind": "cnb16",
+      "before_ms": 0.9668,
+      "after_ms": 0.6583,
+      "change_percent": -31.7,
+      "winograd_entry": true
+     },
+     "3": {
+      "kind": "ds16",
+      "before_ms": 0.1502,
+      "after_ms": 0.1518,
+      "change_percent": 1.0,
+      "winograd_entry": false
+     },
+     "4": {
+      "kind": "fnb32",
+      "before_ms": 0.4543,
+      "after_ms": 0.3741,
+      "change_percent": -18.0,
+      "winograd_entry": true
+     },
+     "5": {
+      "kind": "fnb32",
+      "before_ms": 0.4526,
+      "after_ms": 0.3709,
+      "change_percent": -17.7,
+      "winograd_entry": true
+     },
+     "6": {
+      "kind": "ds32",
+      "before_ms": 0.1478,
+      "after_ms": 0.1476,
+      "change_percent": -0.0,
+      "winograd_entry": false
+     },
+     "7": {
+      "kind": "fnb64",
+      "before_ms": 0.4054,
+      "after_ms": 0.4052,
+      "change_percent": -0.1,
+      "winograd_entry": false
+     },
+     "8": {
+      "kind": "fnb64",
+      "before_ms": 0.4074,
+      "after_ms": 0.4017,
+      "change_percent": -1.2,
+      "winograd_entry": false
+     },
+     "9": {
+      "kind": "ct64",
+      "before_ms": 1.2054,
+      "after_ms": 1.212,
+      "change_percent": -0.2,
+      "winograd_entry": false
+     },
+     "10": {
+      "kind": "fnb32",
+      "before_ms": 0.4716,
+      "after_ms": 0.389,
+      "change_percent": -17.4,
+      "winograd_entry": true
+     },
+     "11": {
+      "kind": "ct32",
+      "before_ms": 0.9259,
+      "after_ms": 0.965,
+      "change_percent": 4.1,
+      "winograd_entry": true
+     },
+     "12": {
+      "kind": "cnb16",
+      "before_ms": 1.016,
+      "after_ms": 0.6748,
+      "change_percent": -34.5,
+      "winograd_entry": true
+     },
+     "post_cnb": {
+      "kind": "cnb16",
+      "before_ms": 1.0182,
+      "after_ms": 0.6485,
+      "change_percent": -36.2,
+      "winograd_entry": true
+     }
+    }
+   ]
+  }
+ }
+}

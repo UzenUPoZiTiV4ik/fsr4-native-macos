@@ -19,6 +19,19 @@ using i32 = std::int32_t;
 
 enum : u32 { kAbiVersion = 1, kThreads = 128, kNoOffset = 0xffffffffu };
 
+// On-device MPP register-layout probe. These are capabilities, not model
+// parameters: PassParams, weights and the on-disk ABI remain unchanged.
+enum : u32 {
+    kMppChainCnb = 1u << 0,
+    kMppChainFnb32 = 1u << 1,
+    kMppChainCt32 = 1u << 2,
+    kMppChainFnb64 = 1u << 3,
+    kMppChainCt64 = 1u << 4,
+    kMppChainDs32 = 1u << 5,
+    kMppChainKnownMask = (1u << 6) - 1u,
+    kMppProbeDummyBytes = 16384u,
+};
+
 // Byte offsets refer to the logical (0,0) pixel. Row strides may include the
 // physical zero border used by AMD's tensor allocation. Kernels synthesize zero
 // for logical out-of-bounds inputs; they do not consume or produce border bytes.

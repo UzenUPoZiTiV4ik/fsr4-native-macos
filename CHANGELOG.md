@@ -1,5 +1,38 @@
 # Releases
 
+## v2.5 (2026-10-31)
+
+M5 INT8 tuning and the pre-M5 SIMD/Winograd updates in one release.
+
+- M5: register-only CNB/FNB/CT/DS32 chains, per-library GPU layout probes,
+  exact cache-contract checks and actual-thread-count pipeline limits.
+  Unknown layouts retain the old kernels; FSR4_MPP_OPTIMIZE=0 opts out.
+- Isolated FNB64 passes are about 25-26% faster; a complete working-branch
+  M5 replay improves about 1.7% Lite, 1.4% Exact and 2.6% on Lossy inference
+  frames. These are GPU times, not game FPS or a guaranteed improvement.
+- The combined public-release replay, with v2.4 MPP source and the same
+  tiled POST on both sides, confirms byte-identical output and the timing
+  results in docs/reports/fsr-m5-register-chains-2026-10-31.json.
+- Includes the earlier SIMD optimization: vector integer epilogues,
+  compact convolved/bypass windows and actual 128-thread pipeline limits.
+- Includes exact, bound-checked Winograd F(2x2,3x3) for SIMD CNB16/FNB32,
+  with GPU verification and the direct-kernel fallback. Forced-SIMD M5
+  replay showed about 14-16% reduction in inference-frame GPU time;
+  physical M1-M4 performance has not been measured.
+- Synchronizes the pinned dll-2026-10-29 retrained Lossy weights and
+  depth-edge speck handling, while retaining the internal lossy2 name.
+- The working branch's optional Lite hair filter is represented by the
+  public release's existing adjustable pixelization fix; it is separate
+  from the exact-safe neural optimizations and off by default.
+- The public release retains v2.4's CrossOver 26 support, reversible
+  in-place framework patch, installer improvements and tiled POST path.
+- Validation includes 744 MPP fast/fallback CPU-oracle cases, full-frame
+  classic Metal/Metal 4 byte identity, SIMD/Winograd checks and host tests.
+  Slower or non-identical experiments are not included in production.
+
+See docs/FSR_M5_INT8_OPTIMIZATION.md and docs/FSR_PRE_M5_OPTIMIZATION.md
+for the methods, scope, safeguards and reproducible commands.
+
 ## v2.4 (2026-10-30)
 
 CrossOver 26 support (contributed by @d45h71, #13; fixes #15). FSR 4.1.2

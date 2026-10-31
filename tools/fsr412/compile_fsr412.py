@@ -210,7 +210,7 @@ def main():
     ap.add_argument("--jittered-mv",type=int,choices=(0,1),default=0); ap.add_argument("--colorspace",type=int,choices=(0,1,2,3),default=0)
     ap.add_argument("--auto-exposure",type=int,choices=(0,1),default=0); ap.add_argument("--optimize",type=int,choices=(0,1),default=0)
     ap.add_argument("--ultra-performance",type=int,choices=(0,1),default=0); ap.add_argument("--external-post-cnb",type=int,choices=(0,1),default=0)
-    ap.add_argument("--pixelization-fix",type=int,choices=(0,1),default=0)
+    ap.add_argument("--pixelization-fix","--hair-fix",dest="pixelization_fix",type=int,choices=(0,1),default=0)
     a=ap.parse_args(); root=Path(a.root).resolve(); bdir=Path(a.builddir).resolve()
     prepared=bool(a.optimize and a.external_post_cnb and a.colorspace==0)
     key=f"fsr412_{a.res}_di{a.depth_inverted}_lm{a.low_res_mv}_jm{a.jittered_mv}_cs{a.colorspace}_ae{a.auto_exposure}_o{a.optimize}_up{a.ultra_performance}_pc{a.external_post_cnb}"

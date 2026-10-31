@@ -19,7 +19,7 @@ sequence, 40% less. Method and limits: [FSR 4.1.2 stability](docs/FSR412_STABILI
 
 ## Easiest: the FSR4 Installer app
 
-1. Download **FSR4-Installer-v2.4.dmg** from the
+1. Download **FSR4-Installer-v2.5.dmg** from the
    [latest release](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/releases/latest)
    and drag **FSR4 Installer** to Applications.
 2. First launch: the app is not notarized, so macOS blocks it. Open
@@ -121,10 +121,12 @@ make test                 # includes the installer app tests
 make build-fsr411-tests
 make test-fsr411-gpu
 make test-fsr412-optimization
+make test-fsr411-mpp-fast  # GPU-probed M5 kernels and forced fallback
+make test-fsr-pre-m5      # forced SIMD and exact Winograd
 ```
 
-Build the installer app and DMG: `make installer INSTALLER_VERSION=v1.8`
-(or `python3 tools/installer/build_app.py v1.8 --dmg`).
+Build the installer app and DMG: `make installer INSTALLER_VERSION=v2.5`
+(or `python3 tools/installer/build_app.py v2.5 --dmg`).
 
 ## Documentation
 
@@ -133,6 +135,8 @@ Build the installer app and DMG: `make installer INSTALLER_VERSION=v1.8`
 | Performance and validation | [docs/FSR411_PERFORMANCE.md](docs/FSR411_PERFORMANCE.md) |
 | Lite image quality update | [docs/FSR411_QUALITY_UPDATE.md](docs/FSR411_QUALITY_UPDATE.md) |
 | FSR 4.1.2 Lossy (formerly Lite 2) | [docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md) |
+| M5 INT8 register-chain optimization | [docs/FSR_M5_INT8_OPTIMIZATION.md](docs/FSR_M5_INT8_OPTIMIZATION.md) |
+| Pre-M5 SIMD optimization and exact Winograd | [docs/FSR_PRE_M5_OPTIMIZATION.md](docs/FSR_PRE_M5_OPTIMIZATION.md) |
 | Latest memory optimization and timing limits | [docs/FSR411_MEMORY_OPTIMIZATION.md](docs/FSR411_MEMORY_OPTIMIZATION.md) |
 | Benchmark method | [BENCHMARK.md](BENCHMARK.md) |
 | Input format | [docs/FSR411_INPUT_CONTRACT.md](docs/FSR411_INPUT_CONTRACT.md) |

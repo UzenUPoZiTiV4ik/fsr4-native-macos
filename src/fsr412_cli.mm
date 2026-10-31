@@ -413,7 +413,7 @@ int fsr412_main(int argc, char **argv) {
             else if(arg=="--root") root=value();
             else if(arg=="--profile") profile=value();
             else if(arg=="--no-compile") options.allowCompile=false;
-            else if(arg=="--pixelization-fix") options.pixelFix=true;
+            else if(arg=="--pixelization-fix" || arg=="--hair-fix") options.pixelFix=true;
             else if(arg=="--pixelization-strength") {
                 char *end=nullptr; const char *text=value(); const float strength=std::strtof(text,&end);
                 if(end==text || *end || !(strength>=0.f && strength<=1.f)) fail("--pixelization-strength must be 0..1");

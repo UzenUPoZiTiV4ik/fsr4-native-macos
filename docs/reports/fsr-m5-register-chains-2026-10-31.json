@@ -1,0 +1,55 @@
+{
+  "date": "2026-10-31",
+  "device": "Apple M5",
+  "render": [
+    1000,
+    648
+  ],
+  "output": [
+    1712,
+    1112
+  ],
+  "scope": "full frame command buffer, M5 INT8, serial interleaved A/B in one process",
+  "baseline": "crossover-v2.4 MPP shader source with the release PRE/POST bundle",
+  "candidate": "v2.5 register-only MPP chains and actual-thread pipeline limits",
+  "rounds": 60,
+  "frames_per_cycle": 8,
+  "low_power_mode": false,
+  "thermal_state_start": 0,
+  "thermal_state_end": 0,
+  "models": [
+    {
+      "model": "lite",
+      "byte_identical": true,
+      "neural_pairs": 480,
+      "reused_pairs": 0,
+      "before_ms": 2.3447708372259513,
+      "after_ms": 2.2673125058645383,
+      "median_time_reduction_percent": 3.3034499632830783,
+      "paired_change_percent": -2.9268765860434476,
+      "reuse_paired_change_percent": null
+    },
+    {
+      "model": "exact",
+      "byte_identical": true,
+      "neural_pairs": 480,
+      "reused_pairs": 0,
+      "before_ms": 4.824041679967195,
+      "after_ms": 4.695916664786637,
+      "median_time_reduction_percent": 2.6559682457268696,
+      "paired_change_percent": -3.1376747124004956,
+      "reuse_paired_change_percent": null
+    },
+    {
+      "model": "lossy2",
+      "byte_identical": true,
+      "neural_pairs": 240,
+      "reused_pairs": 240,
+      "before_ms": 3.8845625094836578,
+      "after_ms": 3.7700416578445584,
+      "median_time_reduction_percent": 2.948101655193125,
+      "paired_change_percent": -0.7790840668844279,
+      "reuse_paired_change_percent": 0.07510262931180733
+    }
+  ]
+}

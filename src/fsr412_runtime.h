@@ -24,7 +24,7 @@ struct Options : fsr411::Options {
 };
 inline const char *profile_name(Profile) {return "int8-lite";}
 // int8-lite-pixfix is the same model with Options::pixelFix (POST filter widening).
-inline bool pixel_fix_profile(const std::string &name) {return name=="int8-lite-pixfix" || name=="lite-pixfix";}
+inline bool pixel_fix_profile(const std::string &name) {return name=="int8-lite-pixfix" || name=="lite-pixfix" || name=="int8-lite-hair" || name=="lite-hair";}
 // Pixelization fix strength 0..1 (panel slider): 0 leaves the filter as AMD
 // predicts it, 0.5 is the default, 1 widens it most (floor 0.2, about 2.2x).
 constexpr float kPixelFixStrength=0.5f;

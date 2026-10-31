@@ -70,7 +70,7 @@ HOOK_NAME = "libfsr4hook.dylib"
 # @loader_path, so the app's own binary has to carry the hook.
 FRAMEWORK_PATH_ENV = b"D3DMETAL_FRAMEWORK_PATH"
 # "fsr4" remains the legacy panel mode for the FSR 4.0.2 comparison model.
-PROFILES = ("int8-lite", "int8-lite-pixfix", "exact", "exact-fast", "lossy", "lossy2", "fsr4")
+PROFILES = ("int8-lite", "int8-lite-pixfix", "int8-lite-hair", "exact", "exact-fast", "lossy", "lossy2", "fsr4")
 OURS = (KEY, LOG_KEY, ROOT_KEY, REPLACE_KEY, PANEL_KEY, VERSION_KEY, PROFILE_KEY, FRAMEWORK_KEY)
 
 
@@ -699,7 +699,7 @@ def build_reference(env):
         model = aliases[model]
         version_options = ["--fsr-version", version]
         profile = env.get(PROFILE_KEY, "int8-lite")
-        if profile not in ("int8-lite", "lite", "int8-lite-pixfix"):
+        if profile not in ("int8-lite", "lite", "int8-lite-pixfix", "int8-lite-hair"):
             raise SystemExit("FSR4_PROFILE must be int8-lite or int8-lite-pixfix for FSR 4.1.2")
     else:
         if model == "int8":

@@ -99,9 +99,16 @@ void encode(fsr412::Runtime &runtime,id<MTLDevice> dev,id<MTLCommandQueue> queue
 }
 int main(int argc,char **argv) {
     @autoreleasepool {try {
-        require(argc>=2,"usage: fsr412_optimization_test <root> [mtl4]");
-        const bool metal4=argc>2 && !std::strcmp(argv[2],"mtl4");
+        require(argc>=2,"usage: fsr412_optimization_test <root> [mtl4] [--simd|--scalar]");
+        bool metal4=false; auto backend=fsr412::Backend::Native;
+        for(int i=2;i<argc;++i) {
+            if(!std::strcmp(argv[i],"mtl4")) metal4=true;
+            else if(!std::strcmp(argv[i],"--simd")) backend=fsr412::Backend::Simd;
+            else if(!std::strcmp(argv[i],"--scalar")) backend=fsr412::Backend::Scalar;
+            else throw std::runtime_error(std::string("unknown option: ")+argv[i]);
+        }
         auto dev=MTLCreateSystemDefaultDevice();auto queue=[dev newCommandQueue];require(dev && queue,"Metal unavailable");
+        if(metal4) {if(@available(macOS 26.0,*)) {} else throw std::runtime_error("Metal 4 requires macOS 26+");}
         fsr412::Runtime runtime(dev,argv[1],std::string(argv[1])+"/build");
         for(unsigned mode=0;mode<3;++mode) {
             fsr412::View dll,reference,optimized;
@@ -115,7 +122,7 @@ int main(int argc,char **argv) {
             [blit fillBuffer:reference.scratch range:NSMakeRange(0,25027392) value:0x59];
             [blit fillBuffer:optimized.scratch range:NSMakeRange(0,25027392) value:0xa7];
             [blit endEncoding];[cb commit];[cb waitUntilCompleted];
-            fsr412::Options options;options.backend=fsr412::Backend::Native;options.ultraPerformance=mode==2;
+            fsr412::Options options;options.backend=backend;options.ultraPerformance=mode==2;
             for(unsigned index=0;index<6;++index) {
                 auto a=frame(dev,index,mode==1),b=a,s=a;
                 b.output=texture(dev,MTLPixelFormatRGBA16Float,a.output.width,a.output.height);
@@ -124,7 +131,7 @@ int main(int argc,char **argv) {
                 for(auto t:{a.output,b.output,s.output})[t replaceRegion:MTLRegionMake2D(0,0,t.width,t.height) mipmapLevel:0 withBytes:sentinel.data() bytesPerRow:t.width*8];
                 options.rcas=index%2;options.sharpness=.498f;options.optimize=0;
                 options.backend=fsr412::Backend::Reference;encode(runtime,dev,queue,dll,s,options,metal4);
-                options.backend=fsr412::Backend::Native;
+                options.backend=backend;
                 encode(runtime,dev,queue,reference,a,options,metal4);
                 options.optimize=1;encode(runtime,dev,queue,optimized,b,options,metal4);
                 std::printf("checking mode=%u frame=%u\n",mode,index);std::fflush(stdout);
@@ -132,6 +139,8 @@ int main(int argc,char **argv) {
                 compare(dll.recurrent,reference.recurrent,4,"DLL shader recurrent",true);compare(dll.autoExposure,reference.autoExposure,4,"DLL shader exposure",true);
                 compare(a.output,b.output,8,"output");compare(reference.history,optimized.history,8,"history");
                 compare(reference.recurrent,optimized.recurrent,4,"recurrent");compare(reference.autoExposure,optimized.autoExposure,4,"exposure");
+                if(backend==fsr412::Backend::Simd)
+                    require(reference.backendLabel=="int8-simd" && optimized.backendLabel=="int8-simd","requested SIMD backend was not used");
                 require(optimized.preparedColor && !reference.preparedColor,"color cache mode not selected");
                 require(!optimized.skippedInference && optimized.neuralRuns==index+1,"Lite inference was reused");
             }

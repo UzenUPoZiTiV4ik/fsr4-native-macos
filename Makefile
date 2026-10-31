@@ -9,7 +9,7 @@ BINDIR   := tools/bin
 
 all: $(BINDIR)/fsr4mac $(BINDIR)/gen_testcase $(BINDIR)/compare $(BINDIR)/bilin $(BINDIR)/bin2png
 
-test: test-input test-settings test-fsr411-math test-installer test-fsr411-layout test-fsr411-cache
+test: test-input test-settings test-fsr411-math test-installer test-fsr411-layout test-fsr411-cache test-fsr411-mpp-policy
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) tests/backend_policy_test.cpp -o build/tests/backend_policy_test
 	build/tests/backend_policy_test
@@ -66,7 +66,7 @@ test-fsr411-gpu:
 
 build-fsr411-tests: build/tests/fsr411_native_test build/tests/fsr411_runtime_test build/tests/fsr411_lossy_cadence_test dist/crossover/fsr411_live_regions_test
 
-build/tests/fsr411_native_test: tests/fsr411_native_test.mm src/fsr411_model.h Makefile
+build/tests/fsr411_native_test: tests/fsr411_native_test.mm src/fsr411_model.h Makefile src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -fobjc-arc -I src $< $(FRAMEWORKS) -o $@
 
@@ -82,11 +82,11 @@ build/tests/fsr411_quantize_test.metallib: tests/fsr411_quantize_test.metal src/
 test-fsr411-quantize: build/tests/fsr411_quantize_test build/tests/fsr411_quantize_test.metallib
 	build/tests/fsr411_quantize_test build/tests/fsr411_quantize_test.metallib
 
-build/tests/fsr411_runtime_test: tests/fsr411_runtime_test.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr4_input.h Makefile
+build/tests/fsr411_runtime_test: tests/fsr411_runtime_test.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr4_input.h Makefile src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -fobjc-arc -I src $< $(FRAMEWORKS) -o $@
 
-build/tests/fsr411_snapshot_test: tests/fsr411_snapshot_test.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr4_input.h src/fsr4_log.h Makefile
+build/tests/fsr411_snapshot_test: tests/fsr411_snapshot_test.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr4_input.h src/fsr4_log.h Makefile src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -fobjc-arc -I src $< $(FRAMEWORKS) -o $@
 
@@ -94,7 +94,7 @@ test-fsr411-snapshot: build/tests/fsr411_snapshot_test
 	build/tests/fsr411_snapshot_test "$(CURDIR)"
 	build/tests/fsr411_snapshot_test "$(CURDIR)" --mtl4
 
-build/tests/fsr411_reset_clear_test: tests/fsr411_reset_clear_test.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr4_input.h Makefile
+build/tests/fsr411_reset_clear_test: tests/fsr411_reset_clear_test.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr4_input.h Makefile src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -fobjc-arc -I src $< $(FRAMEWORKS) -o $@
 
@@ -106,7 +106,7 @@ test-fsr411-reset: build/tests/fsr411_reset_clear_test
 
 .PHONY: test-fsr411-reset
 
-build/tests/fsr411_cache_fallback_test: tests/fsr411_cache_fallback_test.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr4_input.h Makefile
+build/tests/fsr411_cache_fallback_test: tests/fsr411_cache_fallback_test.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr4_input.h Makefile src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -fobjc-arc -I src $< $(FRAMEWORKS) -o $@
 
@@ -121,7 +121,7 @@ test-fsr411-cache-gpu: build/tests/fsr411_cache_fallback_test
 
 .PHONY: test-fsr411-cache test-fsr411-cache-gpu
 
-build/tests/fsr411_lossy_cadence_test: tests/fsr411_lossy_cadence_test.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr4_input.h Makefile
+build/tests/fsr411_lossy_cadence_test: tests/fsr411_lossy_cadence_test.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr4_input.h Makefile src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -fobjc-arc -I src $< $(FRAMEWORKS) -o $@
 
@@ -167,8 +167,6 @@ test-fsr411-native: build/tests/fsr411_native_test build/tests/fsr411_mpp.metall
 	    build/tests/fsr411_native_test build/tests/fsr411_reference.metallib build/tests/fsr411_native --reference; \
 	    build/tests/fsr411_native_test build/tests/fsr411_simd.metallib build/tests/fsr411_native --simd; \
 	    build/tests/fsr411_native_test build/tests/fsr411_simd_specialized.metallib build/tests/fsr411_native --simd-specialized; \
-	    build/tests/fsr411_native_test build/tests/fsr411_simd.metallib build/tests/fsr411_native --simd-winograd; \
-	    build/tests/fsr411_native_test build/tests/fsr411_simd_specialized.metallib build/tests/fsr411_native --simd-winograd-specialized; \
 	  done; \
 	done
 
@@ -209,7 +207,7 @@ test-fsr411-cadence: build/tests/fsr411_lossy_cadence_test
 	build/tests/fsr411_lossy_cadence_test "$(CURDIR)" --compile --inflight
 	build/tests/fsr411_lossy_cadence_test "$(CURDIR)" --compile --inflight --mtl4
 
-dist/crossover/libfsr4hook.dylib: Makefile tools/crossover/crossover_fsr4.py hook/fsr4_metalfx.m src/fsr4_live.mm src/fsr4_panel.mm src/fsr4_live.h src/fsr4_input.h src/fsr4_log.h src/fsr4_device.h src/fsr4_backend.h src/i8mpp_host.h src/fsr411_live.mm src/fsr411_runtime.h src/fsr411_capture_io.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_live.mm src/fsr412_runtime.h src/fsr412_session.inc
+dist/crossover/libfsr4hook.dylib: Makefile tools/crossover/crossover_fsr4.py hook/fsr4_metalfx.m src/fsr4_live.mm src/fsr4_panel.mm src/fsr4_live.h src/fsr4_input.h src/fsr4_log.h src/fsr4_device.h src/fsr4_backend.h src/i8mpp_host.h src/fsr411_live.mm src/fsr411_runtime.h src/fsr411_capture_io.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_live.mm src/fsr412_runtime.h src/fsr412_session.inc src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
 	python3 -c 'import sys; sys.path.insert(0, "tools/crossover"); import crossover_fsr4 as c; c.build_hook(c.DIST / "hook.log")'
 
 dist/crossover/fsr411_live_regions_test: tests/fsr411_live_regions_test.mm src/fsr4_live.h src/fsr4_input.h dist/crossover/libfsr4hook.dylib Makefile
@@ -219,7 +217,7 @@ test-fsr411-live: dist/crossover/fsr411_live_regions_test
 	FSR4_COMPILE=1 arch -x86_64 $< "$(CURDIR)" i8mpp classic switch
 	FSR4_COMPILE=1 arch -x86_64 $< "$(CURDIR)" i8mpp mtl4 switch
 
-build/tests/fsr412_optimization_test: tests/fsr412_optimization_test.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr412_session.inc Makefile
+build/tests/fsr412_optimization_test: tests/fsr412_optimization_test.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr412_session.inc Makefile src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) $< $(FRAMEWORKS) -o $@
 
@@ -229,11 +227,11 @@ test-fsr412-optimization: build/tests/fsr412_optimization_test
 
 .PHONY: test-fsr412-optimization
 
-build/obj/fsr411_cli.o: Makefile src/fsr411_cli.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_session.inc src/fsr4_input.h src/fsr4_log.h src/pngio.h
+build/obj/fsr411_cli.o: Makefile src/fsr411_cli.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_session.inc src/fsr4_input.h src/fsr4_log.h src/pngio.h src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
 	mkdir -p build/obj
 	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) -c src/fsr411_cli.mm -o $@
 
-build/obj/fsr412_cli.o: Makefile src/fsr412_cli.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_session.inc src/fsr4_input.h src/fsr4_log.h src/pngio.h
+build/obj/fsr412_cli.o: Makefile src/fsr412_cli.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_session.inc src/fsr4_input.h src/fsr4_log.h src/pngio.h src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
 	mkdir -p build/obj
 	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) -c src/fsr412_cli.mm -o $@
 
@@ -253,6 +251,107 @@ $(BINDIR)/bin2png: src/bin2png.cpp src/pngio.h
 	$(CXX) $(CXXFLAGS) $(ZLIB) -o $@ src/bin2png.cpp
 lossy2-weights:
 	python3 tools/fsr411/fetch_lossy2_weights.py
+
+# INT2 rounding ported from M5, tested through the actual pre-M5 shader.
+build/tests/fsr411_simd_quantize_test.metallib: tests/fsr411_simd_quantize_test.metal src/fsr411_simd.metal src/fsr411_model.h Makefile
+	mkdir -p build/tests
+	xcrun metal -std=metal3.0 -O2 -I src -c $< -o build/tests/fsr411_simd_quantize_test.air
+	xcrun metallib build/tests/fsr411_simd_quantize_test.air -o $@
+
+test-fsr411-simd-quantize: build/tests/fsr411_quantize_test build/tests/fsr411_simd_quantize_test.metallib
+	build/tests/fsr411_quantize_test build/tests/fsr411_simd_quantize_test.metallib --simd
+
+# Fixed cache contracts for the on-device M5 register-chain selection.
+test-fsr411-mpp-policy: build/tests/fsr411_mpp_policy_test
+	$<
+
+build/tests/fsr411_mpp_policy_test: tests/fsr411_mpp_policy_test.cpp src/fsr411_mpp_policy.h src/fsr411_model.h Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -Wextra -Werror $< -o $@
+
+build/tests/fsr411_mpp_bench: tools/bench/fsr411_mpp_bench.mm src/fsr411_model.h src/fsr411_mpp_policy.h Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -fobjc-arc $< $(FRAMEWORKS) -o $@
+
+build/tests/fsr411_mpp_ab: tools/bench/fsr411_mpp_ab.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr411_mpp_policy.h src/fsr411_model.h src/fsr411_simd_weights.h src/fsr412_session.inc Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) $< $(FRAMEWORKS) -o $@
+
+# Isolated GPU parity for all real Normal/Ultra/2160 models. No float network.
+test-fsr411-mpp-fast: build/tests/fsr411_native_test build/tests/fsr411_mpp_specialized.metallib build/tests/fsr411_mpp_fallback.metallib
+	@set -e; for dir in fsr412_native_1080 fsr412_native_1080_ultraperformance fsr412_native_2160 fsr411_native_1080 fsr411_native_1080_ultraperformance fsr411_native_2160 fsr411_native_1080_lossy2 fsr411_native_1080_ultraperformance_lossy2 fsr411_native_2160_lossy2; do \
+	  test -f build/$$dir/fsr411_native_manifest.json || { echo "missing build/$$dir; import/generate models first"; exit 1; }; \
+	  build/tests/fsr411_native_test build/tests/fsr411_mpp_specialized.metallib build/$$dir --mpp-fast; \
+	  build/tests/fsr411_native_test build/tests/fsr411_mpp_fallback.metallib build/$$dir --mpp-fallback; \
+	done
+
+bench-fsr-m5: build/tests/fsr411_mpp_ab
+	$< "$(CURDIR)" --rounds 60
+
+.PHONY: test-fsr411-mpp-policy test-fsr411-mpp-fast bench-fsr-m5
+
+build/tests/fsr411_simd_bench: tools/bench/fsr411_simd_bench.mm src/fsr411_model.h src/fsr411_simd_weights.h Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -fobjc-arc $< $(FRAMEWORKS) -o $@
+
+# Exact F(2x2,3x3) for the pre-M5 SIMD backend. CPU proof of the weight
+# transform and bound gate, then raw (pre-quantization) and full-block GPU
+# parity against the CPU integer oracle for every eligible real model.
+build/tests/fsr411_winograd_weights_test: tests/fsr411_winograd_weights_test.cpp src/fsr411_simd_weights.h src/fsr411_model.h Makefile
+	mkdir -p build/tests
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -fno-fast-math -ffp-contract=off -mmacosx-version-min=$(FSR4_MIN_MACOS) $< -o $@
+
+build/tests/fsr411_winograd_test.metallib: tests/fsr411_winograd_test.metal src/fsr411_simd.metal src/fsr411_model.h Makefile
+	mkdir -p build/tests
+	xcrun metal -std=metal3.0 -O2 -DFSR411_SPECIALIZE=1 -I src -c $< -o build/tests/fsr411_winograd_test.air
+	xcrun metallib build/tests/fsr411_winograd_test.air -o $@
+
+test-fsr411-simd-winograd: build/tests/fsr411_winograd_weights_test build/tests/fsr411_native_test build/tests/fsr411_winograd_test.metallib
+	build/tests/fsr411_winograd_weights_test
+	@set -e; for dir in fsr412_native_1080 fsr412_native_1080_ultraperformance fsr412_native_2160 fsr411_native_1080 fsr411_native_1080_ultraperformance fsr411_native_2160 fsr411_native_1080_lossy2 fsr411_native_1080_ultraperformance_lossy2 fsr411_native_2160_lossy2; do \
+	  test -f build/$$dir/fsr411_native_manifest.json || { echo "missing build/$$dir; import/generate models first"; exit 1; }; \
+	  build/tests/fsr411_native_test build/tests/fsr411_winograd_test.metallib build/$$dir --simd-winograd; \
+	  build/tests/fsr411_native_test build/tests/fsr411_winograd_test.metallib build/$$dir --simd-compact-ds; \
+	done
+
+# Full-frame forced-SIMD A/B in one process: direct 3x3 vs exact Winograd,
+# interleaved, with a byte-identity check. Run on the target M1-M4 Mac.
+build/tests/fsr411_simd_ab: tools/bench/fsr411_simd_ab.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr411_simd_weights.h src/fsr412_session.inc Makefile src/fsr411_model.h src/fsr411_mpp_policy.h
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) $< $(FRAMEWORKS) -o $@
+
+bench-fsr-pre-m5: build/tests/fsr411_simd_ab
+	$< "$(CURDIR)" --rounds 30
+
+.PHONY: test-fsr411-simd-winograd bench-fsr-pre-m5
+
+# Requires the imported/trained 4.1.2 Lossy weights (internal lossy2 profile).
+test-fsr411-simd-lossy412: build/tests/fsr411_runtime_test
+	$< "$(CURDIR)" --compile --optimize --simd --lossy2 --strict-math
+	$< "$(CURDIR)" --compile --optimize --simd --lossy2 --strict-math --odd --high-mv --jittered --inverted
+	$< "$(CURDIR)" --compile --optimize --simd --lossy2 --strict-math --ultra
+
+# Forces the actual M1-M4 path even on M5. No MPP/tensor acceleration used.
+test-fsr412-simd: build/tests/fsr412_optimization_test
+	$< "$(CURDIR)" --simd
+	$< "$(CURDIR)" mtl4 --simd
+
+# Sequential GPU work; requires both imported Lite and trained Lossy assets.
+test-fsr-pre-m5:
+	$(MAKE) test-fsr411-simd-quantize
+	$(MAKE) test-fsr411-simd-winograd
+	$(MAKE) test-fsr411-simd
+	$(MAKE) test-fsr411-simd-lossy412
+	$(MAKE) test-fsr412-simd
+
+.PHONY: test-fsr412-optimization test-fsr412-simd test-fsr411-simd-quantize test-fsr411-simd-lossy412 test-fsr-pre-m5
+
+# Rosetta/CrossOver host integration, forced pre-M5 backend on any Apple7+ GPU.
+test-fsr411-live-simd: dist/crossover/fsr411_live_regions_test
+	FSR4_COMPILE=1 arch -x86_64 $< "$(CURDIR)" simd classic switch
+	FSR4_COMPILE=1 arch -x86_64 $< "$(CURDIR)" simd mtl4 switch
+
+.PHONY: test-fsr411-live-simd
 
 clean:
 	rm -f $(BINDIR)/fsr4mac $(BINDIR)/gen_testcase $(BINDIR)/compare $(BINDIR)/bilin $(BINDIR)/bin2png

@@ -8,7 +8,7 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
         +"_lm"+std::to_string(p.lowResMV)+"_jm"+std::to_string(p.jitteredMV)+"_cs"+std::to_string(o.colorspace)
         +"_ae"+std::to_string(p.autoExposure)+"_o"+std::to_string(o.optimize)
         +"_up"+std::to_string(o.ultraPerformance)+"_pc"+std::to_string(portable)
-        +(o.optimize && portable && o.colorspace==0?"_v2":"")+(o.pixelFix?"_px2":"");
+        +(o.optimize && portable && o.colorspace==0?"_v3":"")+(o.pixelFix?"_px2":"");
     const std::string cacheKey=key+"_"+kernels_label(kind);
     auto existing=sessions_.find(cacheKey);if(existing!=sessions_.end())return existing->second.get();
     if(o.allowCompile && !run(@[@"python3",ns(root_+"/tools/fsr412/compile_fsr412.py"),@"--root",ns(root_),

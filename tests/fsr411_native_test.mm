@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
-// Usage: fsr411_native_test <metallib> <native-dir> [--reference|--specialized|--simd|--simd-specialized]
+// Usage: fsr411_native_test <metallib> <native-dir> [--reference|--specialized|--mpp-fast|--mpp-fallback|--simd|--simd-specialized|--simd-winograd|--simd-compact-ds]
+// --simd-winograd/--simd-compact-ds need a library that includes tests/fsr411_winograd_test.metal.
 // Correctness only: tiny odd-sized inputs, all bytes including padding checked.
-// --simd runs the Apple7+ simdgroup kernels with the half weight copy at index 3;
-// --simd-winograd(-specialized) runs their Winograd 3x3 variants where present.
+// --simd runs the Apple7+ simdgroup kernels with the half weight copy at index 3.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include "../src/fsr411_model.h"
+#include "../src/fsr411_mpp_policy.h"
+#include "../src/fsr411_simd_weights.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -132,14 +134,61 @@ static void reference_fnb(std::vector<unsigned char> &scratch,
         }
 }
 
+static bool check_winograd_raw(id<MTLDevice> device, id<MTLCommandQueue> queue,
+                               id<MTLComputePipelineState> pipeline, id<MTLBuffer> scratch,
+                               id<MTLBuffer> transformed, const fsr411::PassParams &p,
+                               const std::vector<unsigned char> &input,
+                               const std::vector<unsigned char> &weights) {
+    const size_t count = size_t(p.input.width) * p.input.height * 16u;
+    std::vector<int> expected(count);
+    for (unsigned y = 0; y < p.input.height; ++y)
+        for (unsigned x = 0; x < p.input.width; ++x)
+            for (unsigned oc = 0; oc < 16u; ++oc) {
+                int acc = 0;
+                for (unsigned tap = 0; tap < 9u; ++tap)
+                    for (unsigned ic = 0; ic < 16u; ++ic) {
+                        const int ix = int(x) + int(tap % 3u) - 1, iy = int(y) + int(tap / 3u) - 1;
+                        const int a = ix < 0 || iy < 0 || ix >= int(p.input.width) || iy >= int(p.input.height) ? 0 :
+                            signed_byte(input[fsr411::tensor_address(p.input, unsigned(ix), unsigned(iy), ic)]);
+                        acc += a * signed_byte(weights[p.weights[0] + (tap * 16u + ic) * 16u + oc]);
+                    }
+                expected[(size_t(y) * p.input.width + x) * 16u + oc] = acc;
+            }
+    constexpr size_t guard = 32;
+    constexpr int sentinel = 0x4114abcd;
+    std::vector<int> initial(count + 2u * guard, sentinel);
+    auto output = [device newBufferWithBytes:initial.data() length:initial.size()*sizeof(int) options:MTLResourceStorageModeShared];
+    if (!output || !pipeline || !transformed) return false;
+    auto cb = [queue commandBuffer]; auto enc = [cb computeCommandEncoder];
+    [enc setComputePipelineState:pipeline]; [enc setBuffer:scratch offset:0 atIndex:0];
+    [enc setBuffer:transformed offset:0 atIndex:1]; [enc setBytes:&p length:sizeof(p) atIndex:2];
+    [enc setBuffer:output offset:guard*sizeof(int) atIndex:3];
+    [enc dispatchThreadgroups:MTLSizeMake((p.input.width+31u)/32u,(p.input.height+3u)/4u,1)
+        threadsPerThreadgroup:MTLSizeMake(128,1,1)];
+    [enc endEncoding]; [cb commit]; [cb waitUntilCompleted];
+    if (cb.status != MTLCommandBufferStatusCompleted) return false;
+    const auto actual = (const int *)output.contents;
+    for (size_t i = 0; i < initial.size(); ++i) {
+        const int value = i < guard || i >= guard+count ? sentinel : expected[i-guard];
+        if (actual[i] != value) {
+            std::fprintf(stderr,"raw Winograd index %zu: GPU=%d CPU=%d (no quantizer or saturation)\n",i,actual[i],value);
+            return false;
+        }
+    }
+    return true;
+}
+
 int main(int argc, char **argv) {
     const char *mode = argc == 4 ? argv[3] : "";
     const bool reference = !std::strcmp(mode, "--reference");
-    const bool winograd = !std::strcmp(mode, "--simd-winograd") || !std::strcmp(mode, "--simd-winograd-specialized");
-    const bool simd = winograd || !std::strcmp(mode, "--simd") || !std::strcmp(mode, "--simd-specialized");
-    const bool specialized = !std::strcmp(mode, "--specialized") || !std::strcmp(mode, "--simd-specialized")
-        || !std::strcmp(mode, "--simd-winograd-specialized");
-    if (argc != 3 && !reference && !specialized && !simd) { std::fprintf(stderr, "Usage: %s <metallib> <native-dir> [--reference|--specialized|--simd|--simd-specialized|--simd-winograd[-specialized]]\n", argv[0]); return 2; }
+    const bool winograd = !std::strcmp(mode, "--simd-winograd");
+    // Same oracle for the experimental INT8-staged downsample entries.
+    const bool compactDs = !std::strcmp(mode, "--simd-compact-ds");
+    const bool simd = !std::strcmp(mode, "--simd") || !std::strcmp(mode, "--simd-specialized") || winograd || compactDs;
+    const bool mppFallback = !std::strcmp(mode, "--mpp-fallback");
+    const bool mppFast = !std::strcmp(mode, "--mpp-fast") || mppFallback;
+    const bool specialized = !std::strcmp(mode, "--specialized") || !std::strcmp(mode, "--simd-specialized") || winograd || compactDs || mppFast;
+    if (argc != 3 && !reference && !specialized && !simd) { std::fprintf(stderr, "Usage: %s <metallib> <native-dir> [--reference|--specialized|--mpp-fast|--mpp-fallback|--simd|--simd-specialized|--simd-winograd|--simd-compact-ds]\n", argv[0]); return 2; }
     @autoreleasepool {
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
         if (!device || (!reference && !simd && ![device supportsFamily:MTLGPUFamilyApple10])
@@ -159,45 +208,73 @@ int main(int argc, char **argv) {
         id<MTLBuffer> weights = [device newBufferWithBytes:weight_bytes.data() length:weight_bytes.size() options:MTLResourceStorageModeShared];
         std::vector<__fp16> half_bytes(weight_bytes.size());
         for (size_t i = 0; i < weight_bytes.size(); ++i) half_bytes[i] = __fp16(signed_byte(weight_bytes[i]));
-        // Winograd regions: int16 values widened at their starting index.
-        NSMutableArray *all = [[manifest[@"passes"] allValues] mutableCopy];
-        if (manifest[@"auxiliary_passes"][@"post_cnb"]) [all addObject:manifest[@"auxiliary_passes"][@"post_cnb"]];
-        for (NSDictionary *entry in all) {
-            NSDictionary *w = entry[@"simd"][@"winograd"]; if (!w) continue;
-            const size_t at = [w[@"weights0"] unsignedLongLongValue], count = [w[@"weights0_count"] unsignedLongLongValue];
-            for (size_t i = 0; i < count; ++i) {
-                int16_t v; std::memcpy(&v, weight_bytes.data() + at + 2 * i, 2); half_bytes[at + i] = __fp16(v);
-            }
-        }
         id<MTLBuffer> half_weights = [device newBufferWithBytes:half_bytes.data() length:half_bytes.size() * 2 options:MTLResourceStorageModeShared];
         id<MTLCommandQueue> queue = [device newCommandQueue];
+        uint32_t mppFeatures=0;
+        if(mppFast) {
+            auto fn=[library newFunctionWithName:@"fsr411_mpp_chain_probe"];
+            auto descriptor=[MTLComputePipelineDescriptor new];descriptor.computeFunction=fn;
+            descriptor.maxTotalThreadsPerThreadgroup=32;descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth=YES;
+            auto pso=fn?[device newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&error]:nil;
+            const uint32_t sentinel=~0u;std::vector<uint8_t> zero(fsr411::kMppProbeDummyBytes,0);
+            auto features=[device newBufferWithBytes:&sentinel length:sizeof(sentinel) options:MTLResourceStorageModeShared];
+            auto dummy=[device newBufferWithBytes:zero.data() length:zero.size() options:MTLResourceStorageModeShared];
+            if(!pso || !features || !dummy || pso.threadExecutionWidth!=32 || pso.staticThreadgroupMemoryLength) {
+                std::fprintf(stderr,"MPP register-layout probe pipeline unavailable\n");return 1;
+            }
+            auto cb=[queue commandBuffer];auto enc=[cb computeCommandEncoder];
+            [enc setComputePipelineState:pso];[enc setBuffer:features offset:0 atIndex:0];[enc setBuffer:dummy offset:0 atIndex:1];
+            [enc dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+            [enc endEncoding];[cb commit];[cb waitUntilCompleted];mppFeatures=*(const uint32_t *)features.contents;
+            const uint32_t expectedFeatures=mppFallback?0u:fsr411::kMppChainKnownMask;
+            if(cb.status!=MTLCommandBufferStatusCompleted || mppFeatures!=expectedFeatures) {
+                std::fprintf(stderr,"MPP register-layout probe returned 0x%x, expected 0x%x\n",mppFeatures,expectedFeatures);return 1;
+            }
+        }
         const unsigned cases[][3] = {{1, 1, 0}, {3, 5, 3}, {33, 7, 128}, {65, 5, 128}};
         unsigned tests = 0;
         for (NSString *pass in @[@"1", @"2", @"3", @"4", @"5", @"6", @"7", @"8", @"9", @"10", @"11", @"12", @"post_cnb"]) {
             NSDictionary *entry = [pass isEqual:@"post_cnb"] ? manifest[@"auxiliary_passes"][pass] : manifest[@"passes"][pass];
             if (!entry) continue;
             NSDictionary *schedule = reference ? entry[@"reference"] : simd ? entry[@"simd"] : entry;
-            if (winograd) { schedule = schedule[@"winograd"]; if (!schedule) continue; }
             if (!schedule) { std::fprintf(stderr, "pass %s: manifest has no schedule for %s\n", pass.UTF8String, mode); return 1; }
             const unsigned offset = [entry[@"parameter_offset"] unsignedIntValue];
             fsr411::PassParams original;
             std::memcpy(&original, parameter_bytes.data() + offset, sizeof(original));
-            // The GPU reads transformed weights; the CPU reference keeps the INT8 ones.
-            fsr411::PassParams gpuOriginal = original;
-            if (winograd) gpuOriginal.weights[0] = [schedule[@"weights0"] unsignedIntValue];
-            id<MTLFunction> function = nil;
+            std::vector<_Float16> transformed;
+            uint32_t quarterBound = 0;
+            const bool useWinograd = winograd && fsr411::prepare_simd_winograd_weights(weight_bytes.data(), weight_bytes.size(), original, transformed, &quarterBound);
+            auto winogradWeights = useWinograd ? [device newBufferWithBytes:transformed.data() length:transformed.size()*sizeof(_Float16) options:MTLResourceStorageModeShared] : nil;
+            NSString *functionName = schedule[@"function"];
+            unsigned tw=[schedule[@"tile"][0] unsignedIntValue],th=[schedule[@"tile"][1] unsignedIntValue];
+            unsigned threads=[schedule[@"threads"] unsignedIntValue];bool registerOnly=false;
+            if(mppFast) {
+                const auto tuned=fsr411::mpp_fast_dispatch(functionName.UTF8String,tw,th,threads,mppFeatures);
+                if(tuned.feature) {functionName=@(tuned.function);tw=tuned.tileX;th=tuned.tileY;threads=tuned.threads;registerOnly=true;}
+            }
+            if (useWinograd) functionName = [functionName stringByAppendingString:@"_winograd"];
+            if (compactDs && [entry[@"kind"] isEqual:@"ds"]) functionName = [functionName stringByAppendingString:@"_compact"];
+            id<MTLFunction> function = nil, rawFunction = nil;
             if (specialized) {
                 // Build once from the unmodified manifest parameters. Every
                 // case changes dimensions and POST's appended output offset.
-                const auto metadata = fsr411::specialize_metadata(gpuOriginal,
+                const auto metadata = fsr411::specialize_metadata(original,
                     [entry[@"output_offset_base"] isEqual:@"scratch_append"]);
                 MTLFunctionConstantValues *values = [MTLFunctionConstantValues new];
                 [values setConstantValues:metadata.values type:MTLDataTypeUInt4
                                 withRange:NSMakeRange(0, fsr411::kPassSpecializationCount)];
-                function = [library newFunctionWithName:schedule[@"function"] constantValues:values error:&error];
-            } else function = [library newFunctionWithName:schedule[@"function"]];
-            id<MTLComputePipelineState> pipeline = function ? [device newComputePipelineStateWithFunction:function error:&error] : nil;
-            if (!pipeline) { std::fprintf(stderr, "Metal pipeline failed: %s\n", error.description.UTF8String); return 1; }
+                function = [library newFunctionWithName:functionName constantValues:values error:&error];
+                if (useWinograd) rawFunction = [library newFunctionWithName:@"fsr411_simd_winograd_raw_test" constantValues:values error:&error];
+            } else function = [library newFunctionWithName:functionName];
+            id<MTLComputePipelineState> pipeline=nil;
+            if(function && mppFast) {
+                auto d=[MTLComputePipelineDescriptor new];d.computeFunction=function;d.maxTotalThreadsPerThreadgroup=threads;
+                d.threadGroupSizeIsMultipleOfThreadExecutionWidth=threads%32u==0;
+                pipeline=[device newComputePipelineStateWithDescriptor:d options:MTLPipelineOptionNone reflection:nil error:&error];
+            } else if(function) pipeline=[device newComputePipelineStateWithFunction:function error:&error];
+            if(registerOnly && pipeline.staticThreadgroupMemoryLength) {std::fprintf(stderr,"register-only MPP pipeline reserves shared memory\n");return 1;}
+            id<MTLComputePipelineState> rawPipeline = rawFunction ? [device newComputePipelineStateWithFunction:rawFunction error:&error] : nil;
+            if (!pipeline || (useWinograd && (!rawPipeline || !winogradWeights))) { std::fprintf(stderr, "Metal pipeline/Winograd preparation failed: %s\n", error.description.UTF8String); return 1; }
             const bool ds = [entry[@"kind"] isEqual:@"ds"];
             const bool ct = [entry[@"kind"] isEqual:@"ct"];
             const bool fnb = [entry[@"kind"] isEqual:@"fnb"];
@@ -236,19 +313,21 @@ int main(int argc, char **argv) {
                 else if (ct || fnb) reference_fnb(expected, weight_bytes, p, ct);
                 else reference_cnb(expected, weight_bytes, p);
                 id<MTLBuffer> scratch = [device newBufferWithBytes:before.data() length:before.size() options:MTLResourceStorageModeShared];
+                if (useWinograd && !check_winograd_raw(device,queue,rawPipeline,scratch,winogradWeights,p,before,weight_bytes)) {
+                    std::fprintf(stderr,"pass %s %ux%u: raw Winograd differs, bound4=%u\n",pass.UTF8String,test[0],test[1],quarterBound);
+                    return 1;
+                }
                 id<MTLCommandBuffer> command = [queue commandBuffer];
                 id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
                 [encoder setComputePipelineState:pipeline];
                 [encoder setBuffer:scratch offset:0 atIndex:0];
                 [encoder setBuffer:weights offset:0 atIndex:1];
                 if (simd) [encoder setBuffer:half_weights offset:0 atIndex:3];
-                fsr411::PassParams gpu = p;
-                gpu.weights[0] = gpuOriginal.weights[0];
-                [encoder setBytes:&gpu length:sizeof(gpu) atIndex:2];
-                const unsigned tw = [schedule[@"tile"][0] unsignedIntValue], th = [schedule[@"tile"][1] unsignedIntValue];
+                if (useWinograd) [encoder setBuffer:winogradWeights offset:0 atIndex:4];
+                [encoder setBytes:&p length:sizeof(p) atIndex:2];
                 const unsigned gridw = ct ? p.input.width : p.output.width, gridh = ct ? p.input.height : p.output.height;
                 [encoder dispatchThreadgroups:MTLSizeMake((gridw + tw - 1) / tw, (gridh + th - 1) / th, 1)
-                         threadsPerThreadgroup:MTLSizeMake([schedule[@"threads"] unsignedIntValue], 1, 1)];
+                         threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
                 [encoder endEncoding];
                 [command commit];
                 [command waitUntilCompleted];

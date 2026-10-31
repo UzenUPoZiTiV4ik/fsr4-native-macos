@@ -284,7 +284,7 @@ static int profile_from_name(const char *name) {
     if (!strcmp(name, "fsr4") || !strcmp(name, "3")) return 3;
     if (!strcmp(name, "lossy2") || !strcmp(name, "4")) return 4;
     if (!strcmp(name, "int8-lite") || !strcmp(name, "lite") || !strcmp(name, "5")) return 5;
-    if (!strcmp(name, "int8-lite-pixfix") || !strcmp(name, "lite-pixfix") || !strcmp(name, "6")) return 6;
+    if (!strcmp(name, "int8-lite-pixfix") || !strcmp(name, "lite-pixfix") || !strcmp(name, "int8-lite-hair") || !strcmp(name, "lite-hair") || !strcmp(name, "6")) return 6;
     return -1;
 }
 static const char *profile_label(int profile) {
