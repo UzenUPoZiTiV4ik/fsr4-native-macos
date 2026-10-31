@@ -156,6 +156,10 @@ def pack(tier,preset,initializer,out,profile="int8-lite"):
             'coefficient_provenance':('pinned upstream Lite Lossy trained data with conditional original border biases'
                 if profile=='int8-lite-lossy' and preset=='normal' and tier<=2160
                 else 'verified AMD FSR4.1.2 Lite initializer, no 4.1.1 coefficients')}
+        # FSR411_FLOAT_EPILOGUE: |accumulator| + |bias| + |residual << shift|
+        # must stay exact in float. Winograd results equal the direct dot.
+        epilogue=bound+max(abs(x) for b in biases for x in b)+(128<<max(q[1] for q in p['q']))
+        if epilogue<1<<24:e['simd']['float_epilogue_bound']=epilogue
         if transformed:
             values,worst=transformed
             e['simd']['winograd']={'function':{'cnb':'fsr411_simd_wcnb','fnb':'fsr411_simd_wfnb32','ct':'fsr411_simd_wct32'}[kind],
