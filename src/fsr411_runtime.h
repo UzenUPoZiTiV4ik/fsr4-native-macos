@@ -1283,8 +1283,14 @@ private:
     // The FSR 4.1.2 tiled POST covers every colour tap only while
     // ceil(32 * inv_scale) + 6 fits its tile (tools/fsr412/optimization.py);
     // the same float expression as the shader, from the uploaded constants.
-    static bool lite_post_tile_fits(const Session &s,const Fsr4InputPrepared &p) {
+    // Its 28x28 threadgroup tile is faster on Apple10 (M5) but costs
+    // occupancy on Apple8 (M2 Max 4K: POST 1.17 -> 1.60 ms), so other
+    // families keep the untiled POST unless FSR4_LITE_POST_TILE=1. Both
+    // pipelines are byte-identical.
+    bool lite_post_tile_fits(const Session &s,const Fsr4InputPrepared &p) const {
         if(!s.modelLite || !s.postTileSide) return false;
+        const char *forced=std::getenv("FSR4_LITE_POST_TILE");
+        if(forced && *forced ? *forced=='0' : ![device_ supportsFamily:static_cast<MTLGPUFamily>(1010)]) return false;
         const float inv[2]={float(p.rw)/p.alignedUW,float(p.rh)/p.alignedUH};
         for(float v:inv) if(!(v>0.f) || std::ceil(v*32.f)+6.f>float(s.postTileSide)) return false;
         return true;

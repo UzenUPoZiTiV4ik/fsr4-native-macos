@@ -44,6 +44,12 @@ FNB32, pass3 FNB32+CT2D and POST CNB; its downsample stays direct.
 `simd` output is byte-identical to `--scalar` on the recorded sequence,
 Ultra Performance and odd sizes.
 
+The tiled Lite POST (`post_tile`, 28x28 colour tile in threadgroup memory)
+runs on Apple10 (M5) only. On Apple8 it costs occupancy: M2 Max,
+2016x1260 -> 3024x1890, POST 1.17 ms untiled vs 1.60 ms tiled. Both
+pipelines are byte-identical; `FSR4_LITE_POST_TILE=1` or `=0` overrides the
+choice, e.g. to measure M3/M4.
+
 Measured on Apple M5, low-power mode off, median of three `--bench 10` runs,
 mean GPU frame:
 
