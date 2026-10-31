@@ -149,13 +149,24 @@ __attribute__((always_inline)) inline void load_window_s8(threadgroup uchar *til
 // Only convolved banks need a halo. Bypass banks need centre pixels only.
 // Compact layout: [halo row][halo pixel][16*BANKS], then
 // [centre row][centre pixel][NF-16*BANKS]. No uninitialized lane is read.
-template <uint NF, uint BANKS, uint TW, uint SG>
-__attribute__((always_inline)) inline void load_block_window(threadgroup half *tile, device const uchar *scratch,
+// Winograd blocks stage the window as INT8 bytes (uchar), widened on read:
+// exact, and half the threadgroup storage. Direct blocks stage half.
+__attribute__((always_inline)) inline void store16(threadgroup half *dst, uint4 v) {
+    threadgroup half4 *out = (threadgroup half4 *)dst;
+    out[0] = half4(as_type<char4>(v.x)); out[1] = half4(as_type<char4>(v.y));
+    out[2] = half4(as_type<char4>(v.z)); out[3] = half4(as_type<char4>(v.w));
+}
+__attribute__((always_inline)) inline void store16(threadgroup uchar *dst, uint4 v) { *(threadgroup uint4 *)dst = v; }
+__attribute__((always_inline)) inline half2 pair(threadgroup const half *t) { return *(threadgroup const half2 *)t; }
+__attribute__((always_inline)) inline half2 pair(threadgroup const uchar *t) { return half2(as_type<char2>(*(threadgroup const ushort *)t)); }
+
+template <uint NF, uint BANKS, uint TW, uint SG, typename T>
+__attribute__((always_inline)) inline void load_block_window(threadgroup T *tile, device const uchar *scratch,
                                                             fsr411::Tensor t, int x0, int y0, uint tid) {
     constexpr uint BC = 16u * BANKS, BY = NF - BC, WW = TW + 2u, WH = SG + 2u;
     constexpr uint CONV_UNITS = WW * WH * BANKS, BY_UNITS = BY / 16u;
     for (uint i = tid; i < CONV_UNITS + TW * SG * BY_UNITS; i += SG * 32u) {
-        uint px, ch; int x, y; threadgroup half *dst;
+        uint px, ch; int x, y; threadgroup T *dst;
         if (i < CONV_UNITS) {
             px = i / BANKS; ch = (i % BANKS) * 16u;
             x = x0 + int(px % WW) - 1; y = y0 + int(px / WW) - 1;
@@ -171,9 +182,7 @@ __attribute__((always_inline)) inline void load_block_window(threadgroup half *t
         uint4 v(0);
         if (x >= 0 && y >= 0 && uint(x) < t.width && uint(y) < t.height)
             v = *(device const uint4 *)(scratch + fsr411::tensor_address(t, uint(x), uint(y), ch));
-        threadgroup half4 *out = (threadgroup half4 *)dst;
-        out[0] = half4(as_type<char4>(v.x)); out[1] = half4(as_type<char4>(v.y));
-        out[2] = half4(as_type<char4>(v.z)); out[3] = half4(as_type<char4>(v.w));
+        store16(dst, v);
     }
 }
 
@@ -196,14 +205,14 @@ __attribute__((always_inline)) inline hmat requant_values(float2 acc, int2 bias,
 struct WinogradRow { float4 left, right; };
 struct WinogradFragments { float4 p00, p01, p10, p11; };
 
-template <uint BC, uint WW, uint WY, uint KB, uint X>
-__attribute__((always_inline)) inline half2 winograd_vertical(threadgroup const half *tile,
+template <uint BC, uint WW, uint WY, uint KB, uint X, typename T>
+__attribute__((always_inline)) inline half2 winograd_vertical(threadgroup const T *tile,
                                                               uint bank, uint sx, uint sy, ushort2 lo) {
     constexpr uint FIRST = WY == 0u ? 0u : WY == 2u ? 2u : 1u;
     constexpr uint SECOND = WY < 2u ? 2u : WY == 2u ? 1u : 3u;
     const uint tx = sx + 2u * lo.y + X, ch = bank * 16u + KB * 8u + lo.x;
-    const half2 a = *(threadgroup const half2 *)(tile + ((sy + FIRST) * WW + tx) * BC + ch);
-    const half2 b = *(threadgroup const half2 *)(tile + ((sy + SECOND) * WW + tx) * BC + ch);
+    const half2 a = pair(tile + ((sy + FIRST) * WW + tx) * BC + ch);
+    const half2 b = pair(tile + ((sy + SECOND) * WW + tx) * BC + ch);
     return WY == 1u ? a + b : a - b;
 }
 
@@ -224,8 +233,8 @@ __attribute__((always_inline)) inline float4 winograd_dot(half2 v0, half2 v1, de
                   upperDot.thread_elements()[0], upperDot.thread_elements()[1]);
 }
 
-template <uint BC, uint WW, uint WY>
-__attribute__((always_inline)) inline WinogradRow winograd_row(threadgroup const half *tile,
+template <uint BC, uint WW, uint WY, typename T>
+__attribute__((always_inline)) inline WinogradRow winograd_row(threadgroup const T *tile,
                                                                device const half *w0, uint bank, uint sx,
                                                                uint sy, ushort2 lo) {
     const half2 v00 = winograd_vertical<BC, WW, WY, 0, 0>(tile,bank,sx,sy,lo);
@@ -244,8 +253,8 @@ __attribute__((always_inline)) inline WinogradRow winograd_row(threadgroup const
     return {left,right};
 }
 
-template <uint BC, uint WW>
-__attribute__((always_inline)) inline WinogradFragments winograd3x3(threadgroup const half *tile,
+template <uint BC, uint WW, typename T>
+__attribute__((always_inline)) inline WinogradFragments winograd3x3(threadgroup const T *tile,
                                                                     device const half *w0, uint bank,
                                                                     uint sx, uint sy, ushort2 lo) {
     WinogradRow r = winograd_row<BC,WW,0>(tile,w0,bank,sx,sy,lo);
@@ -268,12 +277,14 @@ __attribute__((always_inline)) inline WinogradFragments winograd3x3(threadgroup 
 template <uint NF, uint BANKS, uint MB, uint SG, bool UPSAMPLE, bool WINOGRAD = false>
 __attribute__((always_inline)) inline void block(device uchar *scratch, device const uchar *weights,
                                                  device const half *wh, device const half *wg, FSR411_PARAMS_ADDRESS fsr411::PassParams &p,
-                                                 threadgroup half *tile, uint2 group, uint tid, ushort sg, ushort lane) {
+                                                 threadgroup uchar *storage, uint2 group, uint tid, ushort sg, ushort lane) {
     static_assert(NF % 16u == 0 && 16u * BANKS <= NF, "conv banks must fit the block width");
     static_assert(!WINOGRAD || (MB == 4u && SG == 4u && BANKS == 1u), "Winograd requires the 32x4 tile and one conv bank");
     constexpr uint TW = 8u * MB, WW = TW + 2u, WH = SG + 2u;
     constexpr uint BC = 16u * BANKS, BY = NF - BC, KB = NF / 8u, N1 = 2u * NF;
     const int x0 = int(group.x * TW), y0 = int(group.y * SG);
+    using T = metal::conditional_t<WINOGRAD, uchar, half>;
+    threadgroup T *tile = (threadgroup T *)storage;
     load_block_window<NF, BANKS, TW, SG>(tile, scratch, p.input, x0, y0, tid);
     threadgroup_barrier(mem_flags::mem_threadgroup);
     // Winograd assigns eight 2x2 tiles to each SIMD group, retaining the
@@ -283,8 +294,8 @@ __attribute__((always_inline)) inline void block(device uchar *scratch, device c
     const uint y = uint(y0) + sy;
     if (y >= (UPSAMPLE ? p.input.height : p.output.height)) return;
     const ushort2 lo = lane_origin(lane);
-    threadgroup const half *centre = tile + ((sy + 1u) * WW + sx + 1u) * BC;
-    threadgroup const half *bypass = tile + WW * WH * BC + (sy * TW + sx) * BY;
+    threadgroup const T *centre = tile + ((sy + 1u) * WW + sx + 1u) * BC;
+    threadgroup const T *bypass = tile + WW * WH * BC + (sy * TW + sx) * BY;
 
     // Grouped 3x3 convolutions (16 -> 16 per bank), then the bypass channels.
     hmat a1[MB][KB];
@@ -316,7 +327,7 @@ __attribute__((always_inline)) inline void block(device uchar *scratch, device c
 #pragma unroll
                     for (uint m = 0; m < MB; ++m) {
                         hmat a;
-                        simdgroup_load(a, tile + ((sg + ky) * WW + m * 8u + kx) * BC + b * 16u + kb * 8u, BC);
+                        simdgroup_load(a, (threadgroup const half *)storage + ((sg + ky) * WW + m * 8u + kx) * BC + b * 16u + kb * 8u, BC);
                         simdgroup_multiply_accumulate(acc[m][0], a, lower, acc[m][0]);
                         simdgroup_multiply_accumulate(acc[m][1], a, upper, acc[m][1]);
                     }
@@ -335,7 +346,9 @@ __attribute__((always_inline)) inline void block(device uchar *scratch, device c
 #pragma unroll
         for (uint m = 0; m < MB; ++m) {
             const uint px = WINOGRAD ? (m & 1u) : m * 8u, py = WINOGRAD ? m / 2u : 0u;
-            simdgroup_load(a1[m][cb], bypass + (py * TW + px) * BY + (cb * 8u - BC), (WINOGRAD ? 2u : 1u) * BY);
+            threadgroup const T *src = bypass + (py * TW + px) * BY + (cb * 8u - BC);
+            if (WINOGRAD) a1[m][cb] = half_fragment(pair(src + lo.y * 2u * BY + lo.x));
+            else simdgroup_load(a1[m][cb], (threadgroup const half *)src, BY);
         }
 
     // ReLU expansion (NF -> 2NF), streamed one 8-channel block at a time
@@ -382,9 +395,9 @@ __attribute__((always_inline)) inline void block(device uchar *scratch, device c
         for (uint m = 0; m < MB; ++m) {
             const uint px = WINOGRAD ? 2u * lo.y + (m & 1u) : m * 8u + lo.y;
             const uint py = WINOGRAD ? m / 2u : 0u;
-            threadgroup const half *r = ch < BC ? centre + (py * WW + px) * BC + ch : bypass + (py * TW + px) * BY + (ch - BC);
+            const half2 r = pair(ch < BC ? centre + (py * WW + px) * BC + ch : bypass + (py * TW + px) * BY + (ch - BC));
             const int2 value = int2(finish2f(float2(out[m][ob].thread_elements()[0], out[m][ob].thread_elements()[1]),
-                                      bias, int2(r[0], r[1]), q));
+                                      bias, int2(r), q));
             if (UPSAMPLE) {
                 a3[m][ob].thread_elements()[0] = half(value.x);
                 a3[m][ob].thread_elements()[1] = half(value.y);
@@ -497,8 +510,8 @@ __attribute__((always_inline)) inline void downsample(device uchar *scratch, dev
 #define FSR411_SIMD_BLOCK(NAME, NF, BANKS, MB, SG, UPSAMPLE, WINOGRAD) \
 kernel void NAME(FSR411_SIMD_ARGS) { \
     FSR411_LOCAL_PARAMS; \
-    threadgroup half tile[(8 * (MB) + 2) * ((SG) + 2) * (16 * (BANKS)) + (8 * (MB)) * (SG) * ((NF) - 16 * (BANKS))]; \
-    fsr411_simd::block<NF, BANKS, MB, SG, UPSAMPLE, WINOGRAD>(scratch, weights, wh, wg, p, tile, group, tid, sg, lane); \
+    threadgroup uint4 tile[((8 * (MB) + 2) * ((SG) + 2) * (16 * (BANKS)) + (8 * (MB)) * (SG) * ((NF) - 16 * (BANKS))) * ((WINOGRAD) ? 1 : 2) / 16]; \
+    fsr411_simd::block<NF, BANKS, MB, SG, UPSAMPLE, WINOGRAD>(scratch, weights, wh, wg, p, (threadgroup uchar *)tile, group, tid, sg, lane); \
 }
 FSR411_SIMD_BLOCK(fsr411_simd_cnb, 16, 1, FSR411_SIMD_MB16, 4, false, false)
 FSR411_SIMD_BLOCK(fsr411_simd_fnb32, 32, 1, FSR411_SIMD_MB32, 4, false, false)
