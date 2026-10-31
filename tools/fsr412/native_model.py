@@ -139,8 +139,13 @@ def pack(tier,preset,initializer,out):
             'reference':{'function':'fsr411_ref_'+kind,'tile':[32,1],'threads':32},
             'simd':{'function':'fsr411_simd_'+(kind if kind=='cnb' else kind+str(nf)),'tile':tile,'threads':128,
                     'float_accumulator_bound':bound},
+            # FSR411_FLOAT_EPILOGUE: |accumulator| + |bias| + |residual << shift|
+            # must stay exact in float (Winograd sums bound the 3x3 stage too).
             'source_sha256':digest(initializer),'accumulator_bounds':[],
             'coefficient_provenance':'verified AMD FSR4.1.2 Lite initializer, no 4.1.1 coefficients'}
+        epilogue=max(bound,transformed[1] if transformed else 0)+max(abs(x) for b in biases for x in b)\
+            +(128<<max(q[1] for q in p['q']))
+        if epilogue<1<<24:e['simd']['float_epilogue_bound']=epilogue
         if transformed:
             values,worst=transformed
             e['simd']['winograd']={'function':{'cnb':'fsr411_simd_wcnb','fnb':'fsr411_simd_wfnb32','ct':'fsr411_simd_wct32'}[kind],

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -78,6 +79,9 @@ struct Options {
     bool rcas = false, allowCompile = true, ultraPerformance = false;
     // FSR 4.1.2 only: widen POST's current-frame filter where history is rejected.
     bool pixelFix = false;
+    // SIMD load_window zeroes every out-of-bounds texel, including DS/CT halos.
+    // Keep explicit padding for reference/MPP and diagnostic scratch captures.
+    bool skipSimdPadding = true;
     // Lower bound of the widening, 0..1 (1 = off); POST reads it from `pad`.
     float pixelFixFloor = 0.6f;
     // Tests only: Exact Fast/Lossy PRE/POST with ordered arithmetic, so their
@@ -342,9 +346,11 @@ public:
         Session *session = options.modelLite ? ensure_lite_session(tier,p,options,kind,error)
                                              : ensure_session(tier,p,options,kind,error);
         if (!session && kind==Kernels::Simd && options.backend==Backend::Auto) {
-            // Never retry a failed simd setup on this device; scalar is exact too.
+            // Missing shaders or other variant-specific failures do not prove
+            // that SIMD is broken for every resolution on this device.
             fsr4_logf("FSR 4.1.1 simd backend unavailable (%s); using scalar", error.c_str());
-            simdFailed_ = true; kind = Kernels::Scalar; error.clear();
+            if (simdVerified_ == 0) simdFailed_ = true;
+            kind = Kernels::Scalar; error.clear();
             session = options.modelLite ? ensure_lite_session(tier,p,options,kind,error)
                                         : ensure_session(tier,p,options,kind,error);
         }
@@ -385,6 +391,8 @@ public:
         }
         id enc = [commandBuffer computeCommandEncoder];
         if (!enc) return fail("caller command buffer already has an active encoder");
+        if ([enc respondsToSelector:@selector(setLabel:)])
+            [enc setLabel:session->modelLite ? @"FSR4 4.1.2 Lite" : @"FSR4 4.1.1"];
         const bool m4 = ![enc respondsToSelector:@selector(setBuffer:offset:atIndex:)];
         if (m4 && options.stageProfiler) {
             [enc endEncoding]; return fail("CLI stage counters require a classic Metal command buffer");
@@ -460,6 +468,8 @@ public:
                 dispatch(enc,m4,*slot,*session,"prepare_color",MTLSizeMake(ceil_div(p.rw,16),ceil_div(p.rh,16),1),b);
             for (const auto &name : session->order) {
                 if (skip && name!="pre" && name!="post") continue;
+                if (options.skipSimdPadding && session->modelLite && kind==Kernels::Simd &&
+                    options.captureStages.empty() && name.rfind("pad",0)==0) continue;
                 if (name=="post" && session->externalPostCnb && !skip)
                     dispatch_native(enc,m4,*slot,*session,13,view,sizes);
                 const int pass = name.rfind("pass",0) == 0 ? std::atoi(name.c_str()+4) : 0;
@@ -819,8 +829,18 @@ private:
         co.languageVersion=MTLLanguageVersion3_0;
         if(useMpp) if (@available(macOS 26.0,*)) co.languageVersion=MTLLanguageVersion4_0;
         const bool specialize=useMpp||useSimd;
+        // Exact float requantization only when the generator proved every
+        // pass's epilogue bound; older or 4.1.1 manifests keep integer math.
+        bool floatEpilogue=useSimd;
+        NSMutableArray *bounded=[[manifest[@"passes"] allValues] mutableCopy];
+        if (manifest[@"auxiliary_passes"][@"post_cnb"]) [bounded addObject:manifest[@"auxiliary_passes"][@"post_cnb"]];
+        for (NSDictionary *entry in bounded) {
+            NSNumber *bound=entry[@"simd"][@"float_epilogue_bound"];
+            if (!bound || [bound unsignedLongLongValue]>=(1ull<<24)) floatEpilogue=false;
+        }
+        if (useSimd) fsr4_logf("native simd epilogue=%s", floatEpilogue?"float-exact":"integer");
         co.preprocessorMacros=@{@"FSR411_MAXW":@(s.tier*8/9),@"FSR411_MAXH":@(s.tier/2),
-                               @"FSR411_SPECIALIZE":@(specialize)};
+                               @"FSR411_SPECIALIZE":@(specialize),@"FSR411_FLOAT_EPILOGUE":@(floatEpilogue)};
         id<MTLLibrary> lib=[device_ newLibraryWithSource:source options:co error:&e];
         if (!lib) { error=metal_error(e); return false; }
         if (useSimd && !verify_simd(lib,error)) return false;

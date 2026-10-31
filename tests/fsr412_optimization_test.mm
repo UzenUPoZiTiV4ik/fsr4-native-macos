@@ -97,6 +97,7 @@ void encode(fsr412::Runtime &runtime,id<MTLDevice> dev,id<MTLCommandQueue> queue
     }
 }
 }
+#ifndef FSR412_TEST_HELPERS_ONLY
 int main(int argc,char **argv) {
     @autoreleasepool {try {
         require(argc>=2,"usage: fsr412_optimization_test <root> [mtl4]");
@@ -140,3 +141,4 @@ int main(int argc,char **argv) {
         return 0;
     } catch(const std::exception &e) {std::fprintf(stderr,"FSR 4.1.2 optimization: %s\n",e.what());return 1;}}
 }
+#endif
