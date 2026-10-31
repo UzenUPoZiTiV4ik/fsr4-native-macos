@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -342,9 +343,11 @@ public:
         Session *session = options.modelLite ? ensure_lite_session(tier,p,options,kind,error)
                                              : ensure_session(tier,p,options,kind,error);
         if (!session && kind==Kernels::Simd && options.backend==Backend::Auto) {
-            // Never retry a failed simd setup on this device; scalar is exact too.
+            // Missing shaders or other variant-specific failures do not prove
+            // that SIMD is broken for every resolution on this device.
             fsr4_logf("FSR 4.1.1 simd backend unavailable (%s); using scalar", error.c_str());
-            simdFailed_ = true; kind = Kernels::Scalar; error.clear();
+            if (simdVerified_ == 0) simdFailed_ = true;
+            kind = Kernels::Scalar; error.clear();
             session = options.modelLite ? ensure_lite_session(tier,p,options,kind,error)
                                         : ensure_session(tier,p,options,kind,error);
         }
@@ -385,6 +388,8 @@ public:
         }
         id enc = [commandBuffer computeCommandEncoder];
         if (!enc) return fail("caller command buffer already has an active encoder");
+        if ([enc respondsToSelector:@selector(setLabel:)])
+            [enc setLabel:session->modelLite ? @"FSR4 4.1.2 Lite" : @"FSR4 4.1.1"];
         const bool m4 = ![enc respondsToSelector:@selector(setBuffer:offset:atIndex:)];
         if (m4 && options.stageProfiler) {
             [enc endEncoding]; return fail("CLI stage counters require a classic Metal command buffer");
