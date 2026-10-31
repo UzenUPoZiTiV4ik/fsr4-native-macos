@@ -19,6 +19,16 @@ test-fsr412-pre-weights: build/tests/fsr412_runtime_ab_test
 
 .PHONY: test-fsr412-pre-weights
 
+build/tests/fsr412_simd_parity_test: tests/fsr412_simd_parity_test.mm tests/fsr412_optimization_test.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr411_simd.metal src/fsr411_model.h src/fsr412_session.inc Makefile src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -Wextra -Werror -fobjc-arc -isysroot $(SDKROOT) $< $(FRAMEWORKS) -o $@
+
+test-fsr412-simd-parity: build/tests/fsr412_simd_parity_test
+	build/tests/fsr412_simd_parity_test "$(CURDIR)"
+	build/tests/fsr412_simd_parity_test "$(CURDIR)" mtl4
+
+.PHONY: test-fsr412-simd-parity
+
 test: test-input test-settings test-fsr411-math test-installer test-fsr411-layout test-fsr411-cache test-fsr411-mpp-policy
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) tests/backend_policy_test.cpp -o build/tests/backend_policy_test
