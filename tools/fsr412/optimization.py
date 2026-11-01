@@ -6,7 +6,7 @@ imported model. Transforms reject unknown source shapes instead of guessing.
 from __future__ import annotations
 import re
 
-REVISION = 3
+REVISION = 4
 
 _CT2D_PRODUCT = re.compile(
     r"reduce_add\(int4\(as_type<char4>\((_\d+)\)\) \* int4\(as_type<char4>\((_\d+)\[([^\]]+)\]\)\)\)")
@@ -197,3 +197,26 @@ def pixelization_fix(text: str) -> str:
             f"{indent}float {sx[2]} = (2.0 / (1.0 + exp(-{params}.y))) * fsr412Widen;\n"
             f"{indent}float {sy[1]} = (2.0 / (1.0 + exp(-{params}.z))) * fsr412Widen;\n")
     return text[:sx.start()] + code + text[sy.end():]
+
+
+_HALF_PAIR = re.compile(r"half2\(float2\(float2\(as_type<half2>\((InitializerBuffer\._m0\[(_\d+)\]) & 65535u\)\)\.x, "
+                        r"float2\(as_type<half2>\(InitializerBuffer\._m0\[\2\] >> 16u\)\)\.x\)\)")
+
+
+def constant_initializer(text: str) -> str:
+    """Read PRE's read-only weights through the constant address space.
+
+    PRE's 2x2 input convolution decodes each 32-bit weight word as two halves
+    through float, half(float(half(x))), which is the identity on every finite
+    half, so one as_type<half2> of the word gives the same values. The weights
+    are the same for every pixel quad, which the constant cache serves better
+    than device loads.
+    """
+    binding = "device type_ByteAddressBuffer& InitializerBuffer"
+    if text.count(binding) != 1:
+        raise ValueError("PRE initializer binding changed")
+    text = text.replace(binding, "constant type_ByteAddressBuffer& InitializerBuffer", 1)
+    text, count = _HALF_PAIR.subn(r"as_type<half2>(\1)", text)
+    if count != 64 or "65535u" in text:
+        raise ValueError(f"PRE weight decode changed: {count}")
+    return text

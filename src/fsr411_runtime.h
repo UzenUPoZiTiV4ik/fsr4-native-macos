@@ -885,8 +885,18 @@ private:
         co.languageVersion=MTLLanguageVersion3_0;
         if(useMpp) if (@available(macOS 26.0,*)) co.languageVersion=MTLLanguageVersion4_0;
         const bool specialize=useMpp||useSimd;
+        // Exact float requantization only when the generator proved every
+        // pass's epilogue bound; older or 4.1.1 manifests keep integer math.
+        bool floatEpilogue=useSimd;
+        NSMutableArray *bounded=[[manifest[@"passes"] allValues] mutableCopy];
+        if (manifest[@"auxiliary_passes"][@"post_cnb"]) [bounded addObject:manifest[@"auxiliary_passes"][@"post_cnb"]];
+        for (NSDictionary *entry in bounded) {
+            NSNumber *bound=entry[@"simd"][@"float_epilogue_bound"];
+            if (!bound || [bound unsignedLongLongValue]>=(1ull<<24)) floatEpilogue=false;
+        }
+        if (useSimd) fsr4_logf("native simd epilogue=%s", floatEpilogue?"float-exact":"integer");
         co.preprocessorMacros=@{@"FSR411_MAXW":@(s.tier*8/9),@"FSR411_MAXH":@(s.tier/2),
-                               @"FSR411_SPECIALIZE":@(specialize)};
+                               @"FSR411_SPECIALIZE":@(specialize),@"FSR411_FLOAT_EPILOGUE":@(floatEpilogue)};
         id<MTLLibrary> lib=[device_ newLibraryWithSource:source options:co error:&e];
         if (!lib) { error=metal_error(e); return false; }
         if (useSimd && !verify_simd(lib,error)) return false;
