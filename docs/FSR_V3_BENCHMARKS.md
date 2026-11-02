@@ -1,45 +1,52 @@
-# v3.0: heat-aware full-frame M5 model measurements
+# v3.0: heat-aware M5 MPP and forced SIMD measurements
 
-Date: 2026-11-02. Machine: MacBook Air M5 (Mac17,4), 16 GiB, fanless.
-OS: Version 27.0.1 (Build 26A434). Battery power throughout (41% -> 35%); Low Power Mode off.
+Date: 2026-11-02. MacBook Air M5 (Mac17,4), 16 GiB, fanless. Version 27.0.1 (Build 26A434).
+Battery power throughout; Low Power Mode off. MPP series: 41% -> 35%;
+forced SIMD series: 30% -> 23%. The backends were collected in separate
+sessions, not interleaved with each other.
 
-These are **whole production upscaler command-buffer GPU durations**, not
-CPU encode/compilation time, game frame time or FPS. All variants use native
-INT8 MPP, classic Metal, linear colour, inverted depth, low-resolution motion
-vectors, auto-exposure on, RCAS off and stable pre-exposure 1.0.
+**Scope:** whole production upscaler command-buffer GPU durations, not
+CPU encode/compilation time, game frame time or FPS. Linear colour, inverted
+depth, low-resolution motion, auto-exposure on, RCAS off, pre-exposure 1.0.
+MPP uses native INT8 tensor operations; forced SIMD uses half matrices with
+float accumulation and the same INT8 epilogue. The integer model is retained.
+Only the optional 4.0.2 SIMD row uses the distinct real FP16 legacy path.
 
-The fixture is deterministic resident synthetic data: 0x4128 LCG colour/noise,
-stepped depth, nonzero motion and eight jitter phases. Identical textures and
-coordinates are supplied to every model. This is not a recorded game or an
-image-quality comparison. 1080p/1440p refer to **output resolution**.
+**Both sets are physical M5 measurements, not M1-M4 timings.** Forcing SIMD
+does not change the GPU family: M5-specific POST colour tiling stays active.
+This is not an emulation of the entire M1-M4 route or a prediction for it.
+
+The fixture is resident deterministic data: 0x4128 LCG colour/noise, stepped
+depth, nonzero motion and eight jitter phases. Every model gets the same
+textures and coordinates. This is not a game capture or image-quality test.
+1080p/1440p refer to **output resolution**.
 
 ## Protocol
 
-- Compile/prepare the external models and every pipeline before timing.
-- Warm for at least 120 seconds on the first pass of each resolution.
-  Repeat passes warm for at least 30 seconds; no cooling pause is substituted.
-- Resolution order: **1080p, 1440p, 1440p, 1080p**. Models execute serially
-  in one process for each pass. Rotate the first model and reverse direction
-  per frame/round, including during warmup.
-- Two passes per resolution, six rounds per pass, 64 frames per model/round:
-  **12 rounds and 768 measured frames per model/resolution**.
-- Headline: median of all 12 round means, not pooled frame median, the best
-  round, or only the first/cold run. Ranges are minimum/maximum **round means**.
-- P99 uses all 768 individual frames. Full/reuse/partial costs are arithmetic
-  means of the corresponding frames, so they need not equal the headline.
-- There are no measured resets. Eligible whole-frame profiles refresh/reuse
-  50:50 (384 full + 384 reused frames). Tiled has 768 partial frames.
-  Every other model runs full inference on all 768 frames.
-- Pipeline creation, GPU layout validation, compilation and all warmup frames
-  are excluded. No stage counters or capture/readback copies are added.
-- Optional 4.0.2 uses its **production live encoder**, including its small
-  built-in diagnostic GPU probe. All other rows use the production Runtime
-  used by the CLI. The legacy row is labelled separately, not a clean ablation.
-- A nonblocking exclusive lock at `/tmp/fsr4-gpu-timing.lock` prevents a second
-  copy of this timing harness. No other benchmark/test or game ran concurrently.
-  Normal desktop/background applications stayed open.
+- Prime every external model and pipeline before timing.
+- Initial warmup: at least 120 s per backend/resolution. Repeat warmup: at
+  least 30 s. Compilation, pipeline creation, allocations and all warmup
+  frames are excluded. No deliberate cooling pause replaces sustained warmup.
+- For each backend: **1080p, 1440p, 1440p, 1080p**. In each process models
+  execute serially; the first model rotates and direction reverses per frame/round.
+- Per model/backend/resolution: two passes x six rounds x 64 frames =
+  **12 round means and 768 measured frames**.
+- Headline: median of all 12 round means, not best/cold run or pooled frame
+  median. Range: minimum/maximum **round means**, not fastest/slowest frame.
+- P99 includes all 768 individual frames. Full/reuse/partial costs are
+  arithmetic means of those groups, and need not equal the headline median.
+- No measured resets. Eligible whole-frame modes use 384 full + 384 reused
+  frames; tiled has 768 partial frames; other modes have 768 full frames.
+- Actual backend labels are checked at encode and in the JSON. Forced SIMD
+  is not substituted with MPP/scalar. Device probes/internal guarded direct
+  kernels remain part of the normal backend policy.
+- No stage counters or capture/readback copies in timed buffers. Legacy
+  4.0.2 uses its actual live encoder, including its small built-in GPU probe.
+  That row is a labelled legacy comparison, not a clean numerical ablation.
+- `/tmp/fsr4-gpu-timing.lock` is nonblocking/exclusive. No game or other GPU
+  benchmark/test ran concurrently; normal desktop/background apps stayed open.
 
-## 1080p: 1280x720 -> 1920x1080
+## MPP 1080p: 1280x720 -> 1920x1080
 
 | Variant | Median round mean | Round range | Frame P99 | Full mean | Reuse mean | Partial mean |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -56,7 +63,7 @@ image-quality comparison. 1080p/1440p refer to **output resolution**.
 | `int8-lite-lossy-tiled` | 3.730 | 3.481-4.026 | 5.358 | - | - | 3.739 |
 | `int8-lite-lossy-original` | 8.636 | 7.918-9.617 | 14.338 | 11.649 | 5.693 | - |
 
-## 1440p: 1706x960 -> 2560x1440
+## MPP 1440p: 1706x960 -> 2560x1440
 
 | Variant | Median round mean | Round range | Frame P99 | Full mean | Reuse mean | Partial mean |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -73,29 +80,70 @@ image-quality comparison. 1080p/1440p refer to **output resolution**.
 | `int8-lite-lossy-tiled` | 7.016 | 6.636-7.198 | 8.716 | - | - | 6.993 |
 | `int8-lite-lossy-original` | 10.866 | 10.438-11.275 | 13.774 | 10.008 | 11.725 | - |
 
-## Heat and session drift
+## Forced SIMD 1080p: 1280x720 -> 1920x1080
 
-Every measured round started and ended at **NSProcessInfo thermal state 1
-(fair)**. The first warmup began at nominal (0); no serious/critical state
-was observed. No privileged temperature or GPU-frequency sampler was available.
-A fair/nominal state **does not prove the absence of clock throttling**.
+| Variant | Median round mean | Round range | Frame P99 | Full mean | Reuse mean | Partial mean |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `exact-fast` | 9.914 | 9.102-11.560 | 12.675 | 10.051 | - | - |
+| `fsr4-legacy` | 13.217 | 12.205-15.303 | 16.484 | 13.419 | - | - |
+| `lossy2` | 5.652 | 5.255-6.546 | 12.487 | 10.025 | 1.564 | - |
+| `int8-lite` | 4.790 | 4.365-5.533 | 7.154 | 4.814 | - | - |
+| `int8-lite-pixfix` | 4.709 | 4.334-5.487 | 7.038 | 4.821 | - | - |
+| `int8-lite-lossy` | 3.870 | 3.596-4.477 | 7.728 | 5.510 | 2.352 | - |
+| `exact` | 10.953 | 10.090-12.837 | 13.936 | 11.160 | - | - |
+| `lossy` | 5.692 | 5.185-6.568 | 12.679 | 10.048 | 1.524 | - |
+| `lossy2-temporal1` | 7.159 | 6.615-8.354 | 13.283 | 10.682 | 3.914 | - |
+| `lossy2-temporal2` | 6.794 | 6.195-7.879 | 12.724 | 10.272 | 3.515 | - |
+| `int8-lite-lossy-tiled` | 5.182 | 4.799-5.956 | 7.427 | - | - | 5.238 |
+| `int8-lite-lossy-original` | 9.157 | 8.463-10.390 | 15.914 | 13.233 | 5.347 | - |
 
-| Pass | Output | Warmup | Measured wall time | Measured thermal state | Battery |
+## Forced SIMD 1440p: 1706x960 -> 2560x1440
+
+| Variant | Median round mean | Round range | Frame P99 | Full mean | Reuse mean | Partial mean |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `exact-fast` | 18.222 | 17.558-18.861 | 20.943 | 18.187 | - | - |
+| `fsr4-legacy` | 24.122 | 23.080-24.882 | 27.806 | 24.097 | - | - |
+| `lossy2` | 10.499 | 10.008-10.761 | 20.460 | 18.073 | 2.775 | - |
+| `int8-lite` | 8.661 | 8.405-8.993 | 10.926 | 8.682 | - | - |
+| `int8-lite-pixfix` | 8.754 | 8.335-8.940 | 10.731 | 8.680 | - | - |
+| `int8-lite-lossy` | 7.211 | 6.920-7.406 | 11.791 | 10.060 | 4.375 | - |
+| `exact` | 20.238 | 19.478-21.016 | 24.305 | 20.227 | - | - |
+| `lossy` | 10.549 | 10.072-10.793 | 22.078 | 18.195 | 2.745 | - |
+| `lossy2-temporal1` | 13.323 | 12.810-13.653 | 21.957 | 19.352 | 7.167 | - |
+| `lossy2-temporal2` | 12.504 | 12.076-12.914 | 21.312 | 18.565 | 6.396 | - |
+| `int8-lite-lossy-tiled` | 9.410 | 9.218-9.765 | 11.474 | - | - | 9.445 |
+| `int8-lite-lossy-original` | 11.849 | 11.272-12.203 | 15.012 | 12.898 | 10.667 | - |
+
+## Heat and drift
+
+MPP measured rounds started/ended at **fair (1)**. The first SIMD measured
+series spanned **nominal (0)/fair (1)**; later SIMD rounds were fair.
+No serious/critical state was observed. These are NSProcessInfo thermal
+pressure levels, not temperature or clock-frequency sensor readings.
+**Nominal/fair does not prove the absence of clock throttling.**
+
+| Backend/pass | Output | Warmup | Measured wall time | Measured thermal state | Battery |
 | --- | --- | ---: | ---: | --- | --- |
-| 1 | 1080p | 120.3 s | 19.3 s | 1 (fair) | 41% -> 39% |
-| 2 | 1440p | 120.4 s | 36.3 s | 1 (fair) | 39% -> 37% |
-| 3 | 1440p | 30.3 s | 37.7 s | 1 (fair) | 37% -> 36% |
-| 4 | 1080p | 30.1 s | 22.7 s | 1 (fair) | 36% -> 35% |
+| MPP 1 | 1080p | 120.3 s | 19.3 s | fair | 41% -> 39% |
+| MPP 2 | 1440p | 120.4 s | 36.3 s | fair | 39% -> 37% |
+| MPP 3 | 1440p | 30.3 s | 37.7 s | fair | 37% -> 36% |
+| MPP 4 | 1080p | 30.1 s | 22.7 s | fair | 36% -> 35% |
+| SIMD 1 | 1080p | 120.2 s | 32.2 s | nominal/fair | 30% -> 27% |
+| SIMD 2 | 1440p | 120.9 s | 59.6 s | fair | 27% -> 25% |
+| SIMD 3 | 1440p | 30.5 s | 62.1 s | fair | 25% -> 24% |
+| SIMD 4 | 1080p | 30.3 s | 38.1 s | fair | 24% -> 23% |
 
-Within each pass, early/late round drift was small (recorded for every row
-in the JSON). **Between passes the later 1080p series was slower**, even
-though the coarse thermal-pressure state remained fair. Plain Lite increased
-by 19.9%. Both passes are included, not discarded or replaced with the faster one.
-This captures an observed warm-to-hot/background-load envelope; without
-temperature/frequency counters the drift cannot be attributed solely to heat.
-It is not evidence that the implementation became slower between builds.
+Within individual passes early/late drift was small and is saved for each
+row in the JSON. Between passes the later 1080p Lite series was **19.9%
+slower in MPP and 17.8% slower in SIMD**, despite the coarse pressure state.
+Both passes remain included; none was discarded in favour of a prettier
+number. This is an observed warm-to-hot/background-load envelope. Without
+temperature/frequency sensors, heat cannot be isolated as its sole cause.
+It is not a regression comparison between builds.
 
-| Variant | Earlier -> later 1080p series median | Earlier -> later 1440p series median |
+### MPP: earlier -> later series
+
+| Variant | 1080p pass medians (change) | 1440p pass medians (change) |
 | --- | ---: | ---: |
 | `exact-fast` | 4.149 -> 4.986 (20.2%) | 8.512 -> 8.825 (3.7%) |
 | `fsr4-legacy` | 5.020 -> 5.896 (17.4%) | 10.288 -> 10.633 (3.4%) |
@@ -110,45 +158,78 @@ It is not evidence that the implementation became slower between builds.
 | `int8-lite-lossy-tiled` | 3.526 -> 3.942 (11.8%) | 6.902 -> 7.116 (3.1%) |
 | `int8-lite-lossy-original` | 7.985 -> 9.337 (16.9%) | 10.666 -> 11.083 (3.9%) |
 
-## What these numbers do not establish
+### SIMD: earlier -> later series
 
-- They do not rank image quality or prove that Lite Lossy is better/faster
-  than Lite. In this fixture Lite is faster at both resolutions.
-- A reused frame is not always cheaper: the original-graph route retains its
-  original POST on reused frames, while its fast POST only runs on full frames
-  for the proven permutation. 1440p reuse therefore costs more in that row.
-- They do not measure a game, a Windows GPU/driver, M1-M4 performance, or a
-  continuous single-mode gaming session. Interleaving intentionally balances
-  order/heat across variants, with different cache traffic than one model alone.
-- The CLI Tiled/Original and temporal-quality options are not selectable
-  panel modes. Ordinary Lite POST colour tiling is a separate implementation
-  detail; removing Lite Lossy Tiled from the panel does not remove it.
+| Variant | 1080p pass medians (change) | 1440p pass medians (change) |
+| --- | ---: | ---: |
+| `exact-fast` | 9.171 -> 10.747 (17.2%) | 17.764 -> 18.564 (4.5%) |
+| `fsr4-legacy` | 12.255 -> 14.481 (18.2%) | 23.677 -> 24.573 (3.8%) |
+| `lossy2` | 5.294 -> 6.301 (19.0%) | 10.115 -> 10.660 (5.4%) |
+| `int8-lite` | 4.398 -> 5.180 (17.8%) | 8.495 -> 8.857 (4.3%) |
+| `int8-lite-pixfix` | 4.431 -> 5.267 (18.9%) | 8.458 -> 8.904 (5.3%) |
+| `int8-lite-lossy` | 3.630 -> 4.151 (14.4%) | 7.123 -> 7.327 (2.9%) |
+| `exact` | 10.160 -> 12.100 (19.1%) | 19.783 -> 20.599 (4.1%) |
+| `lossy` | 5.275 -> 6.324 (19.9%) | 10.213 -> 10.712 (4.9%) |
+| `lossy2-temporal1` | 6.639 -> 7.947 (19.7%) | 12.954 -> 13.586 (4.9%) |
+| `lossy2-temporal2` | 6.287 -> 7.540 (19.9%) | 12.183 -> 12.717 (4.4%) |
+| `int8-lite-lossy-tiled` | 4.906 -> 5.522 (12.5%) | 9.310 -> 9.598 (3.1%) |
+| `int8-lite-lossy-original` | 8.549 -> 10.013 (17.1%) | 11.498 -> 12.058 (4.9%) |
 
-## Reproduce from a source checkout
+## Limits and interpretation
 
-Required external inputs: ordinary Lite import, `make lossy2-weights`,
-`make lite-lossy-weights`, and the verified original-shader bundle described
-in [FSR412_UPSTREAM_ORACLE.md](FSR412_UPSTREAM_ORACLE.md). To include legacy
-4.0.2, its model weights must also be present. Those optional/GPL inputs are
-not included in the MIT ZIP/DMG. No Windows DLL is executed.
+- MPP and SIMD were collected separately. Big differences are useful
+  observations on this fixture, not a tightly paired cross-backend test.
+- In this fixture Lite is faster than Lite Lossy in MPP. In forced SIMD,
+  Lite Lossy is about 19% faster at 1080p and 17% faster at 1440p.
+  This does not rank image quality or predict which looks best in a game.
+- Tiny overlapping differences, e.g. with/without the Pixelization fix, are
+  noise, not a demonstrated optimization. Fix strength here is 0.5.
+- A reused original-route frame can cost more: its original POST remains
+  on reuse while the proven fast POST is run-frame-only. See the group costs.
+- This is not a continuous single-mode gaming session, a Windows driver
+  benchmark, or physical M1-M4 validation. Interleaving changes cache traffic
+  compared with one mode alone; other scenes can have different POST work.
+- Tiled/Original/temporal-quality options remain CLI-only panel-wise.
+  Ordinary Lite POST colour tiling is separate and is not removed with
+  Lite Lossy Tiled from the panel.
 
-Build the harness, then prime each resolution once (allowing compilation):
+## Reproduce from source
+
+External inputs: ordinary Lite import, `make lossy2-weights`,
+`make lite-lossy-weights`, and the original bundle described in
+[FSR412_UPSTREAM_ORACLE.md](FSR412_UPSTREAM_ORACLE.md). `--legacy` also
+requires the old 4.0.2 weights. Optional/GPL inputs are not in ZIP/DMG,
+and Windows DLLs are not executed.
+
+Build and prime both sizes/backends once, allowing compilation:
 
 ```sh
 make build/tests/fsr_modes_thermal
-build/tests/fsr_modes_thermal "$PWD" --size 1280 720 1920 1080 --legacy --warmup-seconds 0 --rounds 2 --frames-per-round 8 --report build/prime-1080.json
-build/tests/fsr_modes_thermal "$PWD" --size 1706 960 2560 1440 --legacy --warmup-seconds 0 --rounds 2 --frames-per-round 8 --report build/prime-1440.json
+build/tests/fsr_modes_thermal "$PWD" --size 1280 720 1920 1080 --legacy --warmup-seconds 0 --rounds 2 --frames-per-round 8 --report build/prime-mpp-1080.json
+build/tests/fsr_modes_thermal "$PWD" --size 1706 960 2560 1440 --legacy --warmup-seconds 0 --rounds 2 --frames-per-round 8 --report build/prime-mpp-1440.json
+build/tests/fsr_modes_thermal "$PWD" --simd --size 1280 720 1920 1080 --legacy --warmup-seconds 0 --rounds 2 --frames-per-round 8 --report build/prime-simd-1080.json
+build/tests/fsr_modes_thermal "$PWD" --simd --size 1706 960 2560 1440 --legacy --warmup-seconds 0 --rounds 2 --frames-per-round 8 --report build/prime-simd-1440.json
 python3 tools/bench/benchmark_modes_thermal.py --legacy --out build/v3-thermal-benchmark
+python3 tools/bench/benchmark_modes_thermal.py --simd --legacy --out build/v3-simd-benchmark
 ```
 
-For a cold original-bundle build, set `FSR412_DXIL_SPIRV` to the converter.
-Omit `--legacy` consistently if its weights are unavailable. Do not run any
-other GPU benchmark/test concurrently. The runner refuses a nonempty output
-directory and validates the backend, frame counts, cadence and timing reports.
-Use `--dry-run` to inspect the schedule without starting the GPU.
+A cold original-bundle build needs `FSR412_DXIL_SPIRV` set to the converter.
+Omit `--legacy` consistently if its data is unavailable. Run no other GPU
+benchmark/test concurrently. The runner refuses a nonempty output directory
+and validates counts, cadence, backend and timing reports. `--dry-run`
+prints the schedule without starting the GPU.
 
-[Portable numeric results and thermal samples](reports/m5-modes-v3-2026-11-02.json).
-Raw per-frame reports/logs remain under the gitignored build directory.
-Benchmark source SHA-256: `3f79c550b56ae23685b7e9dcb580adea2b4d02fde21a979091023ef9f4dafda3`.
+## Reports and source identity
 
-v3.0 does not change model weights, neural kernels or default profile from v2.6.
+[MPP report](reports/m5-modes-v3-2026-11-02.json)
+| [SIMD report](reports/m5-modes-v3-simd-2026-11-02.json).
+Raw per-frame files/logs are retained under gitignored build directories.
+
+MPP was captured with the native-only harness snapshot in
+[805d0d8](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/blob/805d0d8045c41a61d67a794f1e3937589d73c510/tools/bench/fsr_modes_thermal.mm).
+The later harness adds explicit `--simd` support; source hashes are retained
+separately rather than relabelling the earlier measurements:
+- MPP source SHA-256: `3f79c550b56ae23685b7e9dcb580adea2b4d02fde21a979091023ef9f4dafda3`.
+- SIMD source SHA-256: `37331bc73d7377305fbbc41708afddff9eafe97b99a1afd8737fbfd0ceb3470b`.
+
+v3.0 changes the panel/reporting, not neural kernels, weights, default profile or hook ABI.

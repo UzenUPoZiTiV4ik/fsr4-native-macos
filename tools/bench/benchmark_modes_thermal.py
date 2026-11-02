@@ -4,6 +4,8 @@
 Build build/tests/fsr_modes_thermal and prime its caches first. No games or
 Windows DLLs are started. Defaults: 1080p, 1440p, 1440p, 1080p, with every
 model interleaved inside each process; 120 s initial and 30 s repeat warmups.
+--simd forces INT8 SIMD on the current GPU (legacy 4.0.2 uses FP16 SIMD).
+These are current-machine numbers, not inferred M1-M4 performance.
 Raw timings/telemetry stay in --out. --publish-report writes portable numeric
 results, without machine paths, source DLLs, weights or translated shaders.
 """
@@ -59,12 +61,13 @@ def machine_info():
             "cooling": "fanless" if model == "Mac17,4" else "not recorded"}
 
 
-def validate_run(run, size, rounds, frames, legacy):
+def validate_run(run, size, rounds, frames, legacy, simd=False):
     if run.get("schema") != "fsr_modes_thermal_v1" or run.get("output") != list(SIZES[size][2:]):
         raise ValueError("wrong report schema/output dimensions")
     if run.get("render") != list(SIZES[size][:2]) or run.get("rounds") != rounds or run.get("frames_per_round") != frames:
         raise ValueError("wrong render dimensions/measurement counts")
-    if run.get("backend") != "native INT8 MPP" or run.get("metal") != "classic command buffers":
+    expected_backend = "INT8 SIMD (half matrices, float accumulation)" if simd else "native INT8 MPP"
+    if run.get("backend") != expected_backend or run.get("metal") != "classic command buffers":
         raise ValueError("unexpected backend/Metal timing scope")
     if run.get("low_power_mode") or run.get("rcas") or not run.get("auto_exposure"):
         raise ValueError("unexpected power/RCAS/exposure options")
@@ -129,7 +132,8 @@ def summarize(runs):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--out", type=Path, default=ROOT/"build/v3-thermal-benchmark")
+    p.add_argument("--out", type=Path, help="default: build/v3-thermal-benchmark or build/v3-simd-benchmark")
+    p.add_argument("--simd", action="store_true", help="force the INT8 SIMD path on this GPU; optional legacy uses FP16")
     p.add_argument("--rounds", type=int, default=6)
     p.add_argument("--frames-per-round", type=int, default=64)
     p.add_argument("--warmup-seconds", type=float, default=120)
@@ -143,7 +147,7 @@ def main():
     if any(not math.isfinite(x) or not 0 <= x <= 900 for x in (args.warmup_seconds, args.repeat_warmup_seconds)):
         p.error("warmups must be 0..900 seconds")
     binary = ROOT/"build/tests/fsr_modes_thermal"
-    out = args.out.resolve()
+    out = (args.out or ROOT/("build/v3-simd-benchmark" if args.simd else "build/v3-thermal-benchmark")).resolve()
     if not args.dry_run and out.exists() and any(out.iterdir()):
         raise ValueError("output directory must be empty: " + str(out))
     seen, runs = set(), []
@@ -156,6 +160,8 @@ def main():
                    "--warmup-seconds", str(warmup), "--report", str(target)]
         if args.legacy:
             command.append("--legacy")
+        if args.simd:
+            command.append("--simd")
         if index > 2:
             command.append("--reverse")
         if args.dry_run:
@@ -170,7 +176,7 @@ def main():
         if completed.returncode:
             raise RuntimeError(f"benchmark failed ({completed.returncode}); see {log}")
         data = json.loads(target.read_text())
-        validate_run(data, size, args.rounds, args.frames_per_round, args.legacy)
+        validate_run(data, size, args.rounds, args.frames_per_round, args.legacy, args.simd)
         run = {"pass": index, "size": size, "power_before": before, "power_after": power(),
                "wall_seconds": time.time()-started, "data": data}
         runs.append(run)
@@ -184,7 +190,7 @@ def main():
     states = {sample["state"] for item in thermal for sample in item["samples"]}
     report = {"schema": "fsr_modes_v3_thermal_summary_v1", "date_utc": runs[0]["data"]["date_utc"],
         "device": runs[0]["data"]["device"], "os": runs[0]["data"]["os"], "machine": machine_info(),
-        "backend": "native INT8 MPP", "auto_exposure": True, "rcas": False,
+        "backend": runs[0]["data"]["backend"], "auto_exposure": True, "rcas": False,
         "scope": "whole production frame GPU milliseconds, not game frame time or FPS",
         "fixture": runs[0]["data"]["fixture"], "cadence": runs[0]["data"]["cadence"],
         "protocol": "1080p/1440p/1440p/1080p; all models serially interleaved, first model rotated and direction reversed per frame; no measured resets; median of all round means, never best/cold run",
@@ -192,7 +198,8 @@ def main():
         "initial_warmup_s": args.warmup_seconds, "repeat_warmup_s": args.repeat_warmup_seconds,
         "thermal_note": "NSProcessInfo thermal-pressure states; no privileged temperature/frequency sensor measurements. Sustained prewarming and order reversal reduce heat/order bias, but nominal does not prove absence of clock throttling.",
         "serious_or_critical_seen": bool(states & {2, 3}), "thermal_states_seen": sorted(states), "thermal": thermal,
-        "legacy_note": "Optional 4.0.2 is measured through its production live encoder, including its small built-in GPU probe; source weights are not in release payloads.",
+        "legacy_note": ("Optional 4.0.2 uses its real FP16 SIMD live encoder, not the INT8 SIMD architecture of the other rows. " if args.simd else "Optional 4.0.2 uses its real INT8 MPP live encoder. ") +
+                       "The small built-in GPU probe is included; source weights are not in release payloads.",
         "binary_sha256": digest(binary), "benchmark_source_sha256": digest(ROOT/"tools/bench/fsr_modes_thermal.mm"),
         "results": summarize(runs)}
     write_json(out/"summary.json", report)

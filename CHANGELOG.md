@@ -11,9 +11,10 @@ Full notes: [docs/releases/v3.0.md](docs/releases/v3.0.md).
   switching can stutter/pause. Try different modes to find the best quality/speed balance.
 - Remove Lite Lossy Tiled from the panel choices. Keep its CLI profile and saved
   ID readable; unrelated sharpness/RCAS edits never silently replace a saved mode.
-- Fresh whole-frame M5 INT8 timings for all models at 1920x1080 and 2560x1440:
-  sustained warmups, serial per-frame interleaving, ABBA resolution order,
-  round ranges and thermal-pressure telemetry. New table on the main README.
+- Fresh whole-frame M5 **MPP and forced SIMD** timings for all models at
+  1920x1080 and 2560x1440: sustained warmups, serial per-frame interleaving,
+  ABBA resolution order, round ranges and thermal-pressure telemetry.
+  Both backends on the main README; not claimed as physical M1-M4 timings.
 - Native AppKit click/layout tests and CPU benchmark-report validation.
 - No neural model, weight, default-profile or hook-ABI changes from v2.6.
 

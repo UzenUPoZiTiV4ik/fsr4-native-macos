@@ -6,50 +6,63 @@ Works as a standalone tool and inside games via CrossOver (DLSS → FSR 4).
 ## M5 performance: 1080p and 1440p (v3.0)
 
 **Fresh 2026-11-02 measurements on a fanless MacBook Air M5, 16 GB.**
-Whole-upscaler GPU milliseconds, **not game FPS**. The value is the median
-of 12 round means; parentheses show the observed range of those means.
+Values are **whole-upscaler GPU milliseconds, not game FPS**; lower is faster.
+Each value is the median of 12 round means, with **768 measured frames per
+model, backend and resolution**. Observed ranges and P99 are linked below.
 
-| Mode | 1080p GPU ms | 1440p GPU ms |
-| --- | ---: | ---: |
-| FSR 4.1.2 Exact (`exact-fast`) | 4.52 (4.10-5.03) | 8.72 (8.42-8.93) |
-| FSR 4 (4.0.2, optional data) | 5.48 (5.01-6.13) | 10.47 (10.13-10.77) |
-| FSR 4.1.2 Lossy (`lossy2`) | 3.07 (2.75-3.35) | 5.73 (5.50-5.96) |
-| **FSR 4.1.2 Lite (default)** | 2.78 (2.52-3.13) | 5.37 (5.20-5.67) |
-| Lite + Pixelization fix (0.5) | 2.82 (2.52-3.15) | 5.35 (5.13-5.57) |
-| FSR 4.1.2 Lite Lossy (optional data) | 2.96 (2.69-3.23) | 5.84 (5.60-5.94) |
+**MPP** is native INT8 tensor operations. **SIMD** is the forced INT8
+half-matrix/float-accumulation path. **Both columns were measured on M5,
+not M1-M4**; forcing SIMD keeps M5-specific POST optimizations enabled and
+does not emulate an entire older GPU.
+
+| Mode | MPP 1080p | SIMD 1080p | MPP 1440p | SIMD 1440p |
+| --- | ---: | ---: | ---: | ---: |
+| FSR 4.1.2 Exact (`exact-fast`) | 4.52 | 9.91 | 8.72 | 18.22 |
+| FSR 4 (4.0.2, optional data)* | 5.48 | 13.22 | 10.47 | 24.12 |
+| FSR 4.1.2 Lossy (`lossy2`) | 3.07 | 5.65 | 5.73 | 10.50 |
+| **FSR 4.1.2 Lite (default)** | 2.78 | 4.79 | 5.37 | 8.66 |
+| Lite + Pixelization fix (0.5) | 2.82 | 4.71 | 5.35 | 8.75 |
+| FSR 4.1.2 Lite Lossy (optional data) | 2.96 | 3.87 | 5.84 | 7.21 |
+
+\* The optional legacy 4.0.2 row uses its real **FP16** live encoder in the
+SIMD column, not the INT8 SIMD architecture of the other rows.
 
 ### Other command-line variants
 
-| Mode | 1080p GPU ms | 1440p GPU ms |
-| --- | ---: | ---: |
-| Exact IEEE reference (`exact`, CLI) | 5.69 (5.19-6.42) | 11.03 (10.75-11.43) |
-| Legacy Lossy (`lossy`, retired from panel) | 3.03 (2.72-3.32) | 5.82 (5.59-5.96) |
-| Lossy + `--temporal-quality 1` | 4.62 (4.20-5.04) | 8.93 (8.62-9.15) |
-| Lossy + `--temporal-quality 2` | 4.14 (3.78-4.70) | 7.98 (7.76-8.27) |
-| Lite Lossy Tiled (512, CLI-only) | 3.73 (3.48-4.03) | 7.02 (6.64-7.20) |
-| Lite Lossy Original (CLI-only) | 8.64 (7.92-9.62) | 10.87 (10.44-11.28) |
+| Mode | MPP 1080p | SIMD 1080p | MPP 1440p | SIMD 1440p |
+| --- | ---: | ---: | ---: | ---: |
+| Exact IEEE reference (`exact`, CLI) | 5.69 | 10.95 | 11.03 | 20.24 |
+| Legacy Lossy (`lossy`, retired from panel) | 3.03 | 5.69 | 5.82 | 10.55 |
+| Lossy + `--temporal-quality 1` | 4.62 | 7.16 | 8.93 | 13.32 |
+| Lossy + `--temporal-quality 2` | 4.14 | 6.79 | 7.98 | 12.50 |
+| Lite Lossy Tiled (512, CLI-only) | 3.73 | 5.18 | 7.02 | 9.41 |
+| Lite Lossy Original (CLI-only) | 8.64 | 9.16 | 10.87 | 11.85 |
 
 Input/output: **1280x720 -> 1920x1080** and **1706x960 -> 2560x1440**.
-Native INT8 MPP, auto-exposure on, RCAS off, identical deterministic synthetic
-motion/noise inputs. Reuse-eligible modes use 50:50 full/reused frames;
-tiled updates half the tiles on every measured frame.
+Auto-exposure on, RCAS off, identical deterministic synthetic motion/noise
+inputs. Reuse-eligible modes use 50:50 full/reused frames; tiled updates
+half the tiles on every measured frame.
 
-**Heat is included:** 120 s initial warmup per resolution, 30 s on repeat,
-resolution order 1080p/1440p/1440p/1080p; all models interleaved per frame.
-Each model/resolution has **768 measured frames**. All measured rounds had
-thermal pressure **fair**. The later 1080p Lite series was about **20% slower**
-than the earlier already-warmed series, so the table retains both and shows
-the range instead of advertising the cold/best result. Thermal-pressure
-state is not a temperature/frequency measurement.
+**Heat is included:** each backend uses 120 s initial warmup per resolution,
+30 s on repeat, resolution order 1080p/1440p/1440p/1080p, and per-frame model
+interleaving. MPP measured rounds were at thermal pressure **fair**; SIMD
+spanned **nominal/fair**. The later 1080p Lite series was about
+**20% slower in MPP and 18% slower in SIMD** than its earlier warmed series.
+Both passes are retained, not replaced with the cold/best result. Thermal
+pressure is not a temperature/frequency reading. Backends were collected in
+separate sessions, so this is not a tightly paired cross-backend ablation.
 
-Lite Lossy is **not automatically faster** than Lite; quality and speed depend
-on the scene. These are observations on one synthetic fixture, not a quality
-ranking or guaranteed game timings. CLI-only variants do not appear as panel
-choices. [Method, full/reuse costs and thermal history](docs/FSR_V3_BENCHMARKS.md)
-| [Numeric report](docs/reports/m5-modes-v3-2026-11-02.json).
+In this fixture, Lite Lossy is slower than Lite in MPP, but about **17-19% faster
+in SIMD**. Quality is not ranked here; timings depend on the scene, heat and
+hardware. Small overlapping differences (e.g. the fix checkbox) are noise,
+not a claimed speed improvement. CLI-only variants are not panel choices.
+
+[Method, ranges, full/reuse costs and thermal history](docs/FSR_V3_BENCHMARKS.md).
+[MPP numeric report](docs/reports/m5-modes-v3-2026-11-02.json)
+| [SIMD numeric report](docs/reports/m5-modes-v3-simd-2026-11-02.json).
 
 Older recorded-capture measurements remain in
-[FSR 4.1.2 stability](docs/FSR412_STABILITY.md); they are not the table above.
+[FSR 4.1.2 stability](docs/FSR412_STABILITY.md); they are not the tables above.
 
 **Русская инструкция:** [docs/GUIDE.md](docs/GUIDE.md)
 

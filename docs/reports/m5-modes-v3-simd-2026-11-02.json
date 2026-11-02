@@ -1,0 +1,1498 @@
+{
+  "schema": "fsr_modes_v3_thermal_summary_v1",
+  "date_utc": "2026-11-02T14:03:19Z",
+  "device": "Apple M5",
+  "os": "Version 27.0.1 (Build 26A434)",
+  "machine": {
+    "identifier": "Mac17,4",
+    "memory_gib": 16.0,
+    "name": "MacBook Air M5",
+    "cooling": "fanless"
+  },
+  "backend": "INT8 SIMD (half matrices, float accumulation)",
+  "auto_exposure": true,
+  "rcas": false,
+  "scope": "whole production frame GPU milliseconds, not game frame time or FPS",
+  "fixture": "deterministic 0x4128 LCG color/noise, stepped inverted depth, nonzero motion; identical resident inputs for all models",
+  "cadence": "eight jitter phases, stable pre-exposure; no measured resets; eligible whole-frame modes refresh/reuse 50:50",
+  "protocol": "1080p/1440p/1440p/1080p; all models serially interleaved, first model rotated and direction reversed per frame; no measured resets; median of all round means, never best/cold run",
+  "rounds_per_resolution": 12,
+  "frames_per_round_per_model": 64,
+  "initial_warmup_s": 120,
+  "repeat_warmup_s": 30,
+  "thermal_note": "NSProcessInfo thermal-pressure states; no privileged temperature/frequency sensor measurements. Sustained prewarming and order reversal reduce heat/order bias, but nominal does not prove absence of clock throttling.",
+  "serious_or_critical_seen": false,
+  "thermal_states_seen": [
+    0,
+    1
+  ],
+  "thermal": [
+    {
+      "pass": 1,
+      "size": "1080p",
+      "power_before": {
+        "source": "Battery Power",
+        "battery_percent": 30
+      },
+      "power_after": {
+        "source": "Battery Power",
+        "battery_percent": 27
+      },
+      "warmup_actual_s": 120.17662075,
+      "measured_wall_s": 32.229659916,
+      "samples": [
+        {
+          "elapsed_s": 0,
+          "low_power_mode": false,
+          "state": 0
+        },
+        {
+          "elapsed_s": 30.570838916,
+          "low_power_mode": false,
+          "state": 0
+        },
+        {
+          "elapsed_s": 60.547241666,
+          "low_power_mode": false,
+          "state": 0
+        },
+        {
+          "elapsed_s": 90.540509041,
+          "low_power_mode": false,
+          "state": 0
+        },
+        {
+          "elapsed_s": 120.525861208,
+          "low_power_mode": false,
+          "state": 0
+        },
+        {
+          "elapsed_s": 126.0519965,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 131.418092125,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 136.776856791,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 142.154185791,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 147.547401583,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 152.919579416,
+          "low_power_mode": false,
+          "state": 1
+        }
+      ],
+      "rounds": [
+        {
+          "elapsed_s": 126.051991666,
+          "round": 1,
+          "thermal_end": 1,
+          "thermal_start": 0
+        },
+        {
+          "elapsed_s": 131.41808775,
+          "round": 2,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 136.776852625,
+          "round": 3,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 142.154182708,
+          "round": 4,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 147.547395958,
+          "round": 5,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 152.919575125,
+          "round": 6,
+          "thermal_end": 1,
+          "thermal_start": 1
+        }
+      ]
+    },
+    {
+      "pass": 2,
+      "size": "1440p",
+      "power_before": {
+        "source": "Battery Power",
+        "battery_percent": 27
+      },
+      "power_after": {
+        "source": "Battery Power",
+        "battery_percent": 25
+      },
+      "warmup_actual_s": 120.93059825,
+      "measured_wall_s": 59.611166458,
+      "samples": [
+        {
+          "elapsed_s": 0,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 30.574677083,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 60.561268833,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 90.646831958,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 120.57326875,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 131.267222708,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 141.131010167,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 151.024862208,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 160.962964958,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 170.965742042,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 181.090404667,
+          "low_power_mode": false,
+          "state": 1
+        }
+      ],
+      "rounds": [
+        {
+          "elapsed_s": 131.267217833,
+          "round": 1,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 141.131005208,
+          "round": 2,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 151.024857458,
+          "round": 3,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 160.962960167,
+          "round": 4,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 170.965737375,
+          "round": 5,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 181.090401208,
+          "round": 6,
+          "thermal_end": 1,
+          "thermal_start": 1
+        }
+      ]
+    },
+    {
+      "pass": 3,
+      "size": "1440p",
+      "power_before": {
+        "source": "Battery Power",
+        "battery_percent": 25
+      },
+      "power_after": {
+        "source": "Battery Power",
+        "battery_percent": 24
+      },
+      "warmup_actual_s": 30.457989167,
+      "measured_wall_s": 62.099186458,
+      "samples": [
+        {
+          "elapsed_s": 0,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 30.544120375,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 41.242014833,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 51.53783775,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 61.862135333,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 72.300396958,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 82.664524792,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 93.08870075,
+          "low_power_mode": false,
+          "state": 1
+        }
+      ],
+      "rounds": [
+        {
+          "elapsed_s": 41.24201,
+          "round": 1,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 51.537833583,
+          "round": 2,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 61.862130083,
+          "round": 3,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 72.300394458,
+          "round": 4,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 82.664520167,
+          "round": 5,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 93.088696,
+          "round": 6,
+          "thermal_end": 1,
+          "thermal_start": 1
+        }
+      ]
+    },
+    {
+      "pass": 4,
+      "size": "1080p",
+      "power_before": {
+        "source": "Battery Power",
+        "battery_percent": 24
+      },
+      "power_after": {
+        "source": "Battery Power",
+        "battery_percent": 23
+      },
+      "warmup_actual_s": 30.34401825,
+      "measured_wall_s": 38.110575458,
+      "samples": [
+        {
+          "elapsed_s": 0,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 30.515646959,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 36.88633675,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 43.412848167,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 49.797020167,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 56.462245209,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 62.732379292,
+          "low_power_mode": false,
+          "state": 1
+        },
+        {
+          "elapsed_s": 68.888991292,
+          "low_power_mode": false,
+          "state": 1
+        }
+      ],
+      "rounds": [
+        {
+          "elapsed_s": 36.886334292,
+          "round": 1,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 43.412843959,
+          "round": 2,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 49.797015334,
+          "round": 3,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 56.462239584,
+          "round": 4,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 62.732373792,
+          "round": 5,
+          "thermal_end": 1,
+          "thermal_start": 1
+        },
+        {
+          "elapsed_s": 68.888986709,
+          "round": 6,
+          "thermal_end": 1,
+          "thermal_start": 1
+        }
+      ]
+    }
+  ],
+  "legacy_note": "Optional 4.0.2 uses its real FP16 SIMD live encoder, not the INT8 SIMD architecture of the other rows. The small built-in GPU probe is included; source weights are not in release payloads.",
+  "binary_sha256": "6f5c8150bdad8b5f4dcf6b9c7d4f1830300bd08f2ac8557eac60eee2cfd7993c",
+  "benchmark_source_sha256": "37331bc73d7377305fbbc41708afddff9eafe97b99a1afd8737fbfd0ceb3470b",
+  "results": {
+    "1080p": {
+      "render": [
+        1280,
+        720
+      ],
+      "output": [
+        1920,
+        1080
+      ],
+      "models": {
+        "exact-fast": {
+          "label": "FSR 4.1.2 Exact (panel)",
+          "gpu_ms": 9.914304358972004,
+          "round_means_ms": [
+            9.181666015138035,
+            9.186481770484534,
+            9.158994791505393,
+            9.160175781289581,
+            9.326976559350442,
+            9.10156705413101,
+            10.501632158593566,
+            11.43012173997704,
+            10.824608072653064,
+            11.560405600903323,
+            10.513724616430409,
+            10.66939257816557
+          ],
+          "round_range_ms": [
+            9.10156705413101,
+            11.560405600903323
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 12.675333360675722,
+          "frame_max_ms": 13.085541664622724,
+          "sessions": [
+            {
+              "pass": 1,
+              "mean_ms": 9.170920898213808,
+              "late_vs_early_percent": -0.2340559307322021
+            },
+            {
+              "pass": 4,
+              "mean_ms": 10.747000325409317,
+              "late_vs_early_percent": -1.433913296866829
+            }
+          ],
+          "full_count": 768,
+          "full_mean_ms": 10.051312228218498,
+          "reuse_count": 0,
+          "reuse_mean_ms": null,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "lossy2": {
+          "label": "FSR 4.1.2 Lossy (panel)",
+          "gpu_ms": 5.652242513406236,
+          "round_means_ms": [
+            5.282464844640344,
+            5.301490881720383,
+            5.287481117193238,
+            5.313979820130044,
+            5.369290369344526,
+            5.254891274489637,
+            5.935194657467946,
+            6.545667316459003,
+            6.436033204408886,
+            6.540039061292191,
+            6.16620182790939,
+            6.1027923175061005
+          ],
+          "round_range_ms": [
+            5.254891274489637,
+            6.545667316459003
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 12.486500025261194,
+          "frame_max_ms": 12.855541659519076,
+          "sessions": [
+            {
+              "pass": 1,
+              "mean_ms": 5.2944859994568105,
+              "late_vs_early_percent": 0.5011592920992181
+            },
+            {
+              "pass": 4,
+              "mean_ms": 6.301117516159138,
+              "late_vs_early_percent": -4.192510633951563
+            }
+          ],
+          "full_count": 384,
+          "full_mean_ms": 10.025466253712997,
+          "reuse_count": 384,
+          "reuse_mean_ms": 1.563788195047285,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "int8-lite": {
+          "label": "FSR 4.1.2 Lite",
+          "gpu_ms": 4.790189127106714,
+          "round_means_ms": [
+            4.364667966001434,
+            4.381874997307023,
+            4.414018228089844,
+            4.429213542607613,
+            4.377263017886435,
+            4.529597004875541,
+            5.0866523415606935,
+            5.2408535175345605,
+            5.232643879026,
+            5.533334633582854,
+            5.050781249337888,
+            5.127877601807995
+          ],
+          "round_range_ms": [
+            4.364667966001434,
+            5.533334633582854
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 7.153916696552187,
+          "frame_max_ms": 8.287500008009374,
+          "sessions": [
+            {
+              "pass": 1,
+              "mean_ms": 4.3979466126984335,
+              "late_vs_early_percent": 1.0803262377334644
+            },
+            {
+              "pass": 4,
+              "mean_ms": 5.180260740416998,
+              "late_vs_early_percent": -2.0021671575613853
+            }
+          ],
+          "full_count": 768,
+          "full_mean_ms": 4.814064831634823,
+          "reuse_count": 0,
+          "reuse_mean_ms": null,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "int8-lite-pixfix": {
+          "label": "Lite + Pixelization fix (0.5)",
+          "gpu_ms": 4.709315104264533,
+          "round_means_ms": [
+            4.467763020329585,
+            4.334430992457783,
+            4.469374351174338,
+            4.3793027334686485,
+            4.416030599713849,
+            4.445507164746232,
+            4.9492558573547285,
+            5.350248697141069,
+            5.290185545163695,
+            5.486571611982072,
+            5.24303189922648,
+            5.01771940071194
+          ],
+          "round_range_ms": [
+            4.334430992457783,
+            5.486571611982072
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 7.038208364974707,
+          "frame_max_ms": 7.302124984562397,
+          "sessions": [
+            {
+              "pass": 1,
+              "mean_ms": 4.430768882230041,
+              "late_vs_early_percent": -1.1579043109569254
+            },
+            {
+              "pass": 4,
+              "mean_ms": 5.2666087221950875,
+              "late_vs_early_percent": -0.8913420055809307
+            }
+          ],
+          "full_count": 768,
+          "full_mean_ms": 4.820785156122535,
+          "reuse_count": 0,
+          "reuse_mean_ms": null,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "int8-lite-lossy": {
+          "label": "FSR 4.1.2 Lite Lossy",
+          "gpu_ms": 3.8696767592227843,
+          "round_means_ms": [
+            3.6229563866072567,
+            3.63633919005224,
+            3.596222010855854,
+            3.619047526626673,
+            3.6627148374464014,
+            3.6792148448512307,
+            4.060138673594338,
+            4.476655601138191,
+            4.187157555861631,
+            4.437429685822281,
+            4.114610022952547,
+            4.079933589309803
+          ],
+          "round_range_ms": [
+            3.596222010855854,
+            4.476655601138191
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 7.728375028818846,
+          "frame_max_ms": 8.470875036437064,
+          "sessions": [
+            {
+              "pass": 1,
+              "mean_ms": 3.6296477883297484,
+              "late_vs_early_percent": 1.0974035179147412
+            },
+            {
+              "pass": 4,
+              "mean_ms": 4.150883789407089,
+              "late_vs_early_percent": -1.7326200875227182
+            }
+          ],
+          "full_count": 384,
+          "full_mean_ms": 5.509991210298419,
+          "reuse_count": 384,
+          "reuse_mean_ms": 2.3520787772213225,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "int8-lite-lossy-tiled": {
+          "label": "Lite Lossy Tiled (512, CLI only)",
+          "gpu_ms": 5.181681317026232,
+          "round_means_ms": [
+            4.945449871229357,
+            4.79934505528945,
+            4.893556634669949,
+            4.919180339129525,
+            4.974176434188848,
+            4.87079557206016,
+            5.405561199950171,
+            5.658940102875931,
+            5.601457683042099,
+            5.9559687488217605,
+            5.441998047899688,
+            5.389186199863616
+          ],
+          "round_range_ms": [
+            4.79934505528945,
+            5.9559687488217605
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 7.42687500314787,
+          "frame_max_ms": 7.472874945960939,
+          "sessions": [
+            {
+              "pass": 1,
+              "mean_ms": 4.906368486899737,
+              "late_vs_early_percent": 0.5236212916805094
+            },
+            {
+              "pass": 4,
+              "mean_ms": 5.5217278654708934,
+              "late_vs_early_percent": -2.846752473470626
+            }
+          ],
+          "full_count": 0,
+          "full_mean_ms": null,
+          "reuse_count": 0,
+          "reuse_mean_ms": null,
+          "partial_count": 768,
+          "partial_mean_ms": 5.237967990751713
+        },
+        "int8-lite-lossy-original": {
+          "label": "Lite Lossy Original (CLI only)",
+          "gpu_ms": 9.156669917501858,
+          "round_means_ms": [
+            8.579565753279894,
+            8.58809830788232,
+            8.550067714168108,
+            8.54837629958638,
+            8.462847659757244,
+            8.47922265620582,
+            9.725241527121398,
+            10.315582681869273,
+            10.066279295642744,
+            10.389764322098927,
+            9.960316403521574,
+            9.810562502025277
+          ],
+          "round_range_ms": [
+            8.462847659757244,
+            10.389764322098927
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 15.91379166347906,
+          "frame_max_ms": 16.85824996093288,
+          "sessions": [
+            {
+              "pass": 1,
+              "mean_ms": 8.549222006877244,
+              "late_vs_early_percent": -1.1695591590485055
+            },
+            {
+              "pass": 4,
+              "mean_ms": 10.013297849582159,
+              "late_vs_early_percent": -1.0526520177821408
+            }
+          ],
+          "full_count": 384,
+          "full_mean_ms": 13.23252506517747,
+          "reuse_count": 384,
+          "reuse_mean_ms": 5.346795788682357,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "exact": {
+          "label": "Exact IEEE reference (CLI only)",
+          "gpu_ms": 10.9526663413817,
+          "round_means_ms": [
+            10.160878255192074,
+            10.090371095429873,
+            10.268266930324899,
+            10.15952343641402,
+            10.27488346608152,
+            10.11215039579838,
+            11.630449216681882,
+            12.411431639520742,
+            12.223716801599949,
+            12.83710872849042,
+            11.97627214150998,
+            11.775203778597643
+          ],
+          "round_range_ms": [
+            10.090371095429873,
+            12.83710872849042
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 13.935583352576941,
+          "frame_max_ms": 14.480000012554228,
+          "sessions": [
+            {
+              "pass": 1,
+              "mean_ms": 10.160200845803047,
+              "late_vs_early_percent": -0.013333677897009455
+            },
+            {
+              "pass": 4,
+              "mean_ms": 12.099994471554965,
+              "late_vs_early_percent": -2.0242996799269775
+            }
+          ],
+          "full_count": 768,
+          "full_mean_ms": 11.160021323803448,
+          "reuse_count": 0,
+          "reuse_mean_ms": null,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "lossy": {
+          "label": "Legacy Lossy (CLI only)",
+          "gpu_ms": 5.691791341632779,
+          "round_means_ms": [
+            5.266291012958391,
+            5.38327734102495,
+            5.184725911021815,
+            5.331843747626408,
+            5.284600257255079,
+            5.2020755219928105,
+            6.02301888011425,
+            6.567893232386268,
+            6.371376954120933,
+            6.539557940413943,
+            6.276489578340261,
+            6.000305342240608
+          ],
+          "round_range_ms": [
+            5.184725911021815,
+            6.567893232386268
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 12.67949998145923,
+          "frame_max_ms": 13.914499955717474,
+          "sessions": [
+            {
+              "pass": 1,
+              "mean_ms": 5.275445635106735,
+              "late_vs_early_percent": 0.3476686770943038
+            },
+            {
+              "pass": 4,
+              "mean_ms": 6.323933266230597,
+              "late_vs_early_percent": -1.4892758106126558
+            }
+          ],
+          "full_count": 384,
+          "full_mean_ms": 10.04826866149718,
+          "reuse_count": 384,
+          "reuse_mean_ms": 1.523640625085439,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "lossy2-temporal1": {
+          "label": "Lossy + Temporal quality 1 (CLI only)",
+          "gpu_ms": 7.1591585265196045,
+          "round_means_ms": [
+            6.650641931628343,
+            6.632238281781611,
+            6.614894530684978,
+            6.638809242758725,
+            6.6938411437149625,
+            6.640102865276276,
+            7.6244759093242465,
+            8.174220700311707,
+            7.909089197710273,
+            8.354487628821516,
+            7.985340494087723,
+            7.657660806216882
+          ],
+          "round_range_ms": [
+            6.614894530684978,
+            8.354487628821516
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 13.28324998030439,
+          "frame_max_ms": 13.574041717220098,
+          "sessions": [
+            {
+              "pass": 1,
+              "mean_ms": 6.639456054017501,
+              "late_vs_early_percent": 0.11858113596836528
+            },
+            {
+              "pass": 4,
+              "mean_ms": 7.947214845898998,
+              "late_vs_early_percent": 0.9640970593620901
+            }
+          ],
+          "full_count": 384,
+          "full_mean_ms": 10.681834635458168,
+          "reuse_count": 384,
+          "reuse_mean_ms": 3.914132486594705,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "lossy2-temporal2": {
+          "label": "Lossy + Temporal quality 2 (CLI only)",
+          "gpu_ms": 6.794404626816686,
+          "round_means_ms": [
+            6.223891275112692,
+            6.415967452994664,
+            6.194733722622914,
+            6.257378909140243,
+            6.31587760108232,
+            6.322527345218987,
+            7.196164715423947,
+            7.62574088639667,
+            7.668406898119429,
+            7.87856380611629,
+            7.453575523868494,
+            7.172841800638707
+          ],
+          "round_range_ms": [
+            6.194733722622914,
+            7.87856380611629
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 12.723750027362257,
+          "frame_max_ms": 13.838499959092587,
+          "sessions": [
+            {
+              "pass": 1,
+              "mean_ms": 6.286628255111282,
+              "late_vs_early_percent": 1.477955219710414
+            },
+            {
+              "pass": 4,
+              "mean_ms": 7.539658205132582,
+              "late_vs_early_percent": -2.2576870246836855
+            }
+          ],
+          "full_count": 384,
+          "full_mean_ms": 10.272187826558365,
+          "reuse_count": 384,
+          "reuse_mean_ms": 3.515423829564194,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "fsr4-legacy": {
+          "label": "FSR 4.0.2 (optional legacy model)",
+          "gpu_ms": 13.217215497661527,
+          "round_means_ms": [
+            12.204602863675973,
+            12.22030013013864,
+            12.270734374396852,
+            12.415345056069782,
+            12.239766926541051,
+            12.28120051746373,
+            14.019085939253273,
+            14.9931217511039,
+            14.63938281267474,
+            15.302908209378074,
+            14.32337825644936,
+            14.117837240519293
+          ],
+          "round_range_ms": [
+            12.204602863675973,
+            15.302908209378074
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 16.48375001968816,
+          "frame_max_ms": 17.88837503409013,
+          "sessions": [
+            {
+              "pass": 1,
+              "mean_ms": 12.255250650468952,
+              "late_vs_early_percent": 0.49835426852482545
+            },
+            {
+              "pass": 4,
+              "mean_ms": 14.48138053456205,
+              "late_vs_early_percent": -2.1585920681832516
+            }
+          ],
+          "full_count": 768,
+          "full_mean_ms": 13.418972006472055,
+          "reuse_count": 0,
+          "reuse_mean_ms": null,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        }
+      }
+    },
+    "1440p": {
+      "render": [
+        1706,
+        960
+      ],
+      "output": [
+        2560,
+        1440
+      ],
+      "models": {
+        "exact-fast": {
+          "label": "FSR 4.1.2 Exact (panel)",
+          "gpu_ms": 18.221543946310703,
+          "round_means_ms": [
+            17.578024742761045,
+            17.557770184794208,
+            17.614020833207178,
+            17.913253260303463,
+            17.999505862462684,
+            17.998145187448245,
+            18.443582030158723,
+            18.567142577921913,
+            18.561000650151982,
+            18.86144206400786,
+            18.609732420372893,
+            18.54430469484214
+          ],
+          "round_range_ms": [
+            17.557770184794208,
+            18.86144206400786
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 20.94291668618098,
+          "frame_max_ms": 22.799583384767175,
+          "sessions": [
+            {
+              "pass": 2,
+              "mean_ms": 17.76363704675532,
+              "late_vs_early_percent": 2.3900321613792963
+            },
+            {
+              "pass": 3,
+              "mean_ms": 18.564071614036948,
+              "late_vs_early_percent": 0.2625492619683367
+            }
+          ],
+          "full_count": 768,
+          "full_mean_ms": 18.18732704236936,
+          "reuse_count": 0,
+          "reuse_mean_ms": null,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "lossy2": {
+          "label": "FSR 4.1.2 Lossy (panel)",
+          "gpu_ms": 10.498941081095836,
+          "round_means_ms": [
+            10.073978515720228,
+            10.007678389229113,
+            10.1562148438461,
+            10.062914060654293,
+            10.387274738604901,
+            10.472955080331303,
+            10.524927081860369,
+            10.76078645837697,
+            10.64012434835604,
+            10.690908852666325,
+            10.630966146891296,
+            10.679628252546536
+          ],
+          "round_range_ms": [
+            10.007678389229113,
+            10.76078645837697
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 20.459666673559695,
+          "frame_max_ms": 23.10837496770546,
+          "sessions": [
+            {
+              "pass": 2,
+              "mean_ms": 10.115096679783164,
+              "late_vs_early_percent": 3.109955241573936
+            },
+            {
+              "pass": 3,
+              "mean_ms": 10.659876300451288,
+              "late_vs_early_percent": 0.3712729560026329
+            }
+          ],
+          "full_count": 384,
+          "full_mean_ms": 18.07313509046556,
+          "reuse_count": 384,
+          "reuse_mean_ms": 2.774924371048352,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "int8-lite": {
+          "label": "FSR 4.1.2 Lite",
+          "gpu_ms": 8.66100715848006,
+          "round_means_ms": [
+            8.404677737416932,
+            8.548343097572797,
+            8.49876823485829,
+            8.49127474702982,
+            8.461558595627139,
+            8.635026037154603,
+            8.852607425069436,
+            8.686988279805519,
+            8.861143877766153,
+            8.953535156251746,
+            8.992790362754022,
+            8.799115885267383
+          ],
+          "round_range_ms": [
+            8.404677737416932,
+            8.992790362754022
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 10.925666661933064,
+          "frame_max_ms": 12.274250038899481,
+          "sessions": [
+            {
+              "pass": 2,
+              "mean_ms": 8.495021490944055,
+              "late_vs_early_percent": -0.08817145757351597
+            },
+            {
+              "pass": 3,
+              "mean_ms": 8.856875651417795,
+              "late_vs_early_percent": 1.140090442692565
+            }
+          ],
+          "full_count": 768,
+          "full_mean_ms": 8.68215245304782,
+          "reuse_count": 0,
+          "reuse_mean_ms": null,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "int8-lite-pixfix": {
+          "label": "Lite + Pixelization fix (0.5)",
+          "gpu_ms": 8.75447883936431,
+          "round_means_ms": [
+            8.334585937518568,
+            8.45790429320914,
+            8.375434245863289,
+            8.512543614415335,
+            8.457285155600403,
+            8.687258464306069,
+            8.82269271187397,
+            8.821699214422551,
+            8.940168612753041,
+            8.895891275642498,
+            8.937416015214694,
+            8.911468750739004
+          ],
+          "round_range_ms": [
+            8.334585937518568,
+            8.940168612753041
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 10.730624955613166,
+          "frame_max_ms": 12.354291684459895,
+          "sessions": [
+            {
+              "pass": 2,
+              "mean_ms": 8.457594724404771,
+              "late_vs_early_percent": 1.6370419076451537
+            },
+            {
+              "pass": 3,
+              "mean_ms": 8.903680013190751,
+              "late_vs_early_percent": 1.006223856641375
+            }
+          ],
+          "full_count": 768,
+          "full_mean_ms": 8.679529024296547,
+          "reuse_count": 0,
+          "reuse_mean_ms": null,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "int8-lite-lossy": {
+          "label": "FSR 4.1.2 Lite Lossy",
+          "gpu_ms": 7.210819986539718,
+          "round_means_ms": [
+            6.920363282915787,
+            7.081890618792386,
+            7.147992187128693,
+            7.1822688787506195,
+            7.098539063008502,
+            7.37468229544902,
+            7.121746749362501,
+            7.285962235982879,
+            7.368244145254721,
+            7.384451821963012,
+            7.239371094328817,
+            7.406183594866889
+          ],
+          "round_range_ms": [
+            6.920363282915787,
+            7.406183594866889
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 11.791083321440965,
+          "frame_max_ms": 13.09708331245929,
+          "sessions": [
+            {
+              "pass": 2,
+              "mean_ms": 7.123265625068598,
+              "late_vs_early_percent": 1.4173935374244717
+            },
+            {
+              "pass": 3,
+              "mean_ms": 7.3271031906188,
+              "late_vs_early_percent": 1.3517718427598524
+            }
+          ],
+          "full_count": 384,
+          "full_mean_ms": 10.060384115301227,
+          "reuse_count": 384,
+          "reuse_mean_ms": 4.37489854599941,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "int8-lite-lossy-tiled": {
+          "label": "Lite Lossy Tiled (512, CLI only)",
+          "gpu_ms": 9.409784177023539,
+          "round_means_ms": [
+            9.294977860008657,
+            9.325801428531122,
+            9.21780468434008,
+            9.274007159547182,
+            9.391123696332215,
+            9.434791664716613,
+            9.428444657714863,
+            9.612903649212967,
+            9.36328580701229,
+            9.764795577211771,
+            9.58262239691976,
+            9.655011719587492
+          ],
+          "round_range_ms": [
+            9.21780468434008,
+            9.764795577211771
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 11.474208324216306,
+          "frame_max_ms": 13.23712500743568,
+          "sessions": [
+            {
+              "pass": 2,
+              "mean_ms": 9.31038964426989,
+              "late_vs_early_percent": 1.0343847803793382
+            },
+            {
+              "pass": 3,
+              "mean_ms": 9.597763023066364,
+              "late_vs_early_percent": 2.4030162990588133
+            }
+          ],
+          "full_count": 0,
+          "full_mean_ms": null,
+          "reuse_count": 0,
+          "reuse_mean_ms": null,
+          "partial_count": 768,
+          "partial_mean_ms": 9.445464191761252
+        },
+        "int8-lite-lossy-original": {
+          "label": "Lite Lossy Original (CLI only)",
+          "gpu_ms": 11.848985350752628,
+          "round_means_ms": [
+            11.331955074638245,
+            11.27190560055169,
+            11.53637044444622,
+            11.459425782959443,
+            11.658504558909044,
+            11.73830728748726,
+            12.062103514836053,
+            11.982393878497533,
+            12.053116533934372,
+            12.131523437346914,
+            11.959663414017996,
+            12.20298306816403
+          ],
+          "round_range_ms": [
+            11.27190560055169,
+            12.20298306816403
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 15.012208372354507,
+          "frame_max_ms": 16.70737494714558,
+          "sessions": [
+            {
+              "pass": 2,
+              "mean_ms": 11.497898113702831,
+              "late_vs_early_percent": 2.8816694217367766
+            },
+            {
+              "pass": 3,
+              "mean_ms": 12.057610024385212,
+              "late_vs_early_percent": 0.6505114523019495
+            }
+          ],
+          "full_count": 384,
+          "full_mean_ms": 12.897837347433475,
+          "reuse_count": 384,
+          "reuse_mean_ms": 10.666871418531324,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "exact": {
+          "label": "Exact IEEE reference (CLI only)",
+          "gpu_ms": 20.23842285052524,
+          "round_means_ms": [
+            19.477949216707202,
+            19.707007812030497,
+            19.70330794028996,
+            19.85801953196642,
+            19.92304752820928,
+            20.087341798898706,
+            20.41708984415891,
+            20.564289062349417,
+            20.389503902151773,
+            20.953802083568007,
+            20.6328645845133,
+            21.01565430257324
+          ],
+          "round_range_ms": [
+            19.477949216707202,
+            21.01565430257324
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 24.304583377670497,
+          "frame_max_ms": 25.903625006321818,
+          "sessions": [
+            {
+              "pass": 2,
+              "mean_ms": 19.78251367199846,
+              "late_vs_early_percent": 1.115242113584336
+            },
+            {
+              "pass": 3,
+              "mean_ms": 20.598576823431358,
+              "late_vs_early_percent": 2.628740155946585
+            }
+          ],
+          "full_count": 768,
+          "full_mean_ms": 20.22748980061806,
+          "reuse_count": 0,
+          "reuse_mean_ms": null,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "lossy": {
+          "label": "Legacy Lossy (CLI only)",
+          "gpu_ms": 10.54915592112593,
+          "round_means_ms": [
+            10.071910806800588,
+            10.146202476789767,
+            10.115703772498819,
+            10.280285152475699,
+            10.30515495040163,
+            10.581234369965387,
+            10.517077472286473,
+            10.695042315091996,
+            10.792816407047212,
+            10.729787759373721,
+            10.670115881111997,
+            10.733247399912216
+          ],
+          "round_range_ms": [
+            10.071910806800588,
+            10.792816407047212
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 22.077874979004264,
+          "frame_max_ms": 24.23333330079913,
+          "sessions": [
+            {
+              "pass": 2,
+              "mean_ms": 10.213243814632733,
+              "late_vs_early_percent": 1.8728422872352546
+            },
+            {
+              "pass": 3,
+              "mean_ms": 10.712415037232859,
+              "late_vs_early_percent": 0.32487430398191464
+            }
+          ],
+          "full_count": 384,
+          "full_mean_ms": 18.195161673702387,
+          "reuse_count": 384,
+          "reuse_mean_ms": 2.7446014535901972,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "lossy2-temporal1": {
+          "label": "Lossy + Temporal quality 1 (CLI only)",
+          "gpu_ms": 13.322973958565854,
+          "round_means_ms": [
+            12.80974088331277,
+            12.979915366486239,
+            12.948392582984525,
+            12.96030208686716,
+            12.855475256401405,
+            13.190623047194094,
+            13.455324869937613,
+            13.458884764986578,
+            13.554666666095727,
+            13.628664712086902,
+            13.652664712935803,
+            13.618272135317966
+          ],
+          "round_range_ms": [
+            12.80974088331277,
+            13.652664712935803
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 21.956791693810374,
+          "frame_max_ms": 23.939875012729317,
+          "sessions": [
+            {
+              "pass": 2,
+              "mean_ms": 12.954347334925842,
+              "late_vs_early_percent": 0.0919766975422398
+            },
+            {
+              "pass": 3,
+              "mean_ms": 13.586469400706846,
+              "late_vs_early_percent": 1.2614711401795153
+            }
+          ],
+          "full_count": 384,
+          "full_mean_ms": 19.351655056501233,
+          "reuse_count": 384,
+          "reuse_mean_ms": 7.167166124266562,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "lossy2-temporal2": {
+          "label": "Lossy + Temporal quality 2 (CLI only)",
+          "gpu_ms": 12.50437304179286,
+          "round_means_ms": [
+            12.076184898432984,
+            12.217809243338706,
+            12.10270638421207,
+            12.147221355007787,
+            12.316923176513228,
+            12.44624738865241,
+            12.688925136899343,
+            12.56249869493331,
+            12.68651497321116,
+            12.745897789500304,
+            12.91390950245841,
+            12.860148440267949
+          ],
+          "round_range_ms": [
+            12.076184898432984,
+            12.91390950245841
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 21.311999997124076,
+          "frame_max_ms": 24.274416675325483,
+          "sessions": [
+            {
+              "pass": 2,
+              "mean_ms": 12.182515299173247,
+              "late_vs_early_percent": 1.7699908227188255
+            },
+            {
+              "pass": 3,
+              "mean_ms": 12.717411463199824,
+              "late_vs_early_percent": 1.3686459001816642
+            }
+          ],
+          "full_count": 384,
+          "full_mean_ms": 18.565151150596648,
+          "reuse_count": 384,
+          "reuse_mean_ms": 6.395680013307962,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        },
+        "fsr4-legacy": {
+          "label": "FSR 4.0.2 (optional legacy model)",
+          "gpu_ms": 24.12231347625493,
+          "round_means_ms": [
+            23.07971094160166,
+            23.309751954911917,
+            23.660419271436695,
+            23.694317704212153,
+            23.85402343588794,
+            23.86020768153685,
+            24.384419270973012,
+            24.434124998151674,
+            24.521028647541243,
+            24.8634817698985,
+            24.624839191346837,
+            24.882440753572155
+          ],
+          "round_range_ms": [
+            23.07971094160166,
+            24.882440753572155
+          ],
+          "measured_frames": 768,
+          "frame_p99_ms": 27.80637500109151,
+          "frame_max_ms": 29.97645828872919,
+          "sessions": [
+            {
+              "pass": 2,
+              "mean_ms": 23.677368487824424,
+              "late_vs_early_percent": 2.3349518348749765
+            },
+            {
+              "pass": 3,
+              "mean_ms": 24.57293391944404,
+              "late_vs_early_percent": 1.7572013394353325
+            }
+          ],
+          "full_count": 768,
+          "full_mean_ms": 24.09739713508922,
+          "reuse_count": 0,
+          "reuse_mean_ms": null,
+          "partial_count": 0,
+          "partial_mean_ms": null
+        }
+      }
+    }
+  }
+}

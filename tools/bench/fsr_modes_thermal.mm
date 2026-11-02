@@ -94,10 +94,10 @@ struct Mode {
 }
 
 int main(int argc, char **argv) { @autoreleasepool { try {
-    require(argc >= 2, "usage: fsr_modes_thermal ROOT --size RW RH UW UH [--rounds N --frames-per-round N --warmup-seconds N --legacy --reverse --report FILE]");
+    require(argc >= 2, "usage: fsr_modes_thermal ROOT --size RW RH UW UH [--simd --rounds N --frames-per-round N --warmup-seconds N --legacy --reverse --report FILE]");
     const std::string root = argv[1]; std::string report = root + "/build/fsr-modes-thermal.json";
     unsigned rw = 1280, rh = 720, uw = 1920, uh = 1080, rounds = 6, frames = 64;
-    double warmupSeconds = 120; bool legacy = false, reverse = false, allowCompile = true;
+    double warmupSeconds = 120; bool legacy = false, reverse = false, allowCompile = true, useSimd = false;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--size" && i + 4 < argc) { rw=std::stoul(argv[++i]); rh=std::stoul(argv[++i]); uw=std::stoul(argv[++i]); uh=std::stoul(argv[++i]); }
@@ -108,6 +108,7 @@ int main(int argc, char **argv) { @autoreleasepool { try {
         else if (a == "--legacy") legacy=true;
         else if (a == "--reverse") reverse=true;
         else if (a == "--no-compile") allowCompile=false;
+        else if (a == "--simd") useSimd=true;
         else throw std::runtime_error("unknown/incomplete option: " + a);
     }
     require(rw && rh && rw<=3840 && rh<=2160 && uw>=4 && uh>=4 && uw<=3840 && uh<=2160 && !(uw&7u) && !(uh&7u), "invalid dimensions");
@@ -116,13 +117,17 @@ int main(int argc, char **argv) { @autoreleasepool { try {
     TimingLock timingLock;
     require(!NSProcessInfo.processInfo.lowPowerModeEnabled, "disable Low Power Mode before benchmarking");
     auto device = MTLCreateSystemDefaultDevice(); auto queue = [device newCommandQueue];
-    require(device && queue && [device supportsFamily:MTLGPUFamilyApple10], "Apple10/M5 native INT8 device required");
+    require(device && queue && [device supportsFamily:(useSimd ? MTLGPUFamilyApple7 : MTLGPUFamilyApple10)],
+            useSimd ? "Apple7/M1+ SIMD device required" : "Apple10/M5 native INT8 device required");
+    const auto requestedBackend=useSimd ? fsr411::Backend::Simd : fsr411::Backend::Native;
+    const std::string expectedBackend=useSimd ? "int8-simd" : "int8-mpp";
     // Use no installer/panel settings or developer overrides. These variables
     // belong only to this child; the converter/data-location settings stay.
     for (const char *key : {"FSR4_MPP_OPTIMIZE", "FSR4_LITE_POST_TILE", "FSR4_PRESET", "FSR4_LOW_RES_MV",
-                           "FSR4_JITTERED_MV", "FSR4_AUTOEXPOSURE", "FSR4_COLORSPACE"}) unsetenv(key);
+                           "FSR4_JITTERED_MV", "FSR4_AUTOEXPOSURE", "FSR4_COLORSPACE",
+                           "FSR4_SIMD_WINOGRAD", "FSR411_SIMD_WINOGRAD"}) unsetenv(key);
     setenv("FSR4_ROOT", root.c_str(), 1); setenv("FSR4_SETTINGS", "none", 1);
-    setenv("FSR4_VERSION", "4.0.2", 1); setenv("FSR4_MODEL", "i8mpp", 1);
+    setenv("FSR4_VERSION", "4.0.2", 1); setenv("FSR4_MODEL", useSimd ? "f16" : "i8mpp", 1);
     setenv("FSR4_SHARPNESS", "0", 1); setenv("FSR4_RCAS", "0", 1); unsetenv("FSR4_HOOK_LOG");
     fsr4_live_set_profile(3); fsr4_live_set_sharpness(0, 0);
     fsr411::Runtime runtime(device, root, root + "/build");
@@ -131,7 +136,7 @@ int main(int argc, char **argv) { @autoreleasepool { try {
     auto add = [&](const char *name, const char *label, fsr411::Profile profile, bool lite, int quality=0) -> Mode & {
         auto m = std::make_unique<Mode>(); m->name=name; m->label=label;
         if (lite) m->options=fsr412::Options();
-        m->options.profile=profile; m->options.modelLite=lite; m->options.backend=fsr411::Backend::Native;
+        m->options.profile=profile; m->options.modelLite=lite; m->options.backend=requestedBackend;
         m->options.temporalQuality=quality; m->options.rcas=false; m->options.sharpness=0; m->options.allowCompile=allowCompile;
         m->output=texture(device,MTLPixelFormatRGBA16Float,uw,uh); modes.push_back(std::move(m)); return *modes.back();
     };
@@ -140,7 +145,7 @@ int main(int argc, char **argv) { @autoreleasepool { try {
     add("int8-lite", "FSR 4.1.2 Lite", fsr411::Profile::Int8Lite, true);
     auto &fix = add("int8-lite-pixfix", "Lite + Pixelization fix (0.5)", fsr411::Profile::Int8Lite, true);
     fsr412::Options fixOptions; fsr412::apply_pixel_fix(fixOptions,true,.5f);
-    fixOptions.backend=fsr411::Backend::Native; fixOptions.allowCompile=allowCompile; fix.options=fixOptions;
+    fixOptions.backend=requestedBackend; fixOptions.allowCompile=allowCompile; fix.options=fixOptions;
     add("int8-lite-lossy", "FSR 4.1.2 Lite Lossy", fsr411::Profile::Int8LiteLossy, true);
     add("int8-lite-lossy-tiled", "Lite Lossy Tiled (512, CLI only)", fsr411::Profile::Int8LiteLossy, true).options.neuralTileSize=512;
     add("int8-lite-lossy-original", "Lite Lossy Original (CLI only)", fsr411::Profile::Int8LiteLossy, true).options.originalLossy=true;
@@ -162,10 +167,10 @@ int main(int argc, char **argv) { @autoreleasepool { try {
             p.preExposure=1; p.reset=reset; p.depthReversed=1; p.autoExposure=1;
             v.geometry=f.input.geometry; v.inputContentProperties=0;
             const bool ok=fsr4_encode_live_frame_v2(&v); Fsr4LiveStatus status={}; fsr4_live_get_status(&status);
-            require(ok && status.active && std::string(status.model)=="i8mpp", m.name+": "+status.reason);
+            require(ok && status.active && std::string(status.model)==(useSimd ? "f16" : "i8mpp"), m.name+": "+status.reason);
         } else {
             std::string error; const bool ok=runtime.encode(cb,m.view,f,m.options,error); require(ok,m.name+": "+error);
-            require(m.view.backendLabel=="int8-mpp",m.name+": unexpected backend");
+            require(m.view.backendLabel==expectedBackend,m.name+": unexpected backend "+m.view.backendLabel);
         }
         [cb commit]; [cb waitUntilCompleted];
         require(cb.status==MTLCommandBufferStatusCompleted,fsr411::metal_error(cb.error));
@@ -230,7 +235,9 @@ int main(int argc, char **argv) { @autoreleasepool { try {
     }
     NSDictionary *reportData=@{@"schema":@"fsr_modes_thermal_v1",@"device":device.name,
         @"os":NSProcessInfo.processInfo.operatingSystemVersionString,@"date_utc":[[NSISO8601DateFormatter new] stringFromDate:NSDate.date],
-        @"render":@[@(rw),@(rh)],@"output":@[@(uw),@(uh)],@"backend":@"native INT8 MPP",@"metal":@"classic command buffers",
+        @"render":@[@(rw),@(rh)],@"output":@[@(uw),@(uh)],
+        @"backend":useSimd ? @"INT8 SIMD (half matrices, float accumulation)" : @"native INT8 MPP",
+        @"legacy_backend":useSimd ? @"FP16 SIMD live encoder" : @"INT8 MPP live encoder",@"metal":@"classic command buffers",
         @"scope":@"whole production frame GPU time; no game or Windows DLL; compilation and warmup excluded",
         @"fixture":@"deterministic 0x4128 LCG color/noise, stepped inverted depth, nonzero motion; identical resident inputs for all models",
         @"cadence":@"eight jitter phases, stable pre-exposure; no measured resets; eligible whole-frame modes refresh/reuse 50:50",

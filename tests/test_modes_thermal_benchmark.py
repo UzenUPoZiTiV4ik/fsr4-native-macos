@@ -38,6 +38,12 @@ class ThermalBenchmarkTests(unittest.TestCase):
     def test_complete_profile_matrix(self):
         for size in bench.SIZES:bench.validate_run(fixture(size),size,2,8,False)
 
+    def test_forced_simd_report_requires_actual_backend(self):
+        run=fixture(); run["backend"]="INT8 SIMD (half matrices, float accumulation)"
+        bench.validate_run(run,"1080p",2,8,False,True)
+        with self.assertRaises(ValueError):bench.validate_run(run,"1080p",2,8,False,False)
+        with self.assertRaises(ValueError):bench.validate_run(fixture(),"1080p",2,8,False,True)
+
     def test_no_missing_modes_or_diagnostics(self):
         for key,value in (("low_power_mode",True),("rcas",True),("auto_exposure",False),("metal","Metal 4"),("backend","scalar")):
             run=fixture();run[key]=value

@@ -1,10 +1,18 @@
 # Apple Silicon backends
 
-FSR **4.1.1 + Lossy** is the current default. Profile selection (Exact/Lossy)
-is independent of backend selection. All backends execute the actual INT8
-model, including its separate Ultra Performance initializer.
+FSR **4.1.2 INT8 Lite** is the current default. Profile selection is
+independent of backend selection; the full-network and optional Lossy routes
+share the policy below. INT8 profiles execute the same model with an integer
+epilogue on both MPP and SIMD, including separate Ultra Performance inputs.
+The older 4.0.2 FP16 route is a distinct legacy exception.
 
-| GPU family | Automatic FSR 4.1.1 backend |
+Fresh v3.0 1080p/1440p measurements for MPP and forced SIMD are linked from
+[README](../README.md) and [FSR_V3_BENCHMARKS.md](FSR_V3_BENCHMARKS.md).
+Both are physical **M5** measurements, not M1-M4 estimates. Forcing SIMD
+changes the neural backend, not the GPU family: M5-only POST colour tiling
+stays enabled, so it is not an emulation of the entire M1-M4 path.
+
+| GPU family | Automatic INT8 backend (4.1.1 / 4.1.2) |
 | --- | --- |
 | M1 / family 7 | `simd`: simdgroup half matrices, exact INT8 result. |
 | M2 / family 8 | `simd` |
@@ -14,8 +22,9 @@ model, including its separate Ultra Performance initializer.
 | Non-Apple7 GPU | Scalar INT8 Metal compute. |
 
 Selection uses Metal feature families and device limits. Rosetta does not
-change GPU capabilities. Native kernels use 128 threads and 20 KiB of
-threadgroup memory. This project builds for macOS 26+ with Xcode 26+ and
+change GPU capabilities. Thread counts and memory use vary by pass; native
+kernels are checked against actual pipeline/device limits. This project
+builds for macOS 26+ with Xcode 26+ and
 the Metal Toolchain.
 
 The `simd` backend (`--simd`, alias `--fp16`; `FSR4_MODEL=simd`) runs the
