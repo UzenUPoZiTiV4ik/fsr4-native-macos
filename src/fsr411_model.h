@@ -56,6 +56,9 @@ enum EpilogueFlags : u32 {
     // Explicit lossy profile only: nearest rounding, but half-way values
     // resolve toward positive infinity instead of the even integer.
     kRoundHalfUp = 4u,
+    // CNB first convolution only: biases[3] is the source shader's bias
+    // when its first 3x3 tap is outside the input. Not a rounding change.
+    kFirstTapBias = 8u,
 };
 
 // n = ((dot + int32_bias) << accumulatorShift) +
@@ -87,6 +90,11 @@ struct PassParams {
     u32 biases[4];
     Epilogue q[6];
 };
+
+inline u32 first_tap_bias_offset(PassParams p, u32 x, u32 y) {
+    const bool firstOutside = x == 0u || y == 0u || x > p.input.width || y > p.input.height;
+    return (p.q[0].flags & kFirstTapBias) && firstOutside ? p.biases[3] : p.biases[0];
+}
 
 inline u32 tensor_address(Tensor t, u32 x, u32 y, u32 channel) {
     const u32 ch = t.bankStride ? (channel / 16u) * t.bankStride + channel % 16u : channel;
@@ -150,7 +158,7 @@ inline i32 finish(i32 accumulator, i32 bias, i32 residual, Epilogue q) {
 
 inline bool valid_epilogue(Epilogue q) {
     return q.accumulatorShift <= 30 && q.residualShift <= 30 &&
-           q.rightShift <= 30 && (q.flags & ~(kReluBeforeRound | kNarrowInt16 | kRoundHalfUp)) == 0;
+           q.rightShift <= 30 && (q.flags & ~(kReluBeforeRound | kNarrowInt16 | kRoundHalfUp | kFirstTapBias)) == 0;
 }
 
 #if !defined(__METAL_VERSION__)

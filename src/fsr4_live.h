@@ -119,17 +119,21 @@ void fsr4_live_set_sharpness(float sharpness, int rcas);
 // (exact-fast in FSR4_PROFILE/panel.conf), 3 = the FSR 4.0.2 model ("fsr4"),
 // 4 = Lossy2 ("lossy2", lossy with the six trained layers),
 // 5 = AMD FSR 4.1.2 INT8 Lite ("int8-lite", default), 6 = Lite with the
-// pixelization fix ("int8-lite-pixfix").
+// pixelization fix ("int8-lite-pixfix", alias "int8-lite-hair"),
+// 7 = Lite Lossy ("int8-lite-lossy", alias "lite-lossy"),
+// 8 = experimental half-tile Lite Lossy ("int8-lite-lossy-tiled",
+// alias "lite-lossy-tiled"). Lossy modes require the pinned initializer
+// and receipt in build/fsr412_lossy (fetch with make lite-lossy-weights).
 // FSR4_PROFILE sets the initial preference; panel.conf overrides it unless
 // FSR4_SETTINGS=none. The 4.1.1 bridge includes 0-2 in its session/history
-// identity; switching to or from 3/5 changes the model and resets history.
+// identity; switching to or from 3 or 5-8 changes the model and resets history.
 void fsr4_live_get_profile(int *profile);
 // FSR 4.1.2 Lite pixelization fix strength 0..1 (panel slider, default 0.5);
 // used only with profile 6.
 void fsr4_live_get_pixelization_strength(float *strength);
 void fsr4_live_set_profile(int profile);
 // Model the live bridge encodes: "4.0.2" when FSR4_VERSION=4.0.2 or the
-// profile is 3, "4.1.2" for INT8 Lite, otherwise "4.1.1".
+// profile is 3, "4.1.2" for INT8 Lite modes 5-8, otherwise "4.1.1".
 const char *fsr4_live_model_version(void);
 
 // FSR4_PANEL=1: launch dist/crossover/FSR4 Panel.app once (src/fsr4_panel.mm).

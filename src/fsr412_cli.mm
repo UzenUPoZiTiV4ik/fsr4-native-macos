@@ -367,7 +367,7 @@ void usage() {
         "       [--auto|--reference|--scalar|--simd|--i8mpp] [--profile int8-lite] [--dump-passes|--dump-state]\n"
         "       [--capture-stages pre,pass1,pass2,pass3,post] [--bench N] [--profile-stages]\n"
         "       [--builddir dir] [--root dir] [--tier 1080|2160|4320] [--optimize 0|1] [--no-compile] [--pixelization-fix]\n"
-        "       [--pixelization-strength 0..1]\n"
+        "       [--pixelization-strength 0..1] [--neural-tile-size 0|128|256|512|1024|2048]\n"
         "       fsr4mac --fsr-version 4.1.2 --backend-info [auto|reference|scalar|simd|i8mpp]\n"
         "--simd (alias --fp16): M1-M4 simdgroup half matrices with float accumulation for the INT8 model.\n"
         "--bench runs one warmup sequence and N measured sequences; only run.json is written.\n"
@@ -376,6 +376,11 @@ void usage() {
         "FSR 4.1.2 INT8 Lite is the default: AMD's smaller architecture, evaluated every frame.\n"
         "--pixelization-fix (or --profile int8-lite-pixfix) widens POST's filter where history is rejected;\n"
         "--pixelization-strength sets how much (0 none, 0.5 default, 1 most).\n"
+        "Lite Lossy profiles: int8-lite-lossy and int8-lite-lossy-tiled (experimental, default tile size 512).\n"
+        "int8-lite-lossy-original (opt-in): the release's original PRE/BORDER/POST shaders plus exact native\n"
+        "  INT8 neural stages; needs the external bundle from tools/fsr412/compile_original.py (see docs/FSR412_LOSSY.md).\n"
+        "Lite Lossy requires make lite-lossy-weights and does not support --reference/--int8.\n"
+        "--neural-tile-size is Lossy-only; 0 disables partial tiles.\n"
         "Use --fsr-version 4.1.1 for the earlier Exact, Exact Fast, Lite and Lite 2 profiles.\n"
         "Use --fsr-version 4.0.2 to select the legacy model and its FP16 backend.\n"
         "GPU timings cover the full frame command buffer; diagnostic copies are labelled separately.\n");
@@ -389,9 +394,15 @@ int fsr412_main(int argc, char **argv) {
         const char *profileEnv=std::getenv("FSR4_PROFILE");
         std::string profile=profileEnv && *profileEnv?profileEnv:"int8-lite";
         float pixelStrength=fsr412::kPixelFixStrength;
+        unsigned neuralTileOverride=0; bool haveNeuralTileOverride=false;
         if(const char *opt=std::getenv("FSR4_OPTIMIZE"); opt && *opt) {
             if(std::strcmp(opt,"0") && std::strcmp(opt,"1")) fail("FSR4_OPTIMIZE must be 0 or 1");
             options.optimize=opt[0]=='1';
+        }
+        if(const char *tile=std::getenv("FSR4_NEURAL_TILE_SIZE"); tile && *tile) {
+            if(!fsr412::parse_neural_tile_size(tile,neuralTileOverride))
+                fail("FSR4_NEURAL_TILE_SIZE must be 0, 128, 256, 512, 1024, or 2048");
+            haveNeuralTileOverride=true;
         }
         std::string root = default_root(), buildDir = "build";
         std::vector<std::string> positional;
@@ -414,6 +425,11 @@ int fsr412_main(int argc, char **argv) {
             else if(arg=="--profile") profile=value();
             else if(arg=="--no-compile") options.allowCompile=false;
             else if(arg=="--pixelization-fix" || arg=="--hair-fix") options.pixelFix=true;
+            else if(arg=="--neural-tile-size") {
+                if(!fsr412::parse_neural_tile_size(value(),neuralTileOverride))
+                    fail("--neural-tile-size must be 0, 128, 256, 512, 1024, or 2048");
+                haveNeuralTileOverride=true;
+            }
             else if(arg=="--pixelization-strength") {
                 char *end=nullptr; const char *text=value(); const float strength=std::strtof(text,&end);
                 if(end==text || *end || !(strength>=0.f && strength<=1.f)) fail("--pixelization-strength must be 0..1");
@@ -459,10 +475,19 @@ int fsr412_main(int argc, char **argv) {
         if (bench && (dumpState || !options.captureStages.empty()))
             fail("diagnostic snapshots change GPU work; use --bench separately from dumps");
         if(!fsr412::parse_profile(profile,options.profile))
-            fail("FSR 4.1.2 --profile / FSR4_PROFILE must be int8-lite or int8-lite-pixfix; select --fsr-version 4.1.1 for legacy profiles");
+            fail("FSR 4.1.2 --profile / FSR4_PROFILE must be int8-lite, int8-lite-pixfix, int8-lite-lossy, int8-lite-lossy-tiled, or int8-lite-lossy-original; select --fsr-version 4.1.1 for legacy profiles");
         if(fsr412::pixel_fix_profile(profile)) options.pixelFix=true;
+        if(fsr412::original_profile(profile)) options.originalLossy=true;
+        if(fsr412::tiled_profile(profile)) options.neuralTileSize=512;
+        if(haveNeuralTileOverride) {
+            if(options.profile!=fsr412::Profile::Int8LiteLossy)
+                fail("--neural-tile-size / FSR4_NEURAL_TILE_SIZE is supported only by FSR 4.1.2 Lite Lossy");
+            options.neuralTileSize=neuralTileOverride;
+        }
         fsr412::apply_pixel_fix(options,options.pixelFix,pixelStrength);
-        profile=fsr412::profile_name(options.profile);
+        std::string optionError;
+        if(!fsr412::validate_options(options,optionError)) fail(optionError);
+        profile=fsr412::profile_name(options);
         id<MTLDevice> device=MTLCreateSystemDefaultDevice();
         if(!device) fail("no Metal device");
         if(info) { if(!positional.empty()) fail("--backend-info takes no testcase paths");
@@ -621,6 +646,7 @@ int fsr412_main(int argc, char **argv) {
             @"backend":ns(actualBackend),@"variant":ns(variant),@"testcase":ns(inputDir),
             @"preset":ns(preset),@"colorspace":ns(colorspace),@"benchmark_iterations":@(bench),
             @"optimize":@(options.optimize),@"pixelization_fix":@(options.pixelFix),@"pixelization_strength":@(pixelStrength),@"requested_tier":@(options.tier),
+            @"neural_tile_size":@(options.neuralTileSize),
             @"warmup_sequences":@(bench?1:0),@"timing_scope":@"full frame command buffer",
             @"measured_frames":@(times.size()),@"neural_runs":@(neuralRuns),@"reused_frames":@(reusedFrames),
             @"capture_stages":stages,@"diagnostic_gpu_copies":@(!options.captureStages.empty()),

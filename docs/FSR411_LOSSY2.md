@@ -1,5 +1,7 @@
 # FSR 4.1.2 Lossy (`lossy2`): переобученные веса и правило «крапин» - 30 октября 2026
 
+Новые Lite Lossy и опциональная история описаны в [FSR412_LOSSY.md](FSR412_LOSSY.md).
+
 Режим панели **FSR 4.1.2 Lossy** (раньше «FSR 4.1 Lossy», ещё раньше «Lite 2»)
 повторяет `lossy` из релиза
 [`dll-2026-10-29`](https://github.com/zgauthier2000/fsr4-shader-performance-overrides/releases/tag/dll-2026-10-29)

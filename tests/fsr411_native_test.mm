@@ -47,7 +47,7 @@ static void reference_cnb(std::vector<unsigned char> &scratch,
                     for (unsigned kx = 0; kx < 3; ++kx)
                         for (unsigned ic = 0; ic < 16; ++ic)
                             acc += pixel(int(x + kx) - 1, int(y + ky) - 1, ic) * weight(0, ((ky * 3 + kx) * 16 + ic) * 16 + oc);
-                a[oc] = fsr411::finish(acc, bias(weights, p.biases[0], oc), 0, p.q[0]);
+                a[oc] = fsr411::finish(acc, bias(weights, fsr411::first_tap_bias_offset(p,x,y), oc), 0, p.q[0]);
             }
             for (unsigned oc = 0; oc < 32; ++oc) {
                 int acc = 0;

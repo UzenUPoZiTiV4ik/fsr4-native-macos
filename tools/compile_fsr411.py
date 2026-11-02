@@ -26,6 +26,7 @@ from fsr411.lossy import apply_hlsl_lossy
 from fsr411.lossy2 import apply_source as apply_lossy2_source, load as load_lossy2_weights
 from fsr411.lossy_shaders import apply_lossy_pre, apply_lossy_post, apply_lossy_post_cells, reuse_only_pre
 from fsr411.post_optimization import apply_post_optimization, POST_PIXELS_PER_GROUP
+from fsr411.temporal_quality import apply_temporal_quality_pre, apply_temporal_quality_post
 from fsr411.autoexposure import split_autoexposure
 from fsr411.scratch_alias import alias_post_cnb_cache, post_cnb_layout
 
@@ -154,6 +155,7 @@ def input_hash(root: Path, options: dict) -> str:
              root / "tools/fsr411/lossy.py", root / "tools/fsr411/lossy2.py", root / "tools/fsr411/lossy_shaders.py",
              root / "tools/fsr411/post_optimization.py", root / "tools/fsr411/autoexposure.py"]
     paths.append(root / "tools/fsr411/scratch_alias.py")
+    paths.append(root / "tools/fsr411/temporal_quality.py")
     for directory in ("third_party/fsr411/shaders", "third_party/fsr411/ultraperformance", "third_party/fsr4/dx12",
                       "third_party/fsr4/include/gpu", "third_party/fsr4/api/internal/gpu"):
         paths.extend(p for p in (root / directory).rglob("*") if p.is_file())
@@ -178,6 +180,9 @@ def build(args) -> dict:
     root = Path(args.root).resolve()
     builddir = Path(args.builddir).resolve()
     tier = int(args.res)
+    temporal_quality = int(getattr(args, "temporal_quality", 0))
+    if temporal_quality and args.profile not in LOSSY_PROFILES:
+        raise ValueError("temporal quality is only available for Lossy/lossy2")
     if args.profile in LOSSY_PROFILES:
         args.external_post_cnb = 1
     lossy2_weights = None
@@ -201,12 +206,15 @@ def build(args) -> dict:
         options["strict_math"] = 1
     if alias_post_cnb:
         options["post_cnb_alias"] = 1
+    if temporal_quality:
+        options["temporal_quality"] = temporal_quality
     key = (f"fsr411_{tier}_di{args.depth_inverted}_lm{args.low_res_mv}"
            f"_jm{args.jittered_mv}_cs{args.colorspace}_ae{args.auto_exposure}_o{args.optimize}"
            + ("_up1" if args.ultra_performance else "")
            + {"lossy": "_lossy", "lossy2": "_lossy2", "exact-fast": "_fast"}.get(args.profile, "")
            + ("_pc1" if args.external_post_cnb else "")
-           + ("_sm1" if strict else "") + ("_ca1" if alias_post_cnb else ""))
+           + ("_sm1" if strict else "") + ("_ca1" if alias_post_cnb else "")
+           + (f"_tq{temporal_quality}" if temporal_quality else ""))
     output = builddir / key
     output.mkdir(parents=True, exist_ok=True)
     shared_digest = input_hash(root, {})
@@ -249,6 +257,11 @@ def build(args) -> dict:
                     source = apply_post_optimization(source)
                     if args.profile in LOSSY_PROFILES:
                         source = apply_lossy_post_cells(source)
+                if temporal_quality and path.suffix == ".hlsl":
+                    if path.name.startswith("pre_rev_"):
+                        source = apply_temporal_quality_pre(source, tier)
+                    elif path.name.startswith("post_rev_"):
+                        source = apply_temporal_quality_post(source, tier, fast_notes=temporal_quality==2)
                 if alias_post_cnb and path.name.startswith("post_rev_") and path.suffix == ".hlsl":
                     source = alias_post_cnb_cache(source, tier)
                 # Tiny PRE/filter loops should remain unrolled: their dynamic
@@ -432,6 +445,7 @@ def main():
                           ("auto-exposure", 0), ("optimize", 0), ("ultra-performance", 0),
                           ("external-post-cnb", 0), ("strict-math", 0), ("post-cnb-alias", 0)):
         parser.add_argument("--" + flag, type=int, choices=(0, 1), default=default)
+    parser.add_argument("--temporal-quality", type=int, choices=(0,1,2), default=0)
     parser.add_argument("--colorspace", type=int, choices=range(4), default=0)
     parser.add_argument("--only", nargs="+")
     try:

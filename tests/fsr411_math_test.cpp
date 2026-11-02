@@ -113,6 +113,7 @@ int main() {
     equal(fsr411::valid_epilogue({0, 0, 31, 0}), false, "invalid right shift");
     equal(fsr411::valid_epilogue({31, 0, 0, 0}), false, "invalid left shift");
     equal(fsr411::valid_epilogue(halfUp), true, "lossy flag accepted");
-    equal(fsr411::valid_epilogue({0, 0, 0, 8}), false, "unknown flag");
+    equal(fsr411::valid_epilogue({0, 0, 0, fsr411::kFirstTapBias}), true, "conditional source bias metadata");
+    equal(fsr411::valid_epilogue({0, 0, 0, 16}), false, "unknown flag");
     std::printf("fsr411_math_test: %lu checks passed\n", checks);
 }

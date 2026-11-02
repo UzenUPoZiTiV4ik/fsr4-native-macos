@@ -42,7 +42,14 @@ def buffer_integer_constants(source):
     prefix = pattern.sub(replace, prefix)
     if not aliases:
         return source, b""
-    body = re.sub(r"(kernel\s+void\s+\w+\s*\()", r"\1constant uchar *Fsr411Tables [[buffer(7)]], ", body, count=1)
+    occupied = {int(x) for x in re.findall(r"\[\[buffer\((\d+)\)\]\]", body)}
+    table_slot = 7
+    while table_slot in occupied:
+        table_slot += 1
+    if table_slot >= 16:
+        raise ValueError("no free Metal buffer slot for integer literal tables")
+    body = re.sub(r"(kernel\s+void\s+\w+\s*\()",
+                  lambda m: m[0] + f"constant uchar *Fsr411Tables [[buffer({table_slot})]], ", body, count=1)
     first_brace = body.index("{") + 1
     body = body[:first_brace] + "\n" + "\n".join(aliases) + "\n" + body[first_brace:]
     return prefix + body, bytes(packed)

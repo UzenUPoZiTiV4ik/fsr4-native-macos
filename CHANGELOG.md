@@ -1,5 +1,51 @@
 # Releases
 
+## v2.6 (2026-11-02)
+
+FSR 4.1.2 Lite Lossy, the opt-in original-graph route, and macOS 27 /
+CrossOver fixes. Full notes: [docs/releases/v2.6.md](docs/releases/v2.6.md).
+
+- `int8-lite-lossy` and experimental `int8-lite-lossy-tiled`: pinned upstream
+  trained weights (external fetch), whole-frame and half-tile reuse, panel
+  IDs 7/8 and installer validation.
+- `int8-lite-lossy-original` (opt-in): the release's original PRE/BORDER/POST
+  shaders plus exact native INT8 neural stages. Production encode matches the
+  original-shader oracle byte for byte (output, history, recurrent, scratch)
+  on MPP/SIMD/scalar, classic Metal and Metal 4. Run-frame POST reads
+  native-precomputed CNB (4K full frame 36.0 -> 14.9 ms).
+- Corrections found on the way: Metal `-O3` miscompiles the original P2
+  (reference uses `-O0`), auto-exposure permutation selection was inverted,
+  and neural halos are class-sized. Conditional POST first-tap and per-subpixel
+  CT biases, plus cache revisions that reject stale bundles.
+- macOS 27 SDK build (issue #19), CrossOver 26 `lib64` D3DMetal (issue #15),
+  version display (issue #14), external-drive bottles (#11), and Xcode macro
+  plugins for the Swift installer.
+
+## Unreleased (2026-11-01)
+
+- Optional FSR 4.1.2 Lite Lossy: statically decoded, pinned trained weights;
+  native/scalar/SIMD integer backends, whole-frame reuse and panel/installer integration.
+- Experimental spatial cadence updates half the 128..2048-pixel tiles with a
+  neural halo, explicit ping-pong ownership and separate partial accounting.
+- Opt-in Lite POST shared color tiles; noinline read fixes an M5 fast-math
+  feedback difference. Default Lite and Exact remain unchanged.
+- Optional legacy Lossy fine motion, persistent-change/fade repairs and fast
+  Wave32 notes. Conservative history improves selected synthetic scenes but
+  costs GPU time; experimental paths are not enabled by default.
+- Correct per-subpixel Lite CT biases, data/receipt pins, ABI checks and stale
+  cache revision rejection. GPL-trained data is an explicit external fetch.
+- CPU suites and classic/Metal 4 native/scalar/SIMD state parity pass.
+  Exact replay remains byte-identical to the original HEAD binary.
+- Opt-in `int8-lite-lossy-original`: the release's original PRE/BORDER/POST
+  shaders (external, statically translated) with exact native INT8 neural
+  stages. Production encode matches the original-shader oracle byte for byte
+  (output, history, recurrent, scratch) on MPP/SIMD/scalar, classic and Metal 4.
+  Run-frame POST reads native-precomputed CNB for the proven 2160/normal/AE
+  permutation (4K full frame 36.0 -> 14.9 ms); other permutations and reused
+  frames keep the original POST. Still slower than `int8-lite-lossy`; not a default.
+
+See docs/FSR412_LOSSY.md for actual measurements and remaining limitations.
+
 ## v2.5 (2026-10-31)
 
 M5 INT8 tuning and the pre-M5 SIMD/Winograd updates in one release.

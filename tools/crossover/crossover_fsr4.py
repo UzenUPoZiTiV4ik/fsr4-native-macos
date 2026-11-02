@@ -12,6 +12,7 @@ it as D3DMetal.fsr4-original; restore copies that back and removes the hook.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -70,7 +71,12 @@ HOOK_NAME = "libfsr4hook.dylib"
 # @loader_path, so the app's own binary has to carry the hook.
 FRAMEWORK_PATH_ENV = b"D3DMETAL_FRAMEWORK_PATH"
 # "fsr4" remains the legacy panel mode for the FSR 4.0.2 comparison model.
-PROFILES = ("int8-lite", "int8-lite-pixfix", "int8-lite-hair", "exact", "exact-fast", "lossy", "lossy2", "fsr4")
+LITE_LOSSY_SOURCE_DLL_SHA256 = "d9b0a1f5781c2d633a327272f6f1c8607057df7cafd0233cf38c7395c8f7dbc5"
+LITE_LOSSY_INITIALIZER_SHA256 = "c77c2d1a4d119ed76d94b8c23335490cc38280db3346c72396a1e1acb0523cfc"
+LITE_LOSSY_PROFILES = ("int8-lite-lossy", "int8-lite-lossy-tiled")
+LITE_PROFILES = ("int8-lite", "int8-lite-pixfix", "int8-lite-hair", *LITE_LOSSY_PROFILES)
+LEGACY_PROFILES = ("exact", "exact-fast", "lossy", "lossy2", "fsr4")
+PROFILES = (*LITE_PROFILES, *LEGACY_PROFILES)
 OURS = (KEY, LOG_KEY, ROOT_KEY, REPLACE_KEY, PANEL_KEY, VERSION_KEY, PROFILE_KEY, FRAMEWORK_KEY)
 
 
@@ -671,6 +677,42 @@ def select_panel_profile(profile: str):
     print(f"selected {profile} in {conf}")
 
 
+def reject_lite_lossy_reference(model):
+    if model in ("reference", "int8"):
+        raise SystemExit("FSR 4.1.2 Lite Lossy does not support the AMD reference backend; "
+                         "use FSR4_MODEL=auto, native/i8mpp, scalar, or simd")
+
+
+def require_lite_lossy_weights(expected_hash=LITE_LOSSY_INITIALIZER_SHA256):
+    # Fetch is an explicit user action. Never run a Windows provider/DLL or
+    # silently substitute the ordinary Lite initializer for a Lossy install.
+    base = ROOT / "build/fsr412_lossy"
+    initializer = base / "initializers-lite-lossy.bin"
+    receipt = base / "import.json"
+    hint = "; run make lite-lossy-weights, then retry"
+    if not initializer.is_file() or not receipt.is_file():
+        raise SystemExit("FSR 4.1.2 Lite Lossy requires pinned weights and import.json in "
+                         "build/fsr412_lossy" + hint)
+    try:
+        metadata = json.loads(receipt.read_text())
+        if not isinstance(metadata, dict) or metadata.get("schema") != "fsr412_lite_lossy_import_v1":
+            raise ValueError("unsupported or malformed import receipt")
+        if metadata.get("source_dll_sha256") != LITE_LOSSY_SOURCE_DLL_SHA256:
+            raise ValueError("import receipt source DLL SHA-256 is not the pinned provider")
+        initializers = metadata.get("initializers")
+        expected = initializers.get(initializer.name) if isinstance(initializers, dict) else None
+        if not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+            raise ValueError("import receipt has no valid initializer SHA-256")
+        data = initializer.read_bytes()
+        actual = hashlib.sha256(data).hexdigest()
+        if not data or actual != expected:
+            raise ValueError("initializer SHA-256 does not match import receipt")
+        if actual != expected_hash:
+            raise ValueError("initializer SHA-256 does not match pinned initializer")
+    except (OSError, UnicodeError, ValueError) as error:
+        raise SystemExit("Invalid FSR 4.1.2 Lite Lossy weights/import.json: " + str(error) + hint) from error
+
+
 def build_reference(env):
     # Rebuild the same model and backend as the live bridge. An older model's
     # saved frame cannot validate a different model installation.
@@ -688,7 +730,7 @@ def build_reference(env):
         model = aliases[model]
         version_options = ["--fsr-version", version]
         profile = env.get(PROFILE_KEY, "lossy")
-        if profile not in PROFILES:
+        if profile not in LEGACY_PROFILES:
             raise SystemExit("FSR4_PROFILE must be exact, exact-fast, lossy, lossy2 or fsr4")
     elif version == "4.1.2":
         aliases = {"auto": "auto", "native": "i8mpp", "i8mpp": "i8mpp",
@@ -699,8 +741,14 @@ def build_reference(env):
         model = aliases[model]
         version_options = ["--fsr-version", version]
         profile = env.get(PROFILE_KEY, "int8-lite")
-        if profile not in ("int8-lite", "lite", "int8-lite-pixfix", "int8-lite-hair"):
-            raise SystemExit("FSR4_PROFILE must be int8-lite or int8-lite-pixfix for FSR 4.1.2")
+        profile = {"lite": "int8-lite", "lite-hair": "int8-lite-hair", "lite-pixfix": "int8-lite-pixfix",
+                   "lite-lossy": "int8-lite-lossy", "lite-lossy-tiled": "int8-lite-lossy-tiled"}.get(profile, profile)
+        if profile not in LITE_PROFILES:
+            raise SystemExit("FSR4_PROFILE must be int8-lite, int8-lite-pixfix, int8-lite-lossy "
+                             "or int8-lite-lossy-tiled for FSR 4.1.2")
+        if profile in LITE_LOSSY_PROFILES:
+            reject_lite_lossy_reference(model)
+            require_lite_lossy_weights()
     else:
         if model == "int8":
             model = "i8mpp"  # historic 4.0.2 live alias
@@ -708,8 +756,9 @@ def build_reference(env):
             model = "auto"
         version_options = ["--fsr-version", version]
     run(["make", "-B", "tools/bin/fsr4mac"], cwd=ROOT)
+    backend_profile = ["--profile", profile] if version == "4.1.2" and profile in LITE_LOSSY_PROFILES else []
     info = json.loads(subprocess.check_output(
-        [str(ROOT / "tools/bin/fsr4mac"), *version_options, "--backend-info", model], text=True, env=env))
+        [str(ROOT / "tools/bin/fsr4mac"), *version_options, *backend_profile, "--backend-info", model], text=True, env=env))
     backend = info["backend"]
     print(f"{info['device']}: {backend} ({info['reason']})")
     testcase = ROOT / "testcases" / "testcase_quality_720to1080"
@@ -731,9 +780,13 @@ def build_reference(env):
         run([str(ROOT / "tools/bin/fsr4mac"), str(testcase), str(refdir),
              *version_options, "--profile", profile, "--" + model], cwd=ROOT, env=env)
         report = json.loads((refdir / "run.json").read_text())
-        if (report.get("fsr_version") != version or report.get("profile") != "int8-lite"
-                or report.get("backend") not in ("int8-mpp", "int8-reference", "int8-scalar", "int8-simd")):
-            raise SystemExit("reference did not run the requested FSR 4.1.2 INT8 Lite model")
+        actual_profile = profile if profile in LITE_LOSSY_PROFILES else "int8-lite"
+        allowed_backends = ("int8-mpp", "int8-scalar", "int8-simd")
+        if profile not in LITE_LOSSY_PROFILES:
+            allowed_backends += ("int8-reference",)
+        if (report.get("fsr_version") != version or report.get("profile") != actual_profile
+                or report.get("backend") not in allowed_backends):
+            raise SystemExit("reference did not run the requested FSR 4.1.2 model/profile: " + profile)
         print(f"reference verified: FSR {version} {profile} {report['backend']}")
     else:
         refdir = DIST / ("reference-" + backend)
@@ -743,6 +796,11 @@ def build_reference(env):
 
 
 def cmd_install(args):
+    if args.profile in LITE_LOSSY_PROFILES:
+        if args.fsr_version != "4.1.2":
+            raise SystemExit("Lite Lossy profiles require --fsr-version 4.1.2")
+        reject_lite_lossy_reference(os.environ.get("FSR4_MODEL", "auto"))
+        require_lite_lossy_weights()
     if (args.profile == "fsr4" or args.fsr_version == "4.0.2") and not FSR402_WEIGHTS.is_file():
         raise SystemExit("this copy has no FSR 4.0.2 weights (FSR 4.1-only release); "
                          "use --profile exact-fast, lossy or lossy2")
@@ -890,7 +948,7 @@ def main():
     i.add_argument("--fsr-version", choices=("4.0.2", "4.1.1", "4.1.2"), default="4.1.2",
                    help="FSR model version for the live bridge and installation test (default: 4.1.2)")
     i.add_argument("--profile", choices=PROFILES, default="int8-lite",
-                   help="initial panel mode: FSR 4.1.2 int8-lite or legacy 4.1.1 profiles")
+                   help="initial panel mode: FSR 4.1.2 Lite, Lite Lossy (tiled is experimental), or legacy 4.1.1 profiles")
     i.add_argument("--panel", action="store_true",
                    help="also set FSR4_PANEL=1 in the bottle (status/sharpness panel)")
     i.set_defaults(func=cmd_install)

@@ -85,6 +85,15 @@ bool options_for(const Fsr4LiveFrameV2 &f,fsr411::Frame &frame,fsr411::Options &
     if(!parse_flag("FSR4_JITTERED_MV",frame.input.jitteredMV,error)
         || !parse_flag("FSR4_AUTOEXPOSURE",frame.input.autoExposure,error)
         || !parse_flag("FSR4_OPTIMIZE",o.optimize,error)) return false;
+    if(auto quality=env("FSR4_TEMPORAL_QUALITY")) {
+        if(std::strcmp(quality,"0") && std::strcmp(quality,"1") && std::strcmp(quality,"2")) {
+            error="FSR4_TEMPORAL_QUALITY must be 0, 1 or 2";return false;
+        }
+        o.temporalQuality=quality[0]-'0';
+    }
+    if(o.temporalQuality && !fsr411::profile_is_lossy(o.profile)) {
+        error="FSR4_TEMPORAL_QUALITY is only available for Lossy/lossy2";return false;
+    }
     int compile=1;
     if(!parse_flag("FSR4_COMPILE",compile,error))return false;
     o.allowCompile=compile;

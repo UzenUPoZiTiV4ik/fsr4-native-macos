@@ -63,6 +63,23 @@ bool options_for(const Fsr4LiveFrameV2 &f,fsr412::Frame &frame,fsr412::Options &
     // panel profile numbers never select old weights within this runtime.
     o.profile=fsr412::Profile::Int8Lite;
     int panelProfile=5;fsr4_live_get_profile(&panelProfile);
+    o.profile=fsr412::profile_from_int(panelProfile);
+    o.neuralTileSize=panelProfile==8?512u:0u;
+    // Opt-in original release graph for panel Lite Lossy (ID 7 only).
+    int original=0;
+    if(!parse_flag("FSR4_LITE_LOSSY_ORIGINAL",original,error))return false;
+    if(original && panelProfile!=7) {
+        error="FSR4_LITE_LOSSY_ORIGINAL=1 requires the Lite Lossy profile (not tiled/ordinary Lite)";return false;
+    }
+    o.originalLossy=original!=0;
+    if(auto tile=env("FSR4_NEURAL_TILE_SIZE")) {
+        if(o.profile!=fsr412::Profile::Int8LiteLossy) {
+            error="FSR4_NEURAL_TILE_SIZE is supported only by FSR 4.1.2 Lite Lossy";return false;
+        }
+        if(!fsr412::parse_neural_tile_size(tile,o.neuralTileSize)) {
+            error="FSR4_NEURAL_TILE_SIZE must be 0, 128, 256, 512, 1024, or 2048";return false;
+        }
+    }
     float strength=fsr412::kPixelFixStrength;fsr4_live_get_pixelization_strength(&strength);
     fsr412::apply_pixel_fix(o,panelProfile==6,strength);
     if(auto model=env("FSR4_MODEL")) {
@@ -88,6 +105,10 @@ bool options_for(const Fsr4LiveFrameV2 &f,fsr412::Frame &frame,fsr412::Options &
     if(!parse_flag("FSR4_JITTERED_MV",frame.input.jitteredMV,error)
         || !parse_flag("FSR4_AUTOEXPOSURE",frame.input.autoExposure,error)
         || !parse_flag("FSR4_OPTIMIZE",o.optimize,error)) return false;
+    {
+        std::string optionError;
+        if(!fsr412::validate_options(o,optionError)) {error=optionError;return false;}
+    }
     int compile=1;
     if(!parse_flag("FSR4_COMPILE",compile,error))return false;
     o.allowCompile=compile;
@@ -113,7 +134,7 @@ void trace_input(const Fsr4LiveFrameV2 &v2, const fsr412::Options &options,
               "jitter=%.9g,%.9g mvScale=%.9g,%.9g preExposure=%.9g "
               "reset=%d depthReversed=%d jitteredMV=%d outputResMV=%d autoExposure=%d drs=%d",
               (unsigned long long)call,f.owner,f.commandBuffer,
-              fsr412::profile_name(options.profile),stub?" STUB":"",
+              fsr412::profile_name(options),stub?" STUB":"",
               f.rw,f.rh,f.uw,f.uh,g.maxInputWidth,g.maxInputHeight,
               f.color,g.color.width,g.color.height,g.color.offsetX,g.color.offsetY,
               f.depth,g.depth.width,g.depth.height,g.depth.offsetX,g.depth.offsetY,

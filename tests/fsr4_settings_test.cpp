@@ -45,6 +45,16 @@ int main(int argc,char **argv) {try {
         fsr4_live_set_profile(5);check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"INT8 Lite did not select 4.1.2");
         setenv("FSR4_VERSION","4.1.2",1);check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"4.1.2 install did not accept INT8 Lite");
         fsr4_live_set_profile(1);check(!std::strcmp(fsr4_live_model_version(),"4.1.1"),"legacy Lite preference did not keep its 4.1.1 model");
+        for(int id : {7,8}) {
+            fsr4_live_set_profile(id);check(profile()==id,"Lite Lossy live ID was rejected");
+            check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"Lite Lossy routed to a legacy model");
+            setenv("FSR4_VERSION","4.1.1",1);
+            check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"4.1.1 environment routed Lite Lossy to legacy");
+            setenv("FSR4_VERSION","4.1.2",1);
+            fsr4_live_set_sharpness(.6f,0);check(profile()==id,"sharpness setter discarded Lite Lossy ID");
+            fsr4_live_set_profile(9);check(profile()==id,"out-of-range profile 9 was accepted");
+            fsr4_live_set_profile(-1);check(profile()==id,"negative profile was accepted");
+        }
         fsr4_live_set_profile(5);
         setenv("FSR4_VERSION","4.0.2",1);check(!std::strcmp(fsr4_live_model_version(),"4.0.2"),"FSR4_VERSION=4.0.2 was not honoured");
     } else if(!std::strcmp(argv[1],"legacy-default")) {
@@ -57,6 +67,14 @@ int main(int argc,char **argv) {try {
     } else if(!std::strcmp(argv[1],"environment-int8-lite")) {
         setenv("FSR4_PROFILE","int8-lite",1);check(profile()==5,"environment INT8 Lite preference was ignored");
         check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"named INT8 Lite did not select 4.1.2");
+    } else if(!std::strcmp(argv[1],"environment-int8-lite-lossy") ||
+              !std::strcmp(argv[1],"environment-lite-lossy") || !std::strcmp(argv[1],"environment-7") ||
+              !std::strcmp(argv[1],"environment-int8-lite-lossy-tiled") ||
+              !std::strcmp(argv[1],"environment-lite-lossy-tiled") || !std::strcmp(argv[1],"environment-8")) {
+        const char *name=argv[1]+std::strlen("environment-");
+        const int expected=std::strstr(name,"tiled") || !std::strcmp(name,"8") ? 8 : 7;
+        setenv("FSR4_PROFILE",name,1);check(profile()==expected,"environment Lite Lossy preference was ignored");
+        check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"named/numeric Lite Lossy did not select 4.1.2");
     } else if(!std::strcmp(argv[1],"file")) {
         char temporary[]="/tmp/fsr4-settings-XXXXXX";
         check(mkdtemp(temporary),"cannot create fixture directory");
@@ -95,7 +113,21 @@ int main(int argc,char **argv) {try {
         fsr4_live_set_profile(5);
         FILE *saved=std::fopen(path.c_str(),"r");check(saved,"cannot reopen fixture");
         char text[128]={};std::fread(text,1,sizeof text-1,saved);std::fclose(saved);
-        check(std::strstr(text,"profile=int8-lite")!=nullptr,"INT8 Lite profile was not saved by name");
+        check(std::strstr(text,"profile=int8-lite\n")!=nullptr,"INT8 Lite profile was not saved by name");
+        for(int id : {7,8}) {
+            const char *name=id==7?"int8-lite-lossy":"int8-lite-lossy-tiled";
+            const std::string fixture=std::string("sharpness=0.300\nrcas=1\nprofile=")+name+"\n";
+            write(path,fixture.c_str());times[1].tv_nsec=id*1000000;
+            check(!utimensat(AT_FDCWD,path.c_str(),times,0),"cannot update Lossy fixture timestamp");poll();
+            check(profile()==id,"saved Lite Lossy profile was not loaded");sharpness(.3f,1);
+            check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"saved Lite Lossy selected legacy model");
+            fsr4_live_set_sharpness(.7f,0);check(profile()==id,"sharpness update discarded saved Lite Lossy");
+            fsr4_live_set_profile(id);
+            saved=std::fopen(path.c_str(),"r");check(saved,"cannot reopen Lossy fixture");
+            std::memset(text,0,sizeof text);std::fread(text,1,sizeof text-1,saved);std::fclose(saved);
+            const std::string setting=std::string("profile=")+name+"\n";
+            check(std::strstr(text,setting.c_str())!=nullptr,"Lite Lossy profile was not saved by canonical name");
+        }
         unlink(path.c_str());rmdir(temporary);
     } else return 2;
     std::printf("settings %s passed\n",argv[1]);return 0;

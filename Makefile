@@ -9,7 +9,7 @@ BINDIR   := tools/bin
 
 all: $(BINDIR)/fsr4mac $(BINDIR)/gen_testcase $(BINDIR)/compare $(BINDIR)/bilin $(BINDIR)/bin2png
 
-test: test-input test-settings test-fsr411-math test-installer test-fsr411-layout test-fsr411-cache test-fsr411-mpp-policy
+test: test-input test-settings test-fsr411-math test-installer test-fsr411-layout test-fsr411-cache test-fsr411-mpp-policy test-fsr412-options test-fsr412-neural-tiles test-fsr4-panel-settings
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) tests/backend_policy_test.cpp -o build/tests/backend_policy_test
 	build/tests/backend_policy_test
@@ -39,6 +39,12 @@ test-settings:
 	build/tests/fsr4_settings_test environment-fast
 	build/tests/fsr4_settings_test environment-lossy2
 	build/tests/fsr4_settings_test environment-int8-lite
+	build/tests/fsr4_settings_test environment-int8-lite-lossy
+	build/tests/fsr4_settings_test environment-lite-lossy
+	build/tests/fsr4_settings_test environment-7
+	build/tests/fsr4_settings_test environment-int8-lite-lossy-tiled
+	build/tests/fsr4_settings_test environment-lite-lossy-tiled
+	build/tests/fsr4_settings_test environment-8
 	build/tests/fsr4_settings_test legacy-default
 	build/tests/fsr4_settings_test environment-fsr4
 	build/tests/fsr4_settings_test model
@@ -207,7 +213,7 @@ test-fsr411-cadence: build/tests/fsr411_lossy_cadence_test
 	build/tests/fsr411_lossy_cadence_test "$(CURDIR)" --compile --inflight
 	build/tests/fsr411_lossy_cadence_test "$(CURDIR)" --compile --inflight --mtl4
 
-dist/crossover/libfsr4hook.dylib: Makefile tools/crossover/crossover_fsr4.py hook/fsr4_metalfx.m src/fsr4_live.mm src/fsr4_panel.mm src/fsr4_live.h src/fsr4_input.h src/fsr4_log.h src/fsr4_device.h src/fsr4_backend.h src/i8mpp_host.h src/fsr411_live.mm src/fsr411_runtime.h src/fsr411_capture_io.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_live.mm src/fsr412_runtime.h src/fsr412_session.inc src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
+dist/crossover/libfsr4hook.dylib: Makefile tools/crossover/crossover_fsr4.py hook/fsr4_metalfx.m src/fsr4_live.mm src/fsr4_panel.mm src/fsr4_live.h src/fsr4_input.h src/fsr4_log.h src/fsr4_device.h src/fsr4_backend.h src/i8mpp_host.h src/fsr411_live.mm src/fsr411_runtime.h src/fsr411_capture_io.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_live.mm src/fsr412_runtime.h src/fsr412_session.inc src/fsr411_simd_weights.h src/fsr411_mpp_policy.h src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h
 	python3 -c 'import sys; sys.path.insert(0, "tools/crossover"); import crossover_fsr4 as c; c.build_hook(c.DIST / "hook.log")'
 
 dist/crossover/fsr411_live_regions_test: tests/fsr411_live_regions_test.mm src/fsr4_live.h src/fsr4_input.h dist/crossover/libfsr4hook.dylib Makefile
@@ -217,7 +223,7 @@ test-fsr411-live: dist/crossover/fsr411_live_regions_test
 	FSR4_COMPILE=1 arch -x86_64 $< "$(CURDIR)" i8mpp classic switch
 	FSR4_COMPILE=1 arch -x86_64 $< "$(CURDIR)" i8mpp mtl4 switch
 
-build/tests/fsr412_optimization_test: tests/fsr412_optimization_test.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr412_session.inc Makefile src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
+build/tests/fsr412_optimization_test: tests/fsr412_optimization_test.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr412_session.inc Makefile src/fsr411_simd_weights.h src/fsr411_mpp_policy.h src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) $< $(FRAMEWORKS) -o $@
 
@@ -227,11 +233,11 @@ test-fsr412-optimization: build/tests/fsr412_optimization_test
 
 .PHONY: test-fsr412-optimization
 
-build/obj/fsr411_cli.o: Makefile src/fsr411_cli.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_session.inc src/fsr4_input.h src/fsr4_log.h src/pngio.h src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
+build/obj/fsr411_cli.o: Makefile src/fsr411_cli.mm src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_session.inc src/fsr4_input.h src/fsr4_log.h src/pngio.h src/fsr411_simd_weights.h src/fsr411_mpp_policy.h src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h
 	mkdir -p build/obj
 	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) -c src/fsr411_cli.mm -o $@
 
-build/obj/fsr412_cli.o: Makefile src/fsr412_cli.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_session.inc src/fsr4_input.h src/fsr4_log.h src/pngio.h src/fsr411_simd_weights.h src/fsr411_mpp_policy.h
+build/obj/fsr412_cli.o: Makefile src/fsr412_cli.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_session.inc src/fsr4_input.h src/fsr4_log.h src/pngio.h src/fsr411_simd_weights.h src/fsr411_mpp_policy.h src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h
 	mkdir -p build/obj
 	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) -c src/fsr412_cli.mm -o $@
 
@@ -251,6 +257,60 @@ $(BINDIR)/bin2png: src/bin2png.cpp src/pngio.h
 	$(CXX) $(CXXFLAGS) $(ZLIB) -o $@ src/bin2png.cpp
 lossy2-weights:
 	python3 tools/fsr411/fetch_lossy2_weights.py
+
+lite-lossy-weights:
+	python3 tools/fsr412/fetch_lossy_weights.py
+
+build/tests/fsr412_options_test: tests/fsr412_options_test.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr412_live.mm src/fsr412_cli.mm src/fsr412_neural_tile.h src/fsr412_session.inc src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -fobjc-arc -I src $< $(FRAMEWORKS) $(ZLIB) -o $@
+
+test-fsr412-options: build/tests/fsr412_options_test
+	$<
+
+build/tests/fsr412_neural_tile_test: tests/fsr412_neural_tile_test.cpp src/fsr412_neural_tile.h src/fsr411_model.h Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -Wextra -Werror $< -o $@
+
+test-fsr412-neural-tiles: build/tests/fsr412_neural_tile_test
+	$<
+
+build/tests/fsr4_panel_settings_test: tests/fsr4_panel_settings_test.mm tools/crossover/panel_app.mm Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -fobjc-arc $< -framework Foundation -framework AppKit -framework QuartzCore -o $@
+
+test-fsr4-panel-settings: build/tests/fsr4_panel_settings_test
+	$<
+
+build/tests/fsr412_modes_ab: tools/bench/fsr412_modes_ab.mm src/fsr411_runtime.h src/fsr412_runtime.h src/fsr412_session.inc src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h src/fsr412_neural_tile.h src/fsr411_model.h Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -fobjc-arc -I src $< $(FRAMEWORKS) -o $@
+
+test-fsr412-lossy: build/tests/fsr412_modes_ab
+	$< "$(CURDIR)"
+	$< "$(CURDIR)" --mtl4
+
+bench-fsr412-modes: build/tests/fsr412_modes_ab
+	$< "$(CURDIR)" --bench 30 --size 864 560 1712 1112
+
+# Opt-in int8-lite-lossy-original: production Runtime::encode versus the
+# original-shader oracle, byte for byte. Needs build/fsr412_upstream assets
+# and FSR412_DXIL_SPIRV for a cold bundle build. No DLL is executed.
+build/tests/fsr412_original_runtime_ab: tools/bench/fsr412_original_runtime_ab.mm tools/bench/fsr412_upstream_replay.h src/fsr412_runtime.h src/fsr411_runtime.h src/fsr412_session.inc src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h src/fsr411_model.h Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) -I src $< -framework Metal -framework Foundation -o $@
+
+test-fsr412-original: build/tests/fsr412_original_runtime_ab
+	$< "$(CURDIR)"
+	$< "$(CURDIR)" --simd --size 386 232 644 388
+	$< "$(CURDIR)" --scalar
+	$< "$(CURDIR)" --mtl4
+	$< "$(CURDIR)" --mtl4 --size 2304 1280 3840 2160 --frames 4
+
+# The shared runtime includes this ABI in all CLI/live build variants.
+build/obj/fsr411_cli.o build/obj/fsr412_cli.o dist/crossover/libfsr4hook.dylib build/tests/fsr412_optimization_test build/tests/fsr411_runtime_test: src/fsr412_neural_tile.h
+
+.PHONY: lite-lossy-weights test-fsr412-options test-fsr412-neural-tiles test-fsr4-panel-settings test-fsr412-lossy bench-fsr412-modes test-fsr412-original
 
 # INT2 rounding ported from M5, tested through the actual pre-M5 shader.
 build/tests/fsr411_simd_quantize_test.metallib: tests/fsr411_simd_quantize_test.metal src/fsr411_simd.metal src/fsr411_model.h Makefile
@@ -273,7 +333,7 @@ build/tests/fsr411_mpp_bench: tools/bench/fsr411_mpp_bench.mm src/fsr411_model.h
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -fobjc-arc $< $(FRAMEWORKS) -o $@
 
-build/tests/fsr411_mpp_ab: tools/bench/fsr411_mpp_ab.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr411_mpp_policy.h src/fsr411_model.h src/fsr411_simd_weights.h src/fsr412_session.inc Makefile
+build/tests/fsr411_mpp_ab: tools/bench/fsr411_mpp_ab.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr411_mpp_policy.h src/fsr411_model.h src/fsr411_simd_weights.h src/fsr412_session.inc Makefile src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) $< $(FRAMEWORKS) -o $@
 
@@ -316,7 +376,7 @@ test-fsr411-simd-winograd: build/tests/fsr411_winograd_weights_test build/tests/
 
 # Full-frame forced-SIMD A/B in one process: direct 3x3 vs exact Winograd,
 # interleaved, with a byte-identity check. Run on the target M1-M4 Mac.
-build/tests/fsr411_simd_ab: tools/bench/fsr411_simd_ab.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr411_simd_weights.h src/fsr412_session.inc Makefile src/fsr411_model.h src/fsr411_mpp_policy.h
+build/tests/fsr411_simd_ab: tools/bench/fsr411_simd_ab.mm src/fsr412_runtime.h src/fsr411_runtime.h src/fsr411_simd_weights.h src/fsr412_session.inc Makefile src/fsr411_model.h src/fsr411_mpp_policy.h src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) $< $(FRAMEWORKS) -o $@
 
@@ -371,7 +431,7 @@ test-installer:
 	python3 tests/installer/check_strings.py
 
 .PHONY: installer test-installer
-.PHONY: all clean lossy2-weights test test-gpu test-input test-settings test-fsr411-math test-fsr411-layout build-fsr411-tests test-fsr411-gpu test-fsr411-native test-fsr411-runtime test-fsr411-scalar test-fsr411-lossy test-fsr411-autoexposure test-fsr411-cadence test-fsr411-live test-fsr411-cli
+.PHONY: all clean lossy2-weights lite-lossy-weights test test-gpu test-input test-settings test-fsr411-math test-fsr411-layout build-fsr411-tests test-fsr411-gpu test-fsr411-native test-fsr411-runtime test-fsr411-scalar test-fsr411-lossy test-fsr411-autoexposure test-fsr411-cadence test-fsr411-live test-fsr411-cli
 
 # Run the signed-chroma regression before the remaining sequential GPU suites.
 test-fsr411-gpu: test-fsr411-chroma

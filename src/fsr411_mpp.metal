@@ -71,6 +71,7 @@ __attribute__((always_inline)) inline uint quantize(int4 acc, int4 bias, int4 re
 template <bool RELU>
 __attribute__((always_inline)) inline uint quantize_cnb_intermediate(int4 acc, int4 bias, fsr411::Epilogue q) {
     constexpr uint flags = RELU ? fsr411::kReluBeforeRound : 0u;
+    q.flags &= ~fsr411::kFirstTapBias; // bias selection is done before arithmetic
     // Every imported intermediate has no accumulator shift and no int16
     // narrowing. Keep a generic fallback for other ABI-valid epilogues.
     if (!q.accumulatorShift && q.flags == flags)
@@ -152,9 +153,10 @@ __attribute__((always_inline)) inline void cnb(
     threadgroup_barrier(mem_flags::mem_threadgroup);
     {
         const uint channel = (tid & 3u) * 4u;
-        const int4 bias = fsr411_gpu::load_bias(weights, p.biases[0], channel);
         for (uint i = tid; i < T * 4u; i += (SG * 32u)) {
             const uint pixel = i / 4u;
+            const uint x = group.x * TW + pixel % TW, y = group.y * TH + pixel / TW;
+            const int4 bias = fsr411_gpu::load_bias(weights, fsr411::first_tap_bias_offset(p,x,y), channel);
             activation[i] = fsr411_gpu::quantize_cnb_intermediate<false>(fsr411_gpu::load_acc(acc, pixel * 16u + channel), bias, p.q[0]);
         }
     }
@@ -406,6 +408,18 @@ __attribute__((always_inline)) inline void quantize_into(thread Source &src, thr
         quantize_into<I + 4u, COUNT, RELU>(src, dst, weights, bias_offset, q);
 }
 
+template <uint I, uint COUNT, uint TW, uint TH, class Source, class Destination>
+__attribute__((always_inline)) inline void quantize_first_into(thread Source &src, thread Destination &dst,
+    device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    const auto c = src.get_multidimensional_index(I);
+    const uint x = group.x * TW + uint(c[1]), y = group.y * TH + uint(c[2]);
+    const int4 accumulator(src[I],src[I+1u],src[I+2u],src[I+3u]);
+    const int4 bias = fsr411_gpu::load_bias(weights,fsr411::first_tap_bias_offset(p,x,y),uint(c[0]));
+    const char4 value = as_type<char4>(fsr411_gpu::quantize_cnb_intermediate<false>(accumulator,bias,p.q[0]));
+    dst[I]=value.x;dst[I+1u]=value.y;dst[I+2u]=value.z;dst[I+3u]=value.w;
+    if constexpr (I+4u<COUNT) quantize_first_into<I+4u,COUNT,TW,TH>(src,dst,weights,p,group);
+}
+
 template <uint I, uint TW, uint TH, class Result>
 __attribute__((always_inline)) inline void store_scalar(thread Result &result, device uchar *scratch,
     device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
@@ -482,7 +496,7 @@ __attribute__((always_inline)) inline bool cnb(device uchar *scratch, device uch
             if (!matching_layout<T / 2u, true, TW>(result, expansion_input)) return false;
             convolution.set_offsets(int2(group * uint2(TW,TH)));
             convolution.run(input, weight, result);
-            quantize_into<0, T / 2u, false>(result, expansion_input, weights, p.biases[0], p.q[0]);
+            quantize_first_into<0,T / 2u,TW,TH>(result,expansion_input,weights,p,group);
         }
         auto weight = tensor<device int8_t, extents<int,32,16>, tensor_inline>(
             (device int8_t *)(weights + p.weights[1]), extents<int,32,16>());

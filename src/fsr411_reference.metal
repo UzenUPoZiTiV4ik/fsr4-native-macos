@@ -43,7 +43,7 @@ inline int conv3x3(device const uchar *scratch, device const uchar *weights,
             acc += activation * coefficient;
         }
     }
-    return fsr411::finish(acc, bias(weights, p.biases[0], oc), 0, p.q[0]);
+    return fsr411::finish(acc, bias(weights, fsr411::first_tap_bias_offset(p,pos.x,pos.y), oc), 0, p.q[0]);
 }
 
 inline void fnb_block(device const uchar *scratch, device const uchar *weights,

@@ -272,11 +272,16 @@ __attribute__((always_inline)) inline void block(device uchar *scratch, device c
             const WinogradFragments v = winograd3x3<BC, WW>(tile, wg + size_t(p.weights[0]) * 2u + b * 4096u, b, sx, sy, lo);
 #pragma unroll
             for (uint n = 0; n < 2u; ++n) {
-                const int2 bias = load_bias2(weights, p.biases[0], b * 16u + n * 8u + lo.x);
-                a1[0][2u*b+n] = requant_values(n == 0u ? v.p00.xy : v.p00.zw, bias, p.q[0]);
-                a1[1][2u*b+n] = requant_values(n == 0u ? v.p01.xy : v.p01.zw, bias, p.q[0]);
-                a1[2][2u*b+n] = requant_values(n == 0u ? v.p10.xy : v.p10.zw, bias, p.q[0]);
-                a1[3][2u*b+n] = requant_values(n == 0u ? v.p11.xy : v.p11.zw, bias, p.q[0]);
+                const uint ch = b * 16u + n * 8u + lo.x;
+                const uint px = uint(x0) + sx + 2u * lo.y;
+                const int2 b00 = load_bias2(weights, fsr411::first_tap_bias_offset(p,px,y),ch);
+                const int2 b01 = load_bias2(weights, fsr411::first_tap_bias_offset(p,px+1u,y),ch);
+                const int2 b10 = load_bias2(weights, fsr411::first_tap_bias_offset(p,px,y+1u),ch);
+                const int2 b11 = load_bias2(weights, fsr411::first_tap_bias_offset(p,px+1u,y+1u),ch);
+                a1[0][2u*b+n] = requant_values(n == 0u ? v.p00.xy : v.p00.zw, b00, p.q[0]);
+                a1[1][2u*b+n] = requant_values(n == 0u ? v.p01.xy : v.p01.zw, b01, p.q[0]);
+                a1[2][2u*b+n] = requant_values(n == 0u ? v.p10.xy : v.p10.zw, b10, p.q[0]);
+                a1[3][2u*b+n] = requant_values(n == 0u ? v.p11.xy : v.p11.zw, b11, p.q[0]);
             }
         } else {
             fmat acc[MB][2];
@@ -302,9 +307,13 @@ __attribute__((always_inline)) inline void block(device uchar *scratch, device c
             }
 #pragma unroll
             for (uint n = 0; n < 2u; ++n) {
-                const int2 bias = load_bias2(weights, p.biases[0], b * 16u + n * 8u + lo.x);
+                const uint ch = b * 16u + n * 8u + lo.x;
 #pragma unroll
-                for (uint m = 0; m < MB; ++m) a1[m][2u * b + n] = requant(acc[m][n], bias, p.q[0]);
+                for (uint m = 0; m < MB; ++m) {
+                    const uint px = uint(x0) + m * 8u + lo.y;
+                    const int2 bias = load_bias2(weights, fsr411::first_tap_bias_offset(p,px,y),ch);
+                    a1[m][2u * b + n] = requant(acc[m][n], bias, p.q[0]);
+                }
             }
         }
     }

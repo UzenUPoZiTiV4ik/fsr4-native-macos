@@ -3,7 +3,9 @@
 
 The zip holds what crossover_fsr4.py install needs (hook, live bridge, panel,
 FSR 4.1.1 sources, FSR 4.1.2 Lite data, shader tools) plus INSTALL.md.
-FSR 4.0.2 weights, Windows DLLs, test recordings and local caches are left out.
+FSR 4.0.2 weights, optional GPL-derived Lite Lossy weights, Windows DLLs,
+test recordings and local caches are left out. Lite Lossy is an explicit
+external fetch; the portable receipt documents its required input paths.
 
   python3 tools/crossover/package_release.py v1.0 [--rev HEAD] [--out dist/release]
 """
@@ -20,6 +22,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 EXCLUDE_PREFIXES = (
     "third_party/fsr4/internal/shaders/fsr4_model_v07_i8_",  # FSR 4.0.2 weights
+    "build/fsr412_lossy/",  # GPL-derived initializer stays an explicit external fetch
+    "build/fsr412_upstream/",  # translated original shaders/data stay external
     "tests/", "tools/bench/", "tools/installer/", "tools/fsr411/test_", "docs/benchmarks/",
     "docs/FSR402_", "docs/GUIDE_FSR402", "docs/HARDWARE_FSR402", "patches/",
     "build_shaders.sh", "TESTDATA.md", "VERIFICATION.md", ".gitignore",
@@ -28,6 +32,15 @@ EXCLUDE_PREFIXES = (
 
 def included(path: str) -> bool:
     return not path.startswith(EXCLUDE_PREFIXES)
+
+
+def optional_profile_metadata():
+    # Reference paths only. Do not distribute the external initializer or
+    # turn an ordinary Lite release into an implicit GPL-weight install.
+    required = ["build/fsr412_lossy/initializers-lite-lossy.bin", "build/fsr412_lossy/import.json"]
+    return {profile: {"required_inputs": list(required), "weights_included": False,
+                      "fetch_command": "make lite-lossy-weights", "experimental": tiled}
+            for profile, tiled in (("int8-lite-lossy", False), ("int8-lite-lossy-tiled", True))}
 
 
 def model_payload(root=ROOT):
@@ -60,7 +73,8 @@ def model_payload(root=ROOT):
     # contains only paths relative to the portable payload.
     portable={"schema":"fsr412_lite_release_v1","model":"FSR 4.1.2 INT8 Lite",
               "provider_sha256":receipt["source_sha256"],"initializers":expected,
-              "shader_count":len(receipt["shaders"]),"provenance":"Static import; the Windows provider is not bundled or executed."}
+              "shader_count":len(receipt["shaders"]),"provenance":"Static import; the Windows provider is not bundled or executed.",
+              "optional_profiles":optional_profile_metadata()}
     files.append(("build/fsr412_model/import.json",(json.dumps(portable,indent=2)+"\n").encode(),0o644))
     return files
 

@@ -15,11 +15,21 @@ SOURCES = sorted(str(p) for p in (ROOT / "tools/installer/Sources").glob("*.swif
 TABLE = ROOT / "tools/installer/Resources/ru.lproj/Localizable.strings"
 SPECIFIER = re.compile(r"%(?:\d+\$)?(?:lld|ld|d|@|f)")
 
+# Xcode's Swift 6.4 driver does not always add the platform macro plugins to
+# the default search path (macOS 27 SDK), so @State/@Bindable fail to expand.
+# Point swiftc at the installed platform plugins when they are present.
+def _macro_plugin_args() -> list:
+    xcode = Path(subprocess.check_output(["xcode-select", "-p"], text=True).strip())
+    plugins = xcode / "Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins"
+    return ["-plugin-path", str(plugins)] if plugins.is_dir() else []
+
+
 
 def source_keys() -> set:
     with tempfile.TemporaryDirectory() as out:
         subprocess.check_call(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "6",
                                "-target", "arm64-apple-macos26.0", "-module-name", "FSR4Installer",
+                               *_macro_plugin_args(),
                                "-emit-localized-strings", "-emit-localized-strings-path", out,
                                "-c", *SOURCES], cwd=out)
         keys = set()

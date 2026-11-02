@@ -2,22 +2,32 @@
 // Model-specific loader within fsr411::Runtime. Resource lifetime, input
 // conversion and Metal 3/4 synchronization use the common runtime.
 Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &o,Kernels kind,std::string &error) {
-    if(o.profile!=Profile::Int8Lite) {error="FSR 4.1.2 requires the int8-lite profile";return nullptr;}
+    if(o.originalLossy) return ensure_original_session(tier,p,o,kind,error);
+    const bool lossy=o.profile==Profile::Int8LiteLossy;
+    if(o.temporalQuality) {error="Lite does not support legacy temporal quality";return nullptr;}
+    if(o.profile!=Profile::Int8Lite && !lossy) {error="FSR 4.1.2 requires a Lite profile";return nullptr;}
     const bool portable=kind!=Kernels::Reference;
+    if(lossy && !portable) {error="Lite Lossy requires auto, native, scalar or SIMD, not the AMD reference backend";return nullptr;}
+    if(o.neuralTileSize && (!lossy || !fsr412_tiling::valid_size(o.neuralTileSize))) {
+        error="neural tile size is only valid for Lite Lossy (128..2048, power of two)";return nullptr;
+    }
     const std::string key="fsr412_"+std::to_string(tier)+"_di"+std::to_string(p.depthReversed)
         +"_lm"+std::to_string(p.lowResMV)+"_jm"+std::to_string(p.jitteredMV)+"_cs"+std::to_string(o.colorspace)
         +"_ae"+std::to_string(p.autoExposure)+"_o"+std::to_string(o.optimize)
         +"_up"+std::to_string(o.ultraPerformance)+"_pc"+std::to_string(portable)
+        +(lossy?"_lossy2":"")+(o.neuralTileSize?"_nt"+std::to_string(o.neuralTileSize):"")
         +(o.optimize && portable && o.colorspace==0?"_v3":"")+(o.pixelFix?"_px2":"");
     const std::string cacheKey=key+"_"+kernels_label(kind);
     auto existing=sessions_.find(cacheKey);if(existing!=sessions_.end())return existing->second.get();
+    if(lossy && !run(@[@"python3",ns(root_+"/tools/fsr412/model_data.py"),@"--verify",@"--root",ns(root_)],error)) return nullptr;
     if(o.allowCompile && !run(@[@"python3",ns(root_+"/tools/fsr412/compile_fsr412.py"),@"--root",ns(root_),
         @"--builddir",ns(buildDir_),@"--outdir",ns(buildDir_+"/"+key),@"--res",ns(std::to_string(tier)),
         @"--depth-inverted",ns(std::to_string(p.depthReversed)),@"--low-res-mv",ns(std::to_string(p.lowResMV)),
         @"--jittered-mv",ns(std::to_string(p.jitteredMV)),@"--colorspace",ns(std::to_string(o.colorspace)),
         @"--auto-exposure",ns(std::to_string(p.autoExposure)),@"--optimize",ns(std::to_string(o.optimize)),
         @"--ultra-performance",o.ultraPerformance?@"1":@"0",@"--external-post-cnb",portable?@"1":@"0",
-        @"--pixelization-fix",o.pixelFix?@"1":@"0"],error))return nullptr;
+        @"--pixelization-fix",o.pixelFix?@"1":@"0",
+        @"--lossy",lossy?@"1":@"0",@"--neural-tile-size",ns(std::to_string(o.neuralTileSize))],error))return nullptr;
     auto manifest=json(buildDir_+"/"+key+"/bindings.json",error);
     const std::vector<std::string> order={"pre","pad0","pass1","pad1","pad1b","pass2","pad2","pass3","pad3","post"};
     if(!manifest || ![manifest[@"version"] isEqual:@"4.1.2"] || [manifest[@"order"] count]!=order.size()) {
@@ -26,8 +36,22 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
     for(size_t i=0;i<order.size();++i) if(utf8(manifest[@"order"][i])!=order[i]) {error="FSR 4.1.2 graph order mismatch";return nullptr;}
     if([manifest[@"external_post_cnb"] boolValue]!=portable) {error="FSR 4.1.2 POST cache ABI mismatch";return nullptr;}
     if([manifest[@"pixelization_fix"] boolValue]!=o.pixelFix) {error="FSR 4.1.2 pixelization-fix variant mismatch";return nullptr;}
+    if([manifest[@"lossy"] boolValue]!=lossy || [manifest[@"neural_tile_size"] unsignedIntValue]!=o.neuralTileSize) {
+        error="Lite temporal/tiling shader cache mismatch";return nullptr;
+    }
+    if(lossy && tier<=2160 && !o.ultraPerformance && [manifest[@"post_ct_bias_revision"] unsignedIntValue]!=1u) {
+        error="Lite POST revision mismatch; rebuild the shader cache";return nullptr;
+    }
     auto s=std::make_unique<Session>();s->key=cacheKey;s->tier=tier;s->modelLite=true;
-    s->profile=Profile::Int8Lite;s->ultraPerformance=o.ultraPerformance;s->externalPostCnb=portable;
+    s->profile=o.profile;s->ultraPerformance=o.ultraPerformance;s->externalPostCnb=portable;
+    s->retrainedWeights=[manifest[@"trained"] boolValue];
+    s->neuralTileSize=o.neuralTileSize;
+    s->liteCacheBytesPerPixel=[manifest[@"lossy_cache_bytes_per_pixel"] unsignedIntValue];
+    if((lossy && tier<=2160 && s->liteCacheBytesPerPixel!=32u) ||
+       ((!lossy || tier>2160) && s->liteCacheBytesPerPixel)) {
+        error="Lite Lossy raw parameter cache ABI mismatch";return nullptr;
+    }
+    if(lossy && tier<=2160 && !manifest[@"kernels"][@"pre_reuse"]) {error="missing Lite Lossy reused-frame PRE";return nullptr;}
     s->splitAutoExposure=true;s->order=order;
     s->preparedColor=[manifest[@"prepared_color"] boolValue];
     if(s->preparedColor!=(o.optimize && portable && o.colorspace==0)) {error="FSR 4.1.2 input color cache ABI mismatch";return nullptr;}
@@ -46,6 +70,18 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
     if(![initializer isKindOfClass:NSString.class] || !initializer.isAbsolutePath) {error="missing FSR 4.1.2 initializer provenance";return nullptr;}
     NSData *init=[NSData dataWithContentsOfFile:initializer];
     if(init.length!=27392) {error="FSR 4.1.2 Lite initializer must be 27392 bytes";return nullptr;}
+    const std::string initializerHash=sha256_bytes(init.bytes,init.length);
+    NSString *expectedHash=ns(o.ultraPerformance?"4c57292d9963e82dec86134060eef0c2b66214cd1a31a9e9bc73739b5fe2d1d7"
+        :"4b9898da719dc2dca5dc45fd71dec5f80bdb9886a580fe3038af59efe637d55e");
+    if(lossy && !o.ultraPerformance && tier<=2160) {
+        auto receipt=json(root_+"/build/fsr412_lossy/import.json",error);
+        if(!receipt) return nullptr;
+        expectedHash=receipt[@"initializers"][@"initializers-lite-lossy.bin"];
+    }
+    if(![expectedHash isKindOfClass:NSString.class] || ![expectedHash isEqual:ns(initializerHash)] ||
+       (manifest[@"initializer_sha256"] && ![manifest[@"initializer_sha256"] isEqual:ns(initializerHash)])) {
+        error="Lite initializer identity mismatch; reimport/rebuild this profile";return nullptr;
+    }
     s->initializer=[device_ newBufferWithBytes:init.bytes length:init.length options:MTLResourceStorageModeShared];
     if(!s->initializer) {error="cannot allocate FSR 4.1.2 initializer";return nullptr;}
     if(portable) {
@@ -84,8 +120,11 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
     }
     for(const auto &name:order)if(!s->kernels.count(name)) {error="incomplete FSR 4.1.2 graph: "+name;return nullptr;}
     if(NSDictionary *tile=entries[@"post_tile"]) {
+        // The tiled POST reads every colour tap through one threadgroup tile.
+        // Lite Lossy POST carries the trained CT/conditional biases, so its
+        // shared-cache build stays untiled and the tile is not used there.
         const unsigned side=[tile[@"tile_side"] unsignedIntValue];
-        if(!s->preparedColor || side<8 || side>40) {error="invalid FSR 4.1.2 tiled POST";return nullptr;}
+        if(!s->preparedColor || lossy || side<8 || side>40) {error="invalid FSR 4.1.2 tiled POST";return nullptr;}
         s->postTileSide=side;
     }
     for(const char *name:{"ae","ae_finalize","rcas"})if(!s->kernels.count(name)) {error="missing FSR 4.1.2 exposure/sharpening stage";return nullptr;}

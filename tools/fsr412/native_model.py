@@ -9,10 +9,11 @@ and SPIR-V. CNB+downsample is split into two dispatches while preserving the
 three-stage Lite graph. Native output parity is checked separately on GPU.
 """
 from __future__ import annotations
-import argparse, fcntl, hashlib, json, os, struct, tempfile
+import argparse, fcntl, hashlib, json, os, struct, tempfile, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(ROOT/"tools"))
 COMMON_SHA = "4b9898da719dc2dca5dc45fd71dec5f80bdb9886a580fe3038af59efe637d55e"
 ULTRA_SHA = "4c57292d9963e82dec86134060eef0c2b66214cd1a31a9e9bc73739b5fe2d1d7"
 NONE=0xffffffff
@@ -29,8 +30,13 @@ def atomic(path,data):
     finally:
         if Path(tmp).exists():Path(tmp).unlink()
 
-def model(tier, preset, initializer):
+def model(tier, preset, initializer, profile="int8-lite"):
+    if profile not in ("int8-lite","int8-lite-lossy"):
+        raise ValueError("unknown Lite native profile")
     expected=ULTRA_SHA if preset=='ultraperformance' else COMMON_SHA
+    if profile=="int8-lite-lossy" and preset=="normal" and tier<=2160:
+        from fsr412.lossy_weights import LOSSY_INITIALIZER_SHA256
+        expected=LOSSY_INITIALIZER_SHA256
     if len(initializer)!=27392 or digest(initializer)!=expected:
         raise ValueError('FSR 4.1.2 Lite initializer identity mismatch')
     ultra=preset=='ultraperformance'
@@ -86,6 +92,13 @@ def model(tier, preset, initializer):
     post=cnb('AMD Lite POST CNB',[23040,25472,26112],[25344,25984,26624],
         [7,8] if ultra else [8,8],[0,6,7,0] if ultra else [0,5,6,0],tensor(0,2*plane,16),
         [0,16,w*16,w,h,16,0],5,5)
+    if profile=="int8-lite-lossy" and not ultra and tier<=2160:
+        base=(ROOT/"build/fsr412_model/initializers-lite.bin").read_bytes()
+        if len(base)!=27392 or digest(base)!=COMMON_SHA:
+            raise ValueError("missing pinned AMD initializer for conditional POST biases")
+        post["bias_values"].append(list(struct.unpack_from("<16i",base,25344)))
+        post["q"][0][3] |= 8
+        post["first_tap_bias_policy"]="AMD bias when first 3x3 tap is outside input; trained bias otherwise"
     post.update(before_stage=9,output_offset_base='scratch_append',scratch_append_alignment=256,scratch_append_bytes=w*h*16)
     return {1:p1,4:p4,2:p2,3:p3},post
 
@@ -121,8 +134,8 @@ def winograd(p,conv):
     if worst>=1<<24:return None
     return values,worst
 
-def pack(tier,preset,initializer,out):
-    passes,post=model(tier,preset,initializer);blob=bytearray();params=bytearray()
+def pack(tier,preset,initializer,out,profile="int8-lite"):
+    passes,post=model(tier,preset,initializer,profile);blob=bytearray();params=bytearray()
     def append(data):
         blob.extend(bytes((-len(blob))%64));off=len(blob);blob.extend(data);return off
     def emit(p):
@@ -140,7 +153,9 @@ def pack(tier,preset,initializer,out):
             'simd':{'function':'fsr411_simd_'+(kind if kind=='cnb' else kind+str(nf)),'tile':tile,'threads':128,
                     'float_accumulator_bound':bound},
             'source_sha256':digest(initializer),'accumulator_bounds':[],
-            'coefficient_provenance':'verified AMD FSR4.1.2 Lite initializer, no 4.1.1 coefficients'}
+            'coefficient_provenance':('pinned upstream Lite Lossy trained data with conditional original border biases'
+                if profile=='int8-lite-lossy' and preset=='normal' and tier<=2160
+                else 'verified AMD FSR4.1.2 Lite initializer, no 4.1.1 coefficients')}
         if transformed:
             values,worst=transformed
             e['simd']['winograd']={'function':{'cnb':'fsr411_simd_wcnb','fnb':'fsr411_simd_wfnb32','ct':'fsr411_simd_wct32'}[kind],
@@ -149,7 +164,9 @@ def pack(tier,preset,initializer,out):
         return e
     entries={str(k):emit(v) for k,v in passes.items()};pe=emit(post)
     m={'schema':'fsr411_native_v1','abi_version':1,'parameter_size':212,'parameter_stride':256,
-       'tier':tier,'model':preset,'fsr_version':'4.1.2','profile':'int8-lite','passes':entries,'auxiliary_passes':{'post_cnb':pe},
+       'tier':tier,'model':preset,'fsr_version':'4.1.2','profile':profile,'lite_native_revision':2,'passes':entries,'auxiliary_passes':{'post_cnb':pe},
+       'trained':profile=='int8-lite-lossy' and preset=='normal' and tier<=2160,
+       'adaptation':'original conditional POST first-tap biases and trained normal tables' if profile=='int8-lite-lossy' else 'AMD Lite',
        'initializer_sha256':digest(initializer),'initializer_bytes':len(initializer),
        'kernel_source':'src/fsr411_mpp.metal','header_source':'src/fsr411_model.h',
        'weights_bytes':len(blob),'weights_sha256':digest(blob),'params_bytes':len(params),'params_sha256':digest(params)}
@@ -164,7 +181,14 @@ def main():
     ap=argparse.ArgumentParser();ap.add_argument('--tier',type=int,choices=(1080,2160,4320),default=1080)
     ap.add_argument('--preset',choices=('normal','ultraperformance'),default='normal');ap.add_argument('--outdir',type=Path,required=True)
     ap.add_argument('--initializer',type=Path)
-    a=ap.parse_args();init=a.initializer or ROOT/'build/fsr412_model'/('initializers-lite-ultraperformance.bin' if a.preset=='ultraperformance' else 'initializers-lite.bin')
-    m=pack(a.tier,a.preset,init.read_bytes(),a.outdir.resolve())
+    ap.add_argument('--root',type=Path,default=ROOT)
+    ap.add_argument('--profile',choices=('int8-lite','int8-lite-lossy'),default='int8-lite')
+    a=ap.parse_args()
+    if a.initializer:
+        data=a.initializer.read_bytes()
+    else:
+        from fsr412.model_data import initializer_for
+        init,data,trained=initializer_for(a.root,a.tier,a.preset,a.profile)
+    m=pack(a.tier,a.preset,data,a.outdir.resolve(),a.profile)
     print(json.dumps({'model':'FSR4.1.2 INT8 Lite','outdir':str(a.outdir),'weights_bytes':m['weights_bytes'],'params_bytes':m['params_bytes']}))
 if __name__=='__main__':main()

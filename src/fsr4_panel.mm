@@ -83,7 +83,8 @@ void fsr4_panel_publish(void) {
             (unsigned long long)st.encodes, (unsigned long long)st.replaced, (unsigned long long)st.stubs,
             st.sharpness, version,
             profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
-                         : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : profile == 6 ? "int8-lite-pixfix" : "exact");
+                         : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : profile == 6 ? "int8-lite-pixfix"
+                         : profile == 7 ? "int8-lite-lossy" : profile == 8 ? "int8-lite-lossy-tiled" : "exact");
     fclose(f);
     rename(tmp.c_str(), path.c_str());
 }

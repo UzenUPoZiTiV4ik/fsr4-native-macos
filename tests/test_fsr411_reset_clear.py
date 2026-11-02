@@ -82,14 +82,18 @@ class ResetClearTests(unittest.TestCase):
     def test_reset_keeps_exposure_init_and_nonreset_reallocation_clears(self):
         runtime=(ROOT/"src/fsr411_runtime.h").read_text()
         outer=block(runtime,"if (view.zeroTargets || p.reset)")
-        conditional=block(outer,"if (!p.reset)")
+        conditional=block(outer,"if (!p.reset && !session->originalLossy)")
         for name in ("clearHistory","clearReprojected","clearRecurrent"):
             self.assertEqual(conditional.count('"'+name+'"'),1)
             self.assertEqual(outer.count('"'+name+'"'),1)
         self.assertNotIn("initExposure",conditional)
         self.assertEqual(outer.count('"initExposure"'),1)
         self.assertIn('if (view.zeroScratch) clear_buffer(enc, m4, *slot, "clearScratch", view.scratch, 8192);',runtime)
-        self.assertIn('if (skip) clear_buffer(enc,m4,*slot,"clearLossyPlane",view.lossyPlane,10240);',runtime)
+        self.assertIn('if (skip && !session->originalLossy) clear_buffer(enc,m4,*slot,"clearLossyPlane",view.lossyPlane,10240);',runtime)
+        # Opt-in original graph zeros only new targets (reset or not), like the oracle.
+        original=block(runtime,"if (session->originalLossy && view.zeroTargets)")
+        for name in ("originalClearHistory","originalClearReprojected","originalClearRecurrent","clearHistoryNext","clearRecurrentNext"):
+            self.assertEqual(original.count('"'+name+'"'),1)
 
 
 if __name__=="__main__":unittest.main()

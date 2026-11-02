@@ -374,7 +374,8 @@ void usage() {
         "Use an ordinary --bench run for fused production timing; stage counters add overhead.\n"
         "FSR 4.1.1 and the lossy profile are the defaults; use --profile exact for exact-reference validation.\n"
         "exact-fast keeps Exact's network but uses approximate division and exp/log in PRE/POST.\n"
-        "lossy2 is lossy with six trained layers (upstream dll-2026-10-19); it needs the fetched weights.\n"
+        "lossy2 has six retrained layers (upstream dll-2026-10-29); it needs the fetched weights.\n"
+        "--temporal-quality 0|1|2: off, conservative repairs, or fast Wave32 notes.\n"
         "Use --fsr-version 4.0.2 to select the legacy model and its FP16 backend.\n"
         "GPU timings cover the full frame command buffer; diagnostic copies are labelled separately.\n");
 }
@@ -389,6 +390,10 @@ int fsr411_main(int argc, char **argv) {
         if(const char *opt=std::getenv("FSR4_OPTIMIZE"); opt && *opt) {
             if(std::strcmp(opt,"0") && std::strcmp(opt,"1")) fail("FSR4_OPTIMIZE must be 0 or 1");
             options.optimize=opt[0]=='1';
+        }
+        if(const char *quality=std::getenv("FSR4_TEMPORAL_QUALITY");quality && *quality) {
+            if(std::strcmp(quality,"0") && std::strcmp(quality,"1") && std::strcmp(quality,"2")) fail("FSR4_TEMPORAL_QUALITY must be 0, 1 or 2");
+            options.temporalQuality=quality[0]-'0';
         }
         std::string root = default_root(), buildDir = "build";
         std::vector<std::string> positional;
@@ -411,6 +416,11 @@ int fsr411_main(int argc, char **argv) {
             else if(arg=="--profile") profile=value();
             else if(arg=="--no-compile") options.allowCompile=false;
             else if(arg=="--profile-stages") profileStages=true;
+            else if(arg=="--temporal-quality") {
+                const char *quality=value();
+                if(std::strcmp(quality,"0") && std::strcmp(quality,"1") && std::strcmp(quality,"2")) fail("--temporal-quality must be 0, 1 or 2");
+                options.temporalQuality=quality[0]-'0';
+            }
             else if(arg=="--optimize") {
                 const char *opt=value();
                 if(std::strcmp(opt,"0") && std::strcmp(opt,"1")) fail("--optimize must be 0 or 1");
@@ -451,6 +461,8 @@ int fsr411_main(int argc, char **argv) {
             fail("diagnostic snapshots change GPU work; use --bench separately from dumps");
         if(!fsr411::parse_profile(profile,options.profile))
             fail("--profile / FSR4_PROFILE must be exact, exact-fast, lossy or lossy2");
+        if(options.temporalQuality && !fsr411::profile_is_lossy(options.profile))
+            fail("--temporal-quality is only available for Lossy/lossy2");
         id<MTLDevice> device=MTLCreateSystemDefaultDevice();
         if(!device) fail("no Metal device");
         if(info) { if(!positional.empty()) fail("--backend-info takes no testcase paths");
@@ -608,7 +620,7 @@ int fsr411_main(int argc, char **argv) {
             @"profile":ns(profile),
             @"backend":ns(actualBackend),@"variant":ns(variant),@"testcase":ns(inputDir),
             @"preset":ns(preset),@"colorspace":ns(colorspace),@"benchmark_iterations":@(bench),
-            @"optimize":@(options.optimize),@"requested_tier":@(options.tier),
+            @"optimize":@(options.optimize),@"temporal_quality":@(options.temporalQuality),@"requested_tier":@(options.tier),
             @"warmup_sequences":@(bench?1:0),@"timing_scope":@"full frame command buffer",
             @"measured_frames":@(times.size()),@"neural_runs":@(neuralRuns),@"reused_frames":@(reusedFrames),
             @"capture_stages":stages,@"diagnostic_gpu_copies":@(!options.captureStages.empty()),

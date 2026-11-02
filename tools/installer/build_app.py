@@ -100,6 +100,13 @@ def info_plist(version: str) -> str:
 """
 
 
+def macro_plugin_args() -> list:
+    """Xcode's Swift 6.4 driver may omit the platform macro plugins (@State)."""
+    xcode = Path(subprocess.check_output(["xcode-select", "-p"], text=True).strip())
+    plugins = xcode / "Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins"
+    return ["-plugin-path", str(plugins)] if plugins.is_dir() else []
+
+
 def build_app(version: str, rev: str, out: Path) -> Path:
     app = out / f"{APP_NAME}.app"
     if app.exists():
@@ -109,7 +116,7 @@ def build_app(version: str, rev: str, out: Path) -> Path:
     macos.mkdir(parents=True)
     resources.mkdir(parents=True)
     run(["xcrun", "swiftc", "-O", "-parse-as-library", "-swift-version", "6",
-         "-target", f"arm64-apple-macos{MIN_MACOS}", *SOURCES, "-o", macos / APP_NAME])
+         *macro_plugin_args(), "-target", f"arm64-apple-macos{MIN_MACOS}", *SOURCES, "-o", macos / APP_NAME])
     (app / "Contents" / "Info.plist").write_text(info_plist(version))
     for lproj in sorted(HERE.glob("Resources/*.lproj")):
         shutil.copytree(lproj, resources / lproj.name)

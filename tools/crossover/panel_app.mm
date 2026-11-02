@@ -9,6 +9,7 @@
 //   FSR4 Panel [--root <repo>] [--snapshot <png>] [--make-icon <dir>]
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
+#include <CommonCrypto/CommonDigest.h>
 #include <sys/stat.h>
 #include <string>
 #include <map>
@@ -44,7 +45,7 @@ static std::map<std::string, std::string> read_kv(const std::string &path) {
     return kv;
 }
 
-// Values 0-4 retain the legacy modes; 5 is AMD FSR 4.1.2 INT8 Lite.
+// IDs 0-6 retain the existing modes; 7/8 are FSR 4.1.2 Lite Lossy.
 static int profile_from_name(const std::string &name, int fallback) {
     if (name == "exact" || name == "0") return 0;
     if (name == "lossy" || name == "1") return 1;
@@ -52,12 +53,15 @@ static int profile_from_name(const std::string &name, int fallback) {
     if (name == "lossy2" || name == "4") return 4;
     if (name == "int8-lite" || name == "lite" || name == "5") return 5;
     if (name == "int8-lite-pixfix" || name == "lite-pixfix" || name == "int8-lite-hair" || name == "lite-hair" || name == "6") return 6;
+    if (name == "int8-lite-lossy" || name == "lite-lossy" || name == "7") return 7;
+    if (name == "int8-lite-lossy-tiled" || name == "lite-lossy-tiled" || name == "8") return 8;
     if (name == "fsr4" || name == "3") return 3;
     return fallback;
 }
 static const char *profile_label(int profile) {
     return profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
-         : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : profile == 6 ? "int8-lite-pixfix" : "exact";
+         : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : profile == 6 ? "int8-lite-pixfix"
+         : profile == 7 ? "int8-lite-lossy" : profile == 8 ? "int8-lite-lossy-tiled" : "exact";
 }
 // The old Lite (profile 1) is retired from the panel. Keep its saved ID
 // readable for compatibility; Lite 2 (profile 4) is now displayed as Lossy.
@@ -66,7 +70,36 @@ static const char *profile_label(int profile) {
 // it as the Lite segment plus the "Pixelization fix" checkbox.
 // FSR 4 is offered only when the 4.0.2 weights are present (the 4.1-only
 // release omits them).
-static bool g_has402 = true, g_has_lossy2 = false;
+// Lossy profiles are offered only with both pinned inputs, never by an
+// environment override or a fallback to the ordinary Lite initializer.
+static bool g_has402 = true, g_has_lossy2 = false, g_has_lite_lossy = false;
+static const char *kLiteLossyInitializerSha256 = "c77c2d1a4d119ed76d94b8c23335490cc38280db3346c72396a1e1acb0523cfc";
+static bool has_lite_lossy(const char *expectedHash = kLiteLossyInitializerSha256) {
+    struct stat st = {};
+    for (const char *name : {"initializers-lite-lossy.bin", "import.json"}) {
+        const std::string path = g_root + "/build/fsr412_lossy/" + name;
+        if (stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) return false;
+    }
+    const std::string base = g_root + "/build/fsr412_lossy/";
+    NSData *receiptData = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:(base + "import.json").c_str()]];
+    if (!receiptData) return false;
+    id receipt = [NSJSONSerialization JSONObjectWithData:receiptData options:0 error:nil];
+    if (![receipt isKindOfClass:NSDictionary.class]
+        || ![receipt[@"schema"] isEqual:@"fsr412_lite_lossy_import_v1"]
+        || ![receipt[@"source_dll_sha256"] isEqual:@"d9b0a1f5781c2d633a327272f6f1c8607057df7cafd0233cf38c7395c8f7dbc5"]) return false;
+    id initializers = receipt[@"initializers"];
+    if (![initializers isKindOfClass:NSDictionary.class]) return false;
+    id expected = initializers[@"initializers-lite-lossy.bin"];
+    if (![expected isKindOfClass:NSString.class] || [expected length] != CC_SHA256_DIGEST_LENGTH * 2) return false;
+    NSData *weights = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:(base + "initializers-lite-lossy.bin").c_str()]];
+    if (!weights.length || weights.length > UINT32_MAX) return false;
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(weights.bytes, (CC_LONG)weights.length, digest);
+    NSMutableString *actual = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+    for (unsigned char byte : digest) [actual appendFormat:@"%02x", byte];
+    return [actual isEqualToString:expected] && expectedHash
+        && [actual isEqualToString:[NSString stringWithUTF8String:expectedHash]];
+}
 static bool has_fsr402() {
     struct stat st = {};
     return stat((g_root + "/third_party/fsr4/internal/shaders/fsr4_model_v07_i8_quality/initializers.bin").c_str(), &st) == 0;
@@ -83,14 +116,15 @@ static int panel_modes(int *modes) {
     if (g_has402) modes[count++] = 3;
     modes[count++] = 2;
     if (g_has_lossy2) modes[count++] = 4;
+    if (g_has_lite_lossy) { modes[count++] = 7; modes[count++] = 8; }
     return count;
 }
 static int segment_profile(NSInteger segment) {
-    int modes[5], count = panel_modes(modes);
+    int modes[8], count = panel_modes(modes);
     return segment >= 0 && segment < count ? modes[segment] : 5;
 }
 static NSInteger segment_for_profile(int profile) {
-    int modes[5], count = panel_modes(modes);
+    int modes[8], count = panel_modes(modes);
     if (profile == 6) profile = 5;
     for (int i = 0; i < count; ++i) if (modes[i] == profile) return i;
     return -1;
@@ -216,17 +250,21 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     [v addSubview:label(@"Mode", 12, y, 50, NO)];
     g_has402 = has_fsr402();
     g_has_lossy2 = has_lossy2();
-    NSMutableArray *modes = [NSMutableArray arrayWithCapacity:5];
+    g_has_lite_lossy = has_lite_lossy();
+    NSMutableArray *modes = [NSMutableArray arrayWithCapacity:6];
     [modes addObject:@"FSR 4.1.2 Lite"];
     if (g_has402) [modes addObject:@"FSR 4"];
     [modes addObject:@"FSR 4.1.2 Exact"];
     if (g_has_lossy2) [modes addObject:@"FSR 4.1.2 Lossy"];
+    if (g_has_lite_lossy) { [modes addObject:@"Lite Lossy"]; [modes addObject:@"Lossy tiled"]; }
     self.profile = [NSSegmentedControl segmentedControlWithLabels:modes
         trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(changed:)];
     self.profile.frame = NSMakeRect(62, y - 4, W - 74, 26);
     self.profile.selectedSegment = segment_for_profile(profile);
     self.profile.toolTip = [NSString stringWithFormat:@"FSR 4.1.2 Lite: AMD's smaller INT8 architecture, evaluated every frame. "
                            @"%@FSR 4.1.2 Exact: the full network every frame, fast PRE/POST math. "
+                           @"Lite Lossy: trained INT8 weights. Lossy tiled: experimental half tiles. "
+                           @"These require build/fsr412_lossy/initializers-lite-lossy.bin and import.json; run make lite-lossy-weights. "
                            @"%@Switching resets history.",
                            g_has402 ? @"FSR 4: the previous 4.0.2 model. " : @"",
                            g_has_lossy2 ? @"FSR 4.1.2 Lossy: the full network with six retrained layers, run on every other frame. " : @""];
@@ -291,6 +329,10 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
 }
 
 - (void)changed:(id)sender {
+    // No selected segment means the saved mode is unavailable right now
+    // (for example Lite Lossy without its pinned weights). Keep it instead of
+    // silently rewriting the user's choice to Lite.
+    if (self.profile.selectedSegment < 0) return;
     const bool fix = self.pixelFix.state == NSControlStateValueOn;
     int profile = segment_profile(self.profile.selectedSegment);
     if (profile == 5 && fix) profile = 6;
@@ -380,6 +422,10 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
         self.fixStrength.doubleValue = strength;
     self.profileHint.stringValue = self.settingsError ?: (pinned
         ? @"The bottle pins FSR 4.0.2 (FSR4_VERSION)."
+        : (profile == 7 || profile == 8) && !g_has_lite_lossy
+            ? @"Lite Lossy weights/import.json missing or invalid. Run make lite-lossy-weights; saved mode is unchanged."
+        : profile == 7 ? @"FSR 4.1.2 Lite Lossy: trained INT8 weights, no fallback to ordinary Lite."
+        : profile == 8 ? @"FSR 4.1.2 Lite Lossy Tiled (experimental): half tiles with the trained INT8 weights."
         : profile == 5 ? @"FSR 4.1.2 INT8 Lite: AMD's smaller model, evaluated every frame."
         : profile == 6 ? @"FSR 4.1.2 Lite with pixelization fix: wider filter where history is rejected."
         : profile == 3 ? @"FSR 4: previous model (4.0.2)."

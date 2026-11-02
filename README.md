@@ -14,7 +14,8 @@ sequence, 40% less. Method and limits: [FSR 4.1.2 stability](docs/FSR412_STABILI
 ## Requirements
 
 - Mac with Apple Silicon (fastest on M5; M1–M4 use the `simd` half-matrix backend, not benchmarked on those chips yet, see [hardware](docs/HARDWARE.md))
-- macOS 26+, Xcode 26+ with Metal Toolchain, Python 3
+- macOS 26+, Xcode 26+ with Metal Toolchain, Python 3 (the macOS 27 SDK and
+  Xcode 27 are supported)
 - For games: CrossOver 24 or newer (CrossOver 26 is supported) and Rosetta 2
 
 ## Easiest: the FSR4 Installer app
@@ -66,6 +67,8 @@ The **FSR 4** panel lets you switch modes on the fly:
 | --- | --- | ---: |
 | FSR 4.1.2 Lite | Three-pass AMD INT8 Lite model (default) | 2.70 ms mean* |
 | FSR 4.1.2 Lossy | Six retrained layers, speck clamp on depth edges (`lossy2`) | 2.78 ms mean with reuse* |
+| FSR 4.1.2 Lite Lossy | Retrained Lite with optional inference reuse | [new measurements](docs/FSR412_LOSSY.md) |
+| Lite Lossy Tiled | Experimental half-tile cadence (optional) | Slower in the current M5 tests |
 | FSR 4.1.2 Exact | Full quality, fast math (`exact-fast`) | ~4.3 ms |
 | FSR 4 | Older 4.0.2 model, for comparison | ~4.5 ms |
 
@@ -114,6 +117,22 @@ for `lossy2`, `exact-fast`, `exact` (bit-exact reference) or the retired `lossy`
 `make lossy2-weights` downloads the pinned upstream release once and decodes
 its trained weights into `build/`; they are not distributed with this MIT repository.
 
+## Optional Lite Lossy and temporal repairs
+
+`make lite-lossy-weights` statically imports the pinned upstream Lite Lossy
+weights into `build/` (GPL-trained data, not included in the MIT release).
+Use `--fsr-version 4.1.2 --profile int8-lite-lossy`; the panel also offers it
+once the verified inputs are present. `int8-lite-lossy-tiled` is experimental.
+`--fsr-version 4.1.1 --profile lossy2 --temporal-quality 1` enables fine motion
+and persistent-change repairs; `2` uses optional fast Wave32 notes.
+Defaults are unchanged. [Implementation, tradeoffs, timings and tests](docs/FSR412_LOSSY.md).
+
+`--profile int8-lite-lossy-original` is a different, opt-in route: it runs the
+release's own PRE/BORDER/POST shaders from a verified external bundle
+(`tools/fsr412/compile_original.py`) with exact native INT8 neural stages, and
+matches the original-shader oracle byte for byte. It is slower than the adjusted
+Lite Lossy path and is not a default.
+
 ## Tests
 
 ```sh
@@ -121,12 +140,14 @@ make test                 # includes the installer app tests
 make build-fsr411-tests
 make test-fsr411-gpu
 make test-fsr412-optimization
+make test-fsr412-lossy      # normal/partial, native/scalar/SIMD, Metal 3/4
+make test-fsr412-original   # opt-in original-graph route versus the original-shader oracle
 make test-fsr411-mpp-fast  # GPU-probed M5 kernels and forced fallback
 make test-fsr-pre-m5      # forced SIMD and exact Winograd
 ```
 
-Build the installer app and DMG: `make installer INSTALLER_VERSION=v2.5`
-(or `python3 tools/installer/build_app.py v2.5 --dmg`).
+Build the installer app and DMG: `make installer INSTALLER_VERSION=v2.6`
+(or `python3 tools/installer/build_app.py v2.6 --dmg`).
 
 ## Documentation
 
@@ -135,6 +156,9 @@ Build the installer app and DMG: `make installer INSTALLER_VERSION=v2.5`
 | Performance and validation | [docs/FSR411_PERFORMANCE.md](docs/FSR411_PERFORMANCE.md) |
 | Lite image quality update | [docs/FSR411_QUALITY_UPDATE.md](docs/FSR411_QUALITY_UPDATE.md) |
 | FSR 4.1.2 Lossy (formerly Lite 2) | [docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md) |
+| Lite Lossy, tiled inference and new temporal repairs | [docs/FSR412_LOSSY.md](docs/FSR412_LOSSY.md) |
+| Original-shader oracle, geometry and POST CNB | [docs/FSR412_UPSTREAM_ORACLE.md](docs/FSR412_UPSTREAM_ORACLE.md) |
+| v2.6 release notes | [docs/releases/v2.6.md](docs/releases/v2.6.md) |
 | M5 INT8 register-chain optimization | [docs/FSR_M5_INT8_OPTIMIZATION.md](docs/FSR_M5_INT8_OPTIMIZATION.md) |
 | Pre-M5 SIMD optimization and exact Winograd | [docs/FSR_PRE_M5_OPTIMIZATION.md](docs/FSR_PRE_M5_OPTIMIZATION.md) |
 | Latest memory optimization and timing limits | [docs/FSR411_MEMORY_OPTIMIZATION.md](docs/FSR411_MEMORY_OPTIMIZATION.md) |
@@ -148,6 +172,6 @@ Build the installer app and DMG: `make installer INSTALLER_VERSION=v2.5`
 The Lossy network keeps the numerical policy of the
 [RX 7000 optimization project](https://github.com/zgauthier2000/fsr4-shader-performance-overrides)
 (release `dll-2026-10-07`), implemented independently on MIT sources. Selected
-temporal fixes from releases through `dll-2026-10-14` retain more thin detail
-and update effects without motion vectors. A separate PRE for reused frames
+temporal fixes through October 14, the October 15 dark-band guard and the
+October 29 depth-edge clamp retain thin detail and update effects without motion vectors. A separate PRE for reused frames
 removes unused network-input work; see the quality update for measurements.

@@ -10,3 +10,6 @@ build_prec/
 __pycache__/
 *.pyc
 Scanned_cropped.*
+
+# Stray Swift object files from manual installer builds
+*.o

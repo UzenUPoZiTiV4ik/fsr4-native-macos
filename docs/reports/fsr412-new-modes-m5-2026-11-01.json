@@ -1,0 +1,242 @@
+{
+  "schema": "fsr412_new_modes_m5_v1",
+  "date": "2026-11-01",
+  "device": "Apple M5",
+  "source_dll_execution": false,
+  "default_changed": false,
+  "synthetic": {
+    "render": [
+      864,
+      560
+    ],
+    "output": [
+      1712,
+      1112
+    ],
+    "rounds": 24,
+    "rows": [
+      {
+        "mode": "lite",
+        "mean_ms": 2.513008250389248,
+        "median_ms": 2.2953750449232757,
+        "p99_ms": 3.954624990001321
+      },
+      {
+        "mode": "lite-post-tiles",
+        "mean_ms": 2.5930425320742265,
+        "median_ms": 2.3595833336003125,
+        "p99_ms": 3.951249993406236
+      },
+      {
+        "mode": "lite-lossy",
+        "mean_ms": 2.3704177504744925,
+        "median_ms": 2.48662504600361,
+        "p99_ms": 4.142999998293817
+      },
+      {
+        "mode": "lite-lossy-tiled",
+        "mean_ms": 2.9534346770863826,
+        "median_ms": 2.72341666277498,
+        "p99_ms": 4.401999991387129
+      },
+      {
+        "mode": "lossy2",
+        "mean_ms": 2.764252169375444,
+        "median_ms": 2.8011249960400164,
+        "p99_ms": 5.2842083387076855
+      },
+      {
+        "mode": "lossy2-quality",
+        "mean_ms": 3.8668747832465065,
+        "median_ms": 3.900375042576343,
+        "p99_ms": 5.691375001333654
+      },
+      {
+        "mode": "lossy2-quality-fast",
+        "mean_ms": 3.6914650624263836,
+        "median_ms": 3.676833352074027,
+        "p99_ms": 5.459999956656247
+      }
+    ]
+  },
+  "recorded_replay": {
+    "rounds": 6,
+    "sequences": 35,
+    "rows": {
+      "lite": {
+        "median_run_mean_ms": 3.4333282736562456,
+        "run_mean_ms": [
+          2.9469690460246056,
+          3.110889285536749,
+          4.293374999958489,
+          4.761027972978939,
+          3.439651786382975,
+          3.4270047609295164
+        ],
+        "frame_p99_ms": 9.108875005040318
+      },
+      "lite-post-tiles": {
+        "median_run_mean_ms": 3.29378988161417,
+        "run_mean_ms": [
+          3.5587446489703973,
+          3.039473807439208,
+          2.9937863142030046,
+          3.076823811612225,
+          3.510755951616115,
+          3.844425593602604
+        ],
+        "frame_p99_ms": 7.25079164840281
+      },
+      "lite-lossy": {
+        "median_run_mean_ms": 3.240722027424324,
+        "run_mean_ms": [
+          4.04323095156412,
+          3.118177381942847,
+          3.353333335170256,
+          3.289647029513227,
+          3.0442714292023862,
+          3.1917970253354206
+        ],
+        "frame_p99_ms": 8.204791694879532
+      },
+      "lite-lossy-tiled": {
+        "median_run_mean_ms": 3.790753869023839,
+        "run_mean_ms": [
+          4.0318357184462785,
+          3.534080952938114,
+          4.617171431060082,
+          3.4732571412210484,
+          4.412499998995502,
+          3.5496720196014
+        ],
+        "frame_p99_ms": 10.132833325769752
+      }
+    }
+  },
+  "quality_fast": {
+    "reference": "8x8 analytic integration; unit SDR peak; all RGB channels",
+    "scenes": {
+      "wire_static": {
+        "before": {
+          "psnr_db": 27.33683186061395,
+          "mae": 0.012848769314587116,
+          "reuse_psnr_db": 27.693587025593192,
+          "temporal_error": 0.0030950845684856176,
+          "neural_runs": 16,
+          "reused_frames": 16
+        },
+        "after": {
+          "psnr_db": 27.334691439674977,
+          "mae": 0.012852971442043781,
+          "reuse_psnr_db": 27.690716397493993,
+          "temporal_error": 0.003153446363285184,
+          "neural_runs": 16,
+          "reused_frames": 16
+        }
+      },
+      "wire_pan": {
+        "before": {
+          "psnr_db": 25.743540488531824,
+          "mae": 0.015289893373847008,
+          "reuse_psnr_db": 26.13843878771293,
+          "temporal_error": 0.02296166494488716,
+          "neural_runs": 16,
+          "reused_frames": 16
+        },
+        "after": {
+          "psnr_db": 26.17501256974801,
+          "mae": 0.014337104745209217,
+          "reuse_psnr_db": 26.718525339633462,
+          "temporal_error": 0.021748431026935577,
+          "neural_runs": 16,
+          "reused_frames": 16
+        }
+      },
+      "dark_particles": {
+        "before": {
+          "psnr_db": 61.725116634974775,
+          "mae": 0.0005337818874977529,
+          "reuse_psnr_db": 60.129469421339266,
+          "temporal_error": 0.00005625573976431042,
+          "neural_runs": 16,
+          "reused_frames": 16
+        },
+        "after": {
+          "psnr_db": 62.268449450927214,
+          "mae": 0.0005298022297210991,
+          "reuse_psnr_db": 60.88937807158324,
+          "temporal_error": 0.00005349612547433935,
+          "neural_runs": 16,
+          "reused_frames": 16
+        }
+      },
+      "grain6": {
+        "before": {
+          "psnr_db": 43.77561559537325,
+          "mae": 0.005108342971652746,
+          "reuse_psnr_db": 43.85943129100741,
+          "temporal_error": 0.0009124415810219944,
+          "neural_runs": 16,
+          "reused_frames": 16
+        },
+        "after": {
+          "psnr_db": 43.8022266978043,
+          "mae": 0.005094057414680719,
+          "reuse_psnr_db": 43.88655196010221,
+          "temporal_error": 0.0009127563098445535,
+          "neural_runs": 16,
+          "reused_frames": 16
+        }
+      },
+      "screen_bar": {
+        "before": {
+          "psnr_db": 33.60452060376214,
+          "mae": 0.0033844735007733107,
+          "reuse_psnr_db": 32.15681171760668,
+          "temporal_error": 0.004567721858620644,
+          "neural_runs": 16,
+          "reused_frames": 16
+        },
+        "after": {
+          "psnr_db": 33.64658673808152,
+          "mae": 0.0032664400059729815,
+          "reuse_psnr_db": 32.21126299288578,
+          "temporal_error": 0.004408382344990969,
+          "neural_runs": 16,
+          "reused_frames": 16
+        }
+      },
+      "moving_object": {
+        "before": {
+          "psnr_db": 44.79654174437721,
+          "mae": 0.0007339367875829339,
+          "reuse_psnr_db": 43.779327457087646,
+          "temporal_error": 0.00045071865315549076,
+          "neural_runs": 16,
+          "reused_frames": 16
+        },
+        "after": {
+          "psnr_db": 45.13003729027517,
+          "mae": 0.0007292915252037346,
+          "reuse_psnr_db": 44.3019717267518,
+          "temporal_error": 0.0004412315902300179,
+          "neural_runs": 16,
+          "reused_frames": 16
+        }
+      }
+    }
+  },
+  "validation": {
+    "exact_vs_head_recorded": "2 frames and all states byte-identical",
+    "lite_post_tiles_recorded": "2 frames, all states and scratch byte-identical",
+    "lossy_backend_parity": "native/scalar/SIMD classic and Metal4 pass",
+    "ultra_backend_parity": "classic pass"
+  },
+  "limits": [
+    "M5 only; forced SIMD is not physical M1-M4 timing",
+    "No long live game or HDR quality certification",
+    "Large frame timing spread",
+    "Tiled mode slower in these tests",
+    "Conditional first-tap POST biases are an explicit Metal adaptation"
+  ]
+}

@@ -5,6 +5,7 @@
 #pragma once
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <CommonCrypto/CommonDigest.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -20,6 +21,9 @@
 #include "fsr411_mpp_policy.h"
 #include "fsr411_simd_weights.h"
 #include "fsr411_scratch_layout.h"
+#include "fsr412_neural_tile.h"
+#include "fsr412_original_geometry.h"
+#include "fsr412_mpp_policy.h"
 
 namespace fsr411 {
 
@@ -34,11 +38,12 @@ inline const char *kernels_label(Kernels k) {
 // Exact: original coefficients, IEEE PRE/POST math, inference every frame.
 // ExactFast: Exact's network with reciprocal division and fast exp/log in
 // PRE/POST. Lossy: folded coefficients, half-up rounding and inference reuse.
-// Lossy2: Lossy's network with the six layers trained in upstream dll-2026-10-19.
-enum class Profile { Exact, Lossy, ExactFast, Lossy2, Int8Lite };
-inline bool profile_is_lossy(Profile p) { return p==Profile::Lossy || p==Profile::Lossy2; }
+// Lossy2: six layers retrained in upstream dll-2026-10-29.
+// Int8LiteLossy: the independently adapted, retrained three-stage Lite model.
+enum class Profile { Exact, Lossy, ExactFast, Lossy2, Int8Lite, Int8LiteLossy };
+inline bool profile_is_lossy(Profile p) { return p==Profile::Lossy || p==Profile::Lossy2 || p==Profile::Int8LiteLossy; }
 inline const char *profile_name(Profile p) {
-    return p==Profile::Int8Lite?"int8-lite":p==Profile::Lossy?"lossy":p==Profile::Lossy2?"lossy2":p==Profile::ExactFast?"exact-fast":"exact";
+    return p==Profile::Int8LiteLossy?"int8-lite-lossy":p==Profile::Int8Lite?"int8-lite":p==Profile::Lossy?"lossy":p==Profile::Lossy2?"lossy2":p==Profile::ExactFast?"exact-fast":"exact";
 }
 inline bool parse_profile(const std::string &name, Profile &p) {
     if(name=="exact") p=Profile::Exact;
@@ -83,6 +88,13 @@ struct Options {
     bool pixelFix = false;
     // Lower bound of the widening, 0..1 (1 = off); POST reads it from `pad`.
     float pixelFixFloor = 0.6f;
+    // Opt-in original Lite Lossy PRE/BORDER/POST and exact native neural stages.
+    // Never changes ordinary Lite or the existing experimental tiled profile.
+    bool originalLossy = false;
+    int temporalQuality = 0;
+    // Lite Lossy only. Zero alternates whole frames; nonzero updates half the
+    // square tiles per frame with a convolution halo and ping-pong parameters.
+    unsigned neuralTileSize = 0;
     // Tests only: Exact Fast/Lossy PRE/POST with ordered arithmetic, so their
     // optimized graph can be compared bit for bit with the imported HLSL.
     bool strictMath = false;
@@ -113,6 +125,9 @@ struct SpdConstants {
 };
 struct RcasConstants { uint32_t config[4]; float preExposure; uint32_t pad[3]; };
 struct LossyConstants { uint32_t skip, blockWidth, blockHeight, reserved; };
+struct QualityConstants { uint32_t flags, historyValid, cellWidth, cellHeight; };
+struct LiteLossyConstants { uint32_t flags, tileSize, phase, reserved; };
+using NeuralTileConstants = fsr412_tiling::Control;
 struct RegionConstants { uint32_t source[4], destination[4]; };
 struct TensorSizes { uint32_t v[17][4]; };
 static_assert(sizeof(FrameConstants) == 104 && sizeof(SpdConstants) == 40,
@@ -124,6 +139,13 @@ inline uint32_t ceil_div(uint32_t x, uint32_t y) { return (x + y - 1u) / y; }
 inline NSString *ns(const std::string &x) { return [NSString stringWithUTF8String:x.c_str()]; }
 inline std::string utf8(NSString *x) { return x ? std::string(x.UTF8String) : std::string(); }
 inline std::string metal_error(NSError *error) { return error ? utf8(error.localizedDescription) : "Metal allocation failed"; }
+inline std::string sha256_bytes(const void *bytes,size_t length) {
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(bytes,CC_LONG(length),digest);
+    const char *hex="0123456789abcdef";std::string result;result.reserve(64);
+    for(unsigned char byte:digest) {result+=hex[byte>>4];result+=hex[byte&15];}
+    return result;
+}
 // The compiler publishes bindings.json after each stage. Its presence alone
 // does not mean an interrupted or --only build is ready for --no-compile.
 // This checks completeness only; layout/key/order validation stays in the
@@ -233,9 +255,16 @@ struct Session {
     // FSR 4.1.2: tile side of the optional tiled POST ("post_tile"), 0 if absent.
     uint32_t postTileSide = 0;
     bool splitAutoExposure = false;
-    bool modelLite = false;
+    bool modelLite = false, originalLossy = false;
     size_t scratchBytes = 0;
+    size_t originalLogicalScratchBytes = 0, originalCacheOffset = 0,
+        originalCacheRelocatedOffset = 0, originalCacheBytes = 0,
+        originalPrecomputedOffset = 0, originalPrecomputedStride = 0;
+    bool originalPostFast = false;
+    id<MTLBuffer> originalInitializer = nil;
     bool preparedColor = false;
+    bool temporalQuality = false, retrainedWeights = false;
+    unsigned neuralTileSize = 0, liteCacheBytesPerPixel = 0;
     bool ultraPerformance = false, externalPostCnb = false;
     bool postCnbAlias = false;
     PostCnbScratchLayout scratchLayout = {};
@@ -271,8 +300,12 @@ struct View {
     bool postCnbAlias = false;
     PostCnbScratchLayout scratchLayout = {};
     id<MTLTexture> history = nil, reprojected = nil, recurrent = nil, autoExposure = nil;
+    id<MTLTexture> historyNext = nil, recurrentNext = nil;
+    bool originalLossy = false;
     id<MTLBuffer> scratch = nil, spdAtomic = nil;
     id<MTLBuffer> lossyMotion = nil, lossyPlane = nil;
+    id<MTLBuffer> qualityPrevious = nil, qualityCurrent = nil;
+    id<MTLBuffer> litePrevious = nil, liteCurrent = nil;
     id<MTLTexture> spdAtomicTexture = nil, luma = nil;
     id<MTLTexture> colorCopy = nil, depthCopy = nil, motionCopy = nil, outputCopy = nil, rcasTemp = nil;
     id<MTLTexture> preparedColor = nil;
@@ -280,16 +313,23 @@ struct View {
     std::vector<std::unique_ptr<FrameSlot>> slots;
     uint32_t width = 0, height = 0;
     uint64_t encodes = 0;
-    uint64_t neuralRuns = 0, reusedFrames = 0;
-    bool cacheValid = false, skippedInference = false;
+    uint64_t neuralRuns = 0, reusedFrames = 0, partialFrames = 0;
+    bool cacheValid = false, skippedInference = false, partialInference = false;
+    bool qualityValid = false, retrainedWeights = false;
     bool zeroScratch = true, zeroTargets = true;
-    void invalidate() { fsr4_input_invalidate(&inputHistory);cacheValid=false; }
+    void invalidate() { fsr4_input_invalidate(&inputHistory);cacheValid=false;qualityValid=false;partialInference=false; }
 };
 
 class Runtime {
 public:
     Runtime(id<MTLDevice> dev, const std::string &root, const std::string &buildDir)
         : device_(dev), root_(root), buildDir_(buildDir) {}
+
+    // Low-level validated integer operators for the original-shader adapter
+    // and A/B harness. Caller owns command ordering and resource lifetime.
+    bool prepare_integer_operators(Session &session,bool compile,Kernels kind,std::string &error) {
+        return load_native(session,compile,kind,error);
+    }
 
     bool copy_output(id cb, View &lifetime, id<MTLTexture> source, Fsr4InputRect sourceRect,
                      id<MTLTexture> output, Fsr4InputRect outputRect, std::string &error) {
@@ -334,6 +374,13 @@ public:
         Fsr4InputPrepared p = {};
         auto status = fsr4_input_prepare(&frame.input, &view.inputHistory, 0, &p);
         if (!fsr4_input_status_ok(status)) return fail(fsr4_input_status_reason(status));
+        if(options.originalLossy) {
+            if(!options.modelLite || options.profile!=Profile::Int8LiteLossy)
+                return fail("original shaders are supported only by FSR 4.1.2 Lite Lossy");
+            if(p.uw%4u || p.uh%4u)
+                return fail("original Lite Lossy currently requires output width and height divisible by four");
+            p.alignedUW=p.uw;p.alignedUH=p.uh;
+        }
         int tier = options.tier ? options.tier : required_tier(p.alignedUW, p.alignedUH);
         if ((tier != 1080 && tier != 2160 && tier != 4320) || !required_tier(p.alignedUW, p.alignedUH)
             || p.alignedUW > uint32_t(tier * 16 / 9) || p.alignedUH > uint32_t(tier))
@@ -360,6 +407,7 @@ public:
         const bool native_or_portable = kind != Kernels::Reference;
         status = fsr4_input_prepare(&frame.input, &view.inputHistory, view.variantKey != session->key, &p);
         if (!fsr4_input_status_ok(status)) return fail(fsr4_input_status_reason(status));
+        if(session->originalLossy) {p.alignedUW=p.uw;p.alignedUH=p.uh;}
         if (!ensure_targets(view, *session, p, frame, options, error)) return fail(error);
         if (options.snapshot && !prepare_snapshot(*options.snapshot, frame, p, error)) return fail(error);
         FrameSlot *slot = acquire_slot(view, error);
@@ -368,11 +416,20 @@ public:
         slot->stageProfiler = options.stageProfiler;
         const bool rcas = options.rcas && options.sharpness > 0;
         const bool lossy = profile_is_lossy(options.profile);
+        const bool liteLossy = options.modelLite && options.profile==Profile::Int8LiteLossy;
+        const bool exposureStable = p.previousPreExposure>0.f && p.preExposure>=p.previousPreExposure*.8f
+            && p.preExposure<=p.previousPreExposure*1.25f;
+        const bool reusable = view.cacheValid && !p.reset && (!liteLossy || session->liteCacheBytesPerPixel!=0u)
+            && (!(liteLossy || session->temporalQuality) || exposureStable);
         // The supplied vectors describe one frame of motion. Never apply
-        // them directly to a cache older than one frame (unusual jitter can
-        // have consecutive negatives). Refresh after every reused frame.
-        const bool skip = lossy && view.cacheValid && !view.skippedInference && !p.reset && p.jitter[0]<0.f
-            && uint64_t(p.rw)*2u>=p.alignedUW && !options.ultraPerformance;
+        // them directly to a cache older than one frame. Tiled Lite Lossy
+        // reprojects and replaces its complete parameter cache every frame.
+        const bool partial = !session->originalLossy && liteLossy && session->neuralTileSize && reusable
+            && p.alignedUW<=3840u && p.alignedUH<=2160u;
+        const bool skip = session->originalLossy ? original_lite_skip(tier,p) :
+            lossy && !partial && !session->neuralTileSize && reusable && !view.skippedInference
+            && p.jitter[0]<0.f && (liteLossy || (uint64_t(p.rw)*2u>=p.alignedUW && !options.ultraPerformance))
+            && (!liteLossy || (p.alignedUW<=3840u && p.alignedUH<=2160u));
         TensorSizes sizes = tensor_sizes(p.alignedUW, p.alignedUH);
         if(options.modelLite) {
             constexpr unsigned shifts[9]={1,0,1,2,2,1,0,0,0};
@@ -383,10 +440,24 @@ public:
                        options.pixelFix ? std::clamp(options.pixelFixFloor, 0.f, 1.f) : 0.f);
         const LossyConstants lc={skip?1u:0u,p.alignedUW/4u,p.alignedUH/4u,0};
         put(*slot,kLossy,lc);
+        const QualityConstants qc={session->temporalQuality?(options.temporalQuality==2?7u:3u):0u,
+            session->temporalQuality && view.qualityValid && !p.reset && exposureStable?1u:0u,
+            p.alignedUW/2u,p.alignedUH/2u};
+        put(*slot,kQuality,qc);
+        const LiteLossyConstants llc={(skip?1u:0u)|(partial?2u:0u)|(reusable?4u:0u),
+            session->neuralTileSize,uint32_t(view.encodes&1u),0u};
+        put(*slot,kLiteLossy,llc);
+        for(const auto &item:session->native) {
+            const auto &n=item.second;
+            const unsigned shape=n.inputDispatch?n.inputSlot:n.outputSlot;
+            const NeuralTileConstants tc={partial?session->neuralTileSize:0u,uint32_t(view.encodes&1u),item.first==13?0u:32u,
+                p.alignedUW/sizes.v[shape][0],n.tileX,n.tileY,p.alignedUW,p.alignedUH};
+            put(*slot,kNeuralTile+n.offset,tc);
+        }
         view.captures.clear();
         for (const auto &name : options.captureStages) {
             if (std::find(session->order.begin(),session->order.end(),name)==session->order.end()) return fail("unknown capture stage " + name);
-            if(skip && name!="pre" && name!="post") continue;
+            if(skip && !session->originalLossy && name!="pre" && name!="post") continue;
             auto buffer = [device_ newBufferWithLength:session->scratchBytes options:MTLResourceStorageModeShared];
             if (!buffer) return fail("cannot allocate diagnostic scratch snapshot");
             view.captures.emplace(name, buffer);
@@ -413,17 +484,26 @@ public:
         slot->busy = true;
         __atomic_store_n((uint32_t *)((uint8_t *)slot->constants.contents + FrameSlot::kDone), 0u, __ATOMIC_RELEASE);
         Bindings b{frame.color, frame.depth, frame.motion, frame.output,
-                   p.exposureMode == FSR4_INPUT_EXPOSURE_TEXTURE ? frame.exposure : exposureOne_, &view, rcas};
+                   p.exposureMode == FSR4_INPUT_EXPOSURE_TEXTURE ? frame.exposure : exposureOne_, &view, rcas, session->originalLossy};
         @try {
             if (m4) queue_before(enc);
             if (view.zeroScratch) clear_buffer(enc, m4, *slot, "clearScratch", view.scratch, 8192);
-            if (skip) clear_buffer(enc,m4,*slot,"clearLossyPlane",view.lossyPlane,10240);
+            if (skip && !session->originalLossy) clear_buffer(enc,m4,*slot,"clearLossyPlane",view.lossyPlane,10240);
+            if (session->originalLossy && view.zeroTargets) {
+                // Original graph: zero newly allocated targets, reset or not,
+                // like the oracle. Its PRE/POST consume the reset flag itself.
+                clear_texture(enc,m4,*slot,"originalClearHistory",view.history);
+                clear_texture(enc,m4,*slot,"originalClearReprojected",view.reprojected);
+                clear_texture(enc,m4,*slot,"originalClearRecurrent",view.recurrent);
+                clear_texture(enc,m4,*slot,"clearHistoryNext",view.historyNext);
+                clear_texture(enc,m4,*slot,"clearRecurrentNext",view.recurrentNext);
+            }
             if (view.zeroTargets || p.reset) {
                 // Reset PRE reads current inputs only and fully overwrites
                 // reprojected; POST initializes history and recurrent before
                 // subsequent frames can sample them. Preserve initialization
                 // for newly supplied targets when history is not reset.
-                if (!p.reset) {
+                if (!p.reset && !session->originalLossy) {
                     clear_texture(enc, m4, *slot, "clearHistory", view.history);
                     clear_texture(enc, m4, *slot, "clearReprojected", view.reprojected);
                     clear_texture(enc, m4, *slot, "clearRecurrent", view.recurrent);
@@ -469,6 +549,17 @@ public:
             if (session->preparedColor)
                 dispatch(enc,m4,*slot,*session,"prepare_color",MTLSizeMake(ceil_div(p.rw,16),ceil_div(p.rh,16),1),b);
             for (const auto &name : session->order) {
+                if(session->originalLossy) {
+                    dispatch_original_stage(enc,m4,*slot,*session,name,view,sizes,b,skip,p);
+                    const auto capture=view.captures.find(name);
+                    if(capture!=view.captures.end()) {
+                        const uint32_t count=uint32_t(view.scratch.length/16);
+                        put(*slot,9728,count);
+                        helper(enc,m4,*slot,"capture_"+name,"fsr411_snapshot",
+                               {{view.scratch,0},{capture->second,0},{slot->constants,9728}},{},MTLSizeMake(count,1,1));
+                    }
+                    continue;
+                }
                 if (skip && name!="pre" && name!="post") continue;
                 if (name=="post" && session->externalPostCnb && !skip)
                     dispatch_native(enc,m4,*slot,*session,13,view,sizes);
@@ -539,10 +630,21 @@ public:
         view.backendLabel = kernels_label(kind);
         view.mppFeatures=session->mppFeatures;view.mppFastPasses=session->mppFastPasses;
         view.postCnbAlias = session->postCnbAlias;
+        view.retrainedWeights = session->retrainedWeights;
         view.scratchLayout = session->scratchLayout;
-        view.cacheValid=session->externalPostCnb;
+        view.cacheValid=session->externalPostCnb || session->originalLossy;
+        if(session->originalLossy) {
+            std::swap(view.history,view.historyNext);
+            std::swap(view.recurrent,view.recurrentNext);
+        }
         view.skippedInference=skip;
-        if(skip) ++view.reusedFrames;else ++view.neuralRuns;
+        view.partialInference=partial;
+        if(partial) ++view.partialFrames;else if(skip) ++view.reusedFrames;else ++view.neuralRuns;
+        if(session->temporalQuality) {
+            std::swap(view.qualityPrevious,view.qualityCurrent);
+            view.qualityValid=true;
+        } else view.qualityValid=false;
+        if(liteLossy && session->neuralTileSize) std::swap(view.litePrevious,view.liteCurrent);
         ++view.encodes;
         return true;
     }
@@ -551,10 +653,11 @@ private:
     struct BufferBinding { id<MTLBuffer> buffer; NSUInteger offset; };
     struct Bindings {
         id<MTLTexture> color, depth, motion, output, exposure;
-        View *view; bool rcas;
+        View *view; bool rcas; bool originalLossy = false;
     };
-    static constexpr NSUInteger kTensor = 256, kSpd = 768, kRcas = 1024, kLossy = 1280, kNative = 2048;
-    static constexpr NSUInteger kSnapshot = 12288;
+    static constexpr NSUInteger kTensor = 256, kSpd = 768, kRcas = 1024, kLossy = 1280,
+        kQuality = 1312, kLiteLossy = 1344, kNative = 2048, kNeuralTile = 16384;
+    static constexpr NSUInteger kSnapshot = 12288, kOriginalCopy = 11008, kOriginalSentinel = 11040;
     static_assert(kSnapshot + 768 + sizeof(RegionConstants) < FrameSlot::kDone, "snapshot constant region overflow");
     id<MTLDevice> device_;
     std::string root_, buildDir_;
@@ -743,22 +846,53 @@ private:
             v.scratch = [device_ newBufferWithLength:s.scratchBytes options:MTLResourceStorageModePrivate];
             v.zeroScratch = true;
         }
-        if (v.width != p.alignedUW || v.height != p.alignedUH || !v.history || !v.reprojected || !v.recurrent) {
+        if (v.width != p.alignedUW || v.height != p.alignedUH || !v.history || !v.reprojected || !v.recurrent || v.originalLossy!=s.originalLossy) {
             v.history = texture(MTLPixelFormatRGBA16Float,p.alignedUW,p.alignedUH);
             v.reprojected = texture(MTLPixelFormatRGBA16Float,p.alignedUW,p.alignedUH);
             v.recurrent = texture(MTLPixelFormatRGBA8Unorm,p.alignedUW,p.alignedUH);
             v.width=p.alignedUW; v.height=p.alignedUH; v.zeroTargets=true;
         }
+        if(s.originalLossy) {
+            if(!fit(v.historyNext,MTLPixelFormatRGBA16Float,p.alignedUW,p.alignedUH) ||
+               !fit(v.recurrentNext,MTLPixelFormatRGBA8Unorm,p.alignedUW,p.alignedUH)) {
+                error="cannot allocate original Lite Lossy next-frame history";return false;
+            }
+        }
+        v.originalLossy=s.originalLossy;
         if (!v.autoExposure) v.autoExposure=texture(MTLPixelFormatR32Float,2,1);
         bool ok = v.scratch && v.history && v.reprojected && v.recurrent && v.autoExposure;
         if (s.preparedColor) ok &= fit(v.preparedColor,MTLPixelFormatRGBA32Float,p.rw,p.rh);
-        if(profile_is_lossy(o.profile)) {
+        if(profile_is_lossy(o.profile) && !s.originalLossy) {
             const size_t blocks=size_t(p.alignedUW/4u)*(p.alignedUH/4u);
-            if(!v.lossyMotion || v.lossyMotion.length!=blocks*16u)
-                v.lossyMotion=[device_ newBufferWithLength:blocks*16u options:MTLResourceStorageModePrivate];
+            const size_t motionCells=s.modelLite?size_t(p.alignedUW/2u)*(p.alignedUH/2u):blocks;
+            if(!v.lossyMotion || v.lossyMotion.length!=motionCells*16u)
+                v.lossyMotion=[device_ newBufferWithLength:motionCells*16u options:MTLResourceStorageModePrivate];
             if(!v.lossyPlane || v.lossyPlane.length!=blocks*4u)
                 v.lossyPlane=[device_ newBufferWithLength:blocks*4u options:MTLResourceStorageModePrivate];
             ok &= v.lossyMotion && v.lossyPlane;
+        }
+        if(s.temporalQuality) {
+            const size_t bytes=size_t(p.alignedUW/2u)*(p.alignedUH/2u)*16u;
+            if(!v.qualityPrevious || v.qualityPrevious.length!=bytes || !v.qualityCurrent || v.qualityCurrent.length!=bytes) {
+                v.qualityPrevious=[device_ newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+                v.qualityCurrent=[device_ newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+                v.qualityValid=false;
+            }
+            ok &= v.qualityPrevious && v.qualityCurrent;
+        }
+        if(s.modelLite && s.profile==Profile::Int8LiteLossy && s.liteCacheBytesPerPixel) {
+            const size_t bytes=size_t(p.alignedUW)*p.alignedUH*s.liteCacheBytesPerPixel;
+            if(!v.litePrevious || v.litePrevious.length!=bytes) {
+                v.litePrevious=[device_ newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+                v.cacheValid=false;
+            }
+            if(s.neuralTileSize) {
+                if(!v.liteCurrent || v.liteCurrent==v.litePrevious || v.liteCurrent.length!=bytes) {
+                    v.liteCurrent=[device_ newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+                    v.cacheValid=false;
+                }
+            } else v.liteCurrent=v.litePrevious;
+            ok &= v.litePrevious && v.liteCurrent;
         }
         // Float32 canonical copies preserve the values returned by the source
         // texture, including sRGB decode and packed R11G11B10 input precision.
@@ -845,16 +979,27 @@ private:
     bool load_native(Session &s, bool compile, Kernels kind, std::string &error) {
         const bool useMpp=kind==Kernels::Mpp, useSimd=kind==Kernels::Simd;
         const std::string dir=buildDir_+(s.modelLite?"/fsr412_native_":"/fsr411_native_")+std::to_string(s.tier)+(s.ultraPerformance?"_ultraperformance":"")
-            +(s.profile==Profile::Lossy?"_lossy":s.profile==Profile::Lossy2?"_lossy2":"");
+            +(s.profile==Profile::Lossy || s.profile==Profile::Int8LiteLossy?"_lossy":s.profile==Profile::Lossy2?"_lossy2":"");
         // ExactFast differs only in PRE/POST math and shares Exact's network.
         if (compile && s.modelLite && !run(@[@"python3",ns(root_+"/tools/fsr412/native_model.py"),@"--tier",ns(std::to_string(s.tier)),
-            @"--preset",s.ultraPerformance?@"ultraperformance":@"normal",@"--outdir",ns(dir)],error)) return false;
+            @"--preset",s.ultraPerformance?@"ultraperformance":@"normal",@"--outdir",ns(dir),
+            @"--profile",s.profile==Profile::Int8LiteLossy?@"int8-lite-lossy":@"int8-lite",
+            @"--root",ns(root_)],error)) return false;
         if (compile && !s.modelLite && !run(@[@"python3",ns(root_+"/tools/gen_fsr411_native.py"),@"--tier",ns(std::to_string(s.tier)),
             @"--preset",s.ultraPerformance?@"ultraperformance":@"normal",@"--profile",s.profile==Profile::Lossy?@"lossy":s.profile==Profile::Lossy2?@"lossy2":@"exact",
             @"--outdir",ns(dir)],error)) return false;
         auto manifest=json(dir+"/fsr411_native_manifest.json",error);
         if (!manifest || [manifest[@"abi_version"] unsignedIntValue]!=kAbiVersion
             || [manifest[@"parameter_size"] unsignedIntValue]!=sizeof(PassParams)) { if(error.empty()) error="native 4.1.1 ABI mismatch"; return false; }
+        if(s.modelLite && s.profile==Profile::Int8LiteLossy && !s.ultraPerformance && s.tier<=2160 &&
+           [manifest[@"lite_native_revision"] unsignedIntValue]!=2u) {
+            error="Lite Lossy native border-bias revision mismatch; regenerate the model";return false;
+        }
+        if(s.modelLite && (![manifest[@"fsr_version"] isEqual:@"4.1.2"] ||
+           ![manifest[@"profile"] isEqual:ns(profile_name(s.profile))] ||
+           ![manifest[@"initializer_sha256"] isEqual:ns(sha256_bytes(s.initializer.contents,s.initializer.length))])) {
+            error="Lite native initializer/profile cache mismatch; rebuild this profile";return false;
+        }
         NSData *weights=[NSData dataWithContentsOfFile:ns(dir+"/fsr411_native_weights.bin")];
         NSData *params=[NSData dataWithContentsOfFile:ns(dir+"/fsr411_native_params.bin")];
         if (!weights.length || !params.length) { error="missing native 4.1.1 weights/parameters"; return false; }
@@ -863,6 +1008,11 @@ private:
         }
         if(manifest[@"params_bytes"] && params.length != [manifest[@"params_bytes"] unsignedLongLongValue]) {
             error="native 4.1.1 parameter cache is incomplete; regenerate this model";return false;
+        }
+        if(s.modelLite && s.profile==Profile::Int8LiteLossy &&
+           (![manifest[@"weights_sha256"] isEqual:ns(sha256_bytes(weights.bytes,weights.length))] ||
+            ![manifest[@"params_sha256"] isEqual:ns(sha256_bytes(params.bytes,params.length))])) {
+            error="Lite Lossy native data hash mismatch; regenerate this profile";return false;
         }
         s.nativeWeights=[device_ newBufferWithBytes:weights.bytes length:weights.length options:MTLResourceStorageModeShared];
         if (useSimd) {
@@ -877,7 +1027,20 @@ private:
         // Native sources include only the ABI header. Compile the saved source
         // as a real Metal library; no half-network substitution is possible.
         const char *file=useMpp?"/src/fsr411_mpp.metal":useSimd?"/src/fsr411_simd.metal":"/src/fsr411_reference.metal";
-        NSString *source=[NSString stringWithContentsOfFile:ns(root_+file) encoding:NSUTF8StringEncoding error:nil];
+        std::string sourcePath=root_+file;
+        if(s.originalLossy) {
+            const std::string gated=dir+"/original_"+kernels_label(kind)+".metal";
+            if(!run(@[@"python3",ns(root_+"/tools/fsr412/original_neural.py"),
+                @"--source",ns(sourcePath),@"--out",ns(gated)],error)) return false;
+            sourcePath=gated;
+        }
+        if(s.neuralTileSize) {
+            const std::string gated=dir+"/tiled_"+kernels_label(kind)+".metal";
+            if(compile && !run(@[@"python3",ns(root_+"/tools/fsr412/neural_tiling.py"),
+                @"--source",ns(sourcePath),@"--out",ns(gated)],error)) return false;
+            sourcePath=gated;
+        }
+        NSString *source=[NSString stringWithContentsOfFile:ns(sourcePath) encoding:NSUTF8StringEncoding error:nil];
         NSString *header=[NSString stringWithContentsOfFile:ns(root_+"/src/fsr411_model.h") encoding:NSUTF8StringEncoding error:nil];
         if (!source || !header) { error="missing native 4.1.1 Metal source"; return false; }
         source=[source stringByReplacingOccurrencesOfString:@"#include \"fsr411_model.h\"" withString:header];
@@ -1002,19 +1165,20 @@ private:
         // Keep reference captures and existing no-compile bundles on their
         // appended-cache ABI. A separate key prevents mixing POST addresses.
         bool postCnbAlias=portable && o.optimize;
+        const std::string qualitySuffix=o.temporalQuality?"_tq"+std::to_string(o.temporalQuality):"";
         const std::string suffix=kind==Kernels::Mpp?"_mpp":kind==Kernels::Simd?"_simd":kind==Kernels::Scalar?"_scalar":"_ref";
         if(postCnbAlias) {
-            auto existing=sessions_.find(legacyKey+"_ca1"+suffix);
+            auto existing=sessions_.find(legacyKey+"_ca1"+qualitySuffix+suffix);
             if(existing!=sessions_.end()) return existing->second.get();
             if(!o.allowCompile) {
                 // Pin an established fallback too: no disk polling or history
                 // reset halfway through a stream when a cache build finishes.
-                existing=sessions_.find(legacyKey+suffix);
+                existing=sessions_.find(legacyKey+qualitySuffix+suffix);
                 if(existing!=sessions_.end()) return existing->second.get();
-                postCnbAlias=shader_bundle_files_ready(buildDir_+"/"+legacyKey+"_ca1");
+                postCnbAlias=shader_bundle_files_ready(buildDir_+"/"+legacyKey+"_ca1"+qualitySuffix);
             }
         }
-        const std::string key=legacyKey+(postCnbAlias?"_ca1":"");
+        const std::string key=legacyKey+(postCnbAlias?"_ca1":"")+qualitySuffix;
         const std::string cacheKey=key+suffix;
         auto existing=sessions_.find(cacheKey); if(existing!=sessions_.end()) return existing->second.get();
         if (o.allowCompile && !run(@[@"python3",ns(root_+"/tools/compile_fsr411.py"),@"--root",ns(root_),@"--builddir",ns(buildDir_),
@@ -1024,7 +1188,8 @@ private:
             @"--optimize",ns(std::to_string(o.optimize)),@"--ultra-performance",o.ultraPerformance?@"1":@"0",
             @"--profile",@(profile_name(o.profile)),@"--external-post-cnb",externalPost?@"1":@"0",
             @"--strict-math",o.strictMath&&o.profile!=Profile::Exact?@"1":@"0",
-            @"--post-cnb-alias",postCnbAlias?@"1":@"0"],error)) return nullptr;
+            @"--post-cnb-alias",postCnbAlias?@"1":@"0",
+            @"--temporal-quality",ns(std::to_string(o.temporalQuality))],error)) return nullptr;
         auto manifest=json(buildDir_+"/"+key+"/bindings.json",error);
         if (!manifest || ![manifest[@"version"] isEqual:@"4.1.1"] || [manifest[@"order"] count]!=27) return nullptr;
         if([manifest[@"post_cnb_alias"] boolValue]!=postCnbAlias) {
@@ -1035,6 +1200,9 @@ private:
         if(s->postPixelsPerGroup!=16 && s->postPixelsPerGroup!=32) {error="invalid POST dispatch geometry";return nullptr;}
         s->splitAutoExposure=[manifest[@"auto_exposure_dispatches"] unsignedIntValue]==2;
         s->ultraPerformance=o.ultraPerformance;s->externalPostCnb=externalPost;s->profile=o.profile;
+        s->retrainedWeights=o.profile==Profile::Lossy2 && !o.ultraPerformance;
+        s->temporalQuality=[manifest[@"temporal_quality"] boolValue];
+        if([manifest[@"temporal_quality"] intValue]!=o.temporalQuality) {error="temporal quality shader/cache mismatch";return nullptr;}
         s->postCnbAlias=postCnbAlias;
         s->scratchBytes=[manifest[@"scratch_bytes"] unsignedLongLongValue];
         s->scratchLayout.arenaBytes=s->scratchLayout.allocationBytes=s->scratchBytes;
@@ -1154,6 +1322,7 @@ private:
             param.input.width=sizes.v[n.inputSlot][0]; param.input.height=sizes.v[n.inputSlot][1];
             param.output.width=sizes.v[n.outputSlot][0]; param.output.height=sizes.v[n.outputSlot][1];
             if (n.hasSkip) { param.skip.width=sizes.v[n.skipSlot][0]; param.skip.height=sizes.v[n.skipSlot][1]; }
+            if(s.originalLossy) fill_original_native_dimensions(s,item.first,sizes,param);
             put(slot,kNative+n.offset,param);
         }
     }
@@ -1161,7 +1330,7 @@ private:
         if(slot.tables[ns(name)]) return true;
         if (@available(macOS 26.0,*)) {
             MTL4ArgumentTableDescriptor *d=[MTL4ArgumentTableDescriptor new];
-            d.maxBufferBindCount=8; d.maxTextureBindCount=16; d.maxSamplerStateBindCount=4; d.initializeBindings=YES;
+            d.maxBufferBindCount=16; d.maxTextureBindCount=16; d.maxSamplerStateBindCount=4; d.initializeBindings=YES;
             NSError *e=nil; auto t=[device_ newArgumentTableWithDescriptor:d error:&e];
             if (!t) { error=metal_error(e); return false; }
             slot.tables[ns(name)]=t; return true;
@@ -1178,6 +1347,11 @@ private:
             const char *snapshotNames[]={"snapshotColor","snapshotDepth","snapshotMotion","snapshotOutput","snapshotDone"};
             for (auto n:snapshotNames) if(!table(slot,n,error)) return false;
         }
+        if(s.originalLossy) {
+            for(const char *name:{"originalClearHistory","originalClearReprojected","originalClearRecurrent",
+                                  "clearHistoryNext","clearRecurrentNext","originalCacheIn","originalCacheOut","originalSentinel"})
+                if(!table(slot,name,error)) return false;
+        }
         for (const auto &c:v.captures) if(!table(slot,"capture_"+c.first,error)) return false;
         return true;
     }
@@ -1186,7 +1360,8 @@ private:
         // the GPU. Keep the old resources alive until its retirement token.
         const id resources[]={slot.constants,s.initializer,s.nativeWeights,s.halfWeights,s.winogradWeights,v.history,v.reprojected,v.recurrent,v.autoExposure,
             v.scratch,v.spdAtomic,v.spdAtomicTexture,v.luma,v.colorCopy,v.depthCopy,v.motionCopy,v.outputCopy,v.rcasTemp,v.lossyMotion,v.lossyPlane,
-            f.color,f.depth,f.motion,f.output,f.exposure,exposureOne_,v.preparedColor};
+            f.color,f.depth,f.motion,f.output,f.exposure,exposureOne_,v.preparedColor,
+            v.qualityPrevious,v.qualityCurrent,v.litePrevious,v.liteCurrent,v.historyNext,v.recurrentNext,s.originalInitializer};
         for (id resource:resources) if(resource && ![slot.resources containsObject:resource]) [slot.resources addObject:resource];
         for(const auto &k:s.kernels) if(k.second.literalTables) [slot.resources addObject:k.second.literalTables];
         for (const auto &c:v.captures) [slot.resources addObject:c.second];
@@ -1258,8 +1433,10 @@ private:
         if(name=="r_auto_exposure_texture" || name=="rw_auto_exposure_texture") return b.view->autoExposure;
         if(name=="rw_spd_global_atomic") return b.view->spdAtomicTexture;
         if(name=="rw_autoexp_mip_5") return b.view->luma;
-        if(name=="r_recurrent_0" || name=="rw_recurrent_0") return b.view->recurrent;
-        if(name=="r_history_color" || name=="rw_history_color") return b.view->history;
+        if(name=="r_recurrent_0") return b.view->recurrent;
+        if(name=="rw_recurrent_0") return b.originalLossy?b.view->recurrentNext:b.view->recurrent;
+        if(name=="r_history_color") return b.view->history;
+        if(name=="rw_history_color") return b.originalLossy?b.view->historyNext:b.view->history;
         if(name=="r_reprojected_color" || name=="rw_reprojected_color") return b.view->reprojected;
         if(name=="rw_mlsr_output_color") return b.rcas?b.view->rcasTemp:b.output;
         if(name=="r_rcas_input") return b.view->rcasTemp;
@@ -1272,8 +1449,15 @@ private:
         if(name=="Fsr411LossyConstants") return {slot.constants,kLossy};
         if(name=="Fsr411LossyMotion") return {b.view->lossyMotion,0};
         if(name=="Fsr411LossyPlane") return {b.view->lossyPlane,0};
-        if(name=="InitializerBuffer" || name=="t18_initializer") return {s.initializer,0};
-        if(name=="MLSR_Optimized_Constants") return {slot.constants,(stage=="pre" || stage=="pre_reuse" || stage=="post" || stage=="post_tile" || stage=="prepare_color")?0:kTensor};
+        if(name=="Fsr411QualityConstants") return {slot.constants,kQuality};
+        if(name=="Fsr411QualityPrevious") return {b.view->qualityPrevious,0};
+        if(name=="Fsr411QualityCurrent") return {b.view->qualityCurrent,0};
+        if(name=="Fsr412LossyConstants") return {slot.constants,kLiteLossy};
+        if(name=="Fsr412LossyMotion") return {b.view->lossyMotion,0};
+        if(name=="Fsr412LossyPrevious") return {b.view->litePrevious,0};
+        if(name=="Fsr412LossyCurrent") return {b.view->liteCurrent,0};
+        if(name=="InitializerBuffer" || name=="t18_initializer") return {s.originalLossy?s.originalInitializer:s.initializer,0};
+        if(name=="MLSR_Optimized_Constants") return {slot.constants,s.originalLossy?0u:(stage=="pre" || stage=="pre_reuse" || stage=="post" || stage=="post_tile" || stage=="prepare_color")?0:kTensor};
         if(name=="CsTensorSizes") return {slot.constants,kTensor};
         if(name=="AutoExposureSPDConstants") return {slot.constants,kSpd};
         if(name=="cbRCAS") return {slot.constants,kRcas};
@@ -1316,12 +1500,19 @@ private:
     void dispatch_native(id __strong &enc,bool m4,FrameSlot &slot,const Session &s,int pass,const View &v,const TensorSizes &sizes) {
         if(slot.stageProfiler) slot.stageProfiler->begin_stage(enc,pass==13?"post_cnb":"pass"+std::to_string(pass));
         const auto &n=s.native.at(pass); const unsigned shape=n.inputDispatch?n.inputSlot:n.outputSlot;
+        uint32_t width=sizes.v[shape][0],height=sizes.v[shape][1];
+        if(s.originalLossy) {
+            const auto geometry=fsr412_original_geometry::make_geometry(s.tier,sizes.v[1][0],sizes.v[1][1]);
+            const auto extent=pass==1?geometry.CNBwritten:pass==4?geometry.DSwritten:pass==13?geometry.actualHalf:geometry.actualQuarter;
+            width=extent.width;height=extent.height;
+        }
         if(m4) {
             id<MTL4ArgumentTable> t=slot.tables[ns("native"+std::to_string(pass))];
             [t setAddress:v.scratch.gpuAddress atIndex:0]; [t setAddress:s.nativeWeights.gpuAddress atIndex:1];
             [t setAddress:slot.constants.gpuAddress+kNative+n.offset atIndex:2];
             if (s.halfWeights) [t setAddress:s.halfWeights.gpuAddress atIndex:3];
             if (n.winograd) [t setAddress:s.winogradWeights.gpuAddress atIndex:4];
+            if (s.neuralTileSize) [t setAddress:slot.constants.gpuAddress+kNeuralTile+n.offset atIndex:5];
             [enc setArgumentTable:t];
         } else {
             auto ce=(id<MTLComputeCommandEncoder>)enc;
@@ -1329,11 +1520,13 @@ private:
             [ce setBuffer:slot.constants offset:kNative+n.offset atIndex:2];
             if (s.halfWeights) [ce setBuffer:s.halfWeights offset:0 atIndex:3];
             if (n.winograd) [ce setBuffer:s.winogradWeights offset:0 atIndex:4];
+            if (s.neuralTileSize) [ce setBuffer:slot.constants offset:kNeuralTile+n.offset atIndex:5];
         }
         [enc setComputePipelineState:n.pso];
-        [enc dispatchThreadgroups:MTLSizeMake(ceil_div(sizes.v[shape][0],n.tileX),ceil_div(sizes.v[shape][1],n.tileY),1)
+        [enc dispatchThreadgroups:MTLSizeMake(ceil_div(width,n.tileX),ceil_div(height,n.tileY),1)
             threadsPerThreadgroup:MTLSizeMake(n.threads,1,1)]; barrier(enc,m4);
         if(slot.stageProfiler) slot.stageProfiler->end_stage(enc);
     }
+    #include "fsr412_original_session.inc"
 };
 } // namespace fsr411
