@@ -67,7 +67,8 @@ static const char *profile_label(int profile) {
 // readable for compatibility; Lite 2 (profile 4) is now displayed as Lossy.
 // AMD 4.1.2 Lite (profile 5) uses its own INT8 architecture and weights.
 // Profile 6 is the same model with the POST pixelization fix; the panel shows
-// it as the Lite segment plus the "Pixelization fix" checkbox.
+// it as the Lite stop plus the "Pixelization fix" checkbox. Tiled remains
+// readable as a saved/CLI profile, but is not a selectable panel stop.
 // FSR 4 is offered only when the 4.0.2 weights are present (the 4.1-only
 // release omits them).
 // Lossy profiles are offered only with both pinned inputs, never by an
@@ -110,25 +111,50 @@ static bool has_lossy2() {
     struct stat st = {};
     return stat(path.c_str(), &st) == 0;
 }
+// A suggested quality/performance progression, not a measured quality score.
+// IDs stay stable; positions may change when optional models are unavailable.
 static int panel_modes(int *modes) {
     int count = 0;
-    modes[count++] = 5;
-    if (g_has402) modes[count++] = 3;
     modes[count++] = 2;
+    if (g_has402) modes[count++] = 3;
     if (g_has_lossy2) modes[count++] = 4;
-    if (g_has_lite_lossy) { modes[count++] = 7; modes[count++] = 8; }
+    modes[count++] = 5;
+    if (g_has_lite_lossy) modes[count++] = 7;
     return count;
 }
-static int segment_profile(NSInteger segment) {
+static int mode_profile(NSInteger stop) {
     int modes[8], count = panel_modes(modes);
-    return segment >= 0 && segment < count ? modes[segment] : 5;
+    return stop >= 0 && stop < count ? modes[stop] : 5;
 }
-static NSInteger segment_for_profile(int profile) {
+static NSInteger stop_for_profile(int profile) {
     int modes[8], count = panel_modes(modes);
     if (profile == 6) profile = 5;
     for (int i = 0; i < count; ++i) if (modes[i] == profile) return i;
     return -1;
 }
+static const char *mode_title(int profile, bool abbreviated = false) {
+    switch (profile) {
+        case 2: return abbreviated ? "Exact" : "FSR 4.1.2 Exact";
+        case 3: return abbreviated ? "FSR 4" : "FSR 4 (4.0.2)";
+        case 4: return abbreviated ? "Lossy" : "FSR 4.1.2 Lossy";
+        case 5: return abbreviated ? "Lite" : "FSR 4.1.2 Lite";
+        case 6: return abbreviated ? "Lite" : "FSR 4.1.2 Lite + Pixelization fix";
+        case 7: return abbreviated ? "Lite Lossy" : "FSR 4.1.2 Lite Lossy";
+        case 8: return "Lite Lossy Tiled (CLI only)";
+        case 1: return "Legacy Lossy (CLI only)";
+        default: return "Exact reference (CLI only)";
+    }
+}
+// Unrelated controls must never replace a saved unavailable/retired profile.
+static int profile_after_change(int savedProfile, NSInteger stop, bool modeChanged, bool fix) {
+    int modes[8], count = panel_modes(modes);
+    int profile = modeChanged && stop >= 0 && stop < count ? mode_profile(stop) : savedProfile;
+    return profile == 5 || profile == 6 ? (fix ? 6 : 5) : profile;
+}
+static NSString *const kModeExplanation =
+    @"Switch between FSR processing modes. Render and output resolution stay unchanged. "
+     "Switching may cause stutters or pauses. Try different modes and choose the best balance of "
+     "image quality and performance for your game.";
 
 static Status read_status() {
     Status s;
@@ -200,8 +226,9 @@ static bool write_capture_request(NSString **reason) {
 @property(nonatomic, strong) NSTextField *status, *res, *frame, *sharpVal, *fixVal;
 @property(nonatomic, strong) NSSlider *slider, *fixStrength;
 @property(nonatomic, strong) NSButton *rcas, *pixelFix;
-@property(nonatomic, strong) NSSegmentedControl *profile;
-@property(nonatomic, strong) NSTextField *profileHint;
+@property(nonatomic, strong) NSSlider *modeSlider;
+@property(nonatomic, strong) NSTextField *modeValue, *modeExplanation, *profileHint;
+@property(nonatomic) int savedProfile;
 @property(nonatomic, strong) NSString *settingsError;
 @property(nonatomic, strong) NSButton *captureButton;
 @property(nonatomic, strong) NSTextField *captureMessage;
@@ -222,7 +249,7 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
 }
 
 - (void)build {
-    const CGFloat W = 660, H = 320;
+    const CGFloat W = 660, H = 460;
     NSUInteger style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskUtilityWindow
                      | NSWindowStyleMaskNonactivatingPanel | NSWindowStyleMaskHUDWindow;
     NSPanel *p = [[NSPanel alloc] initWithContentRect:NSMakeRect(40, 80, W, H)
@@ -237,6 +264,8 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     p.releasedWhenClosed = NO;
     p.alphaValue = 0.94;
     p.frameAutosaveName = @"FSR4Panel";
+    // Keep the saved position, but never restore the old 320-point layout size.
+    [p setContentSize:NSMakeSize(W, H)];
     NSView *v = p.contentView;
 
     CGFloat y = H - 26;
@@ -247,29 +276,47 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
 
     float sharp, strength; bool rc, fix; int profile;
     read_settings(sharp, rc, profile, fix, strength);
-    [v addSubview:label(@"Mode", 12, y, 50, NO)];
+    [v addSubview:label(@"FSR mode", 12, y, 74, YES)];
+    self.modeValue = label(@"", 90, y, W - 102, YES);
+    self.modeValue.alignment = NSTextAlignmentRight;
+    [v addSubview:self.modeValue]; y -= 28;
     g_has402 = has_fsr402();
     g_has_lossy2 = has_lossy2();
     g_has_lite_lossy = has_lite_lossy();
-    NSMutableArray *modes = [NSMutableArray arrayWithCapacity:6];
-    [modes addObject:@"FSR 4.1.2 Lite"];
-    if (g_has402) [modes addObject:@"FSR 4"];
-    [modes addObject:@"FSR 4.1.2 Exact"];
-    if (g_has_lossy2) [modes addObject:@"FSR 4.1.2 Lossy"];
-    if (g_has_lite_lossy) { [modes addObject:@"Lite Lossy"]; [modes addObject:@"Lossy tiled"]; }
-    self.profile = [NSSegmentedControl segmentedControlWithLabels:modes
-        trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(changed:)];
-    self.profile.frame = NSMakeRect(62, y - 4, W - 74, 26);
-    self.profile.selectedSegment = segment_for_profile(profile);
-    self.profile.toolTip = [NSString stringWithFormat:@"FSR 4.1.2 Lite: AMD's smaller INT8 architecture, evaluated every frame. "
-                           @"%@FSR 4.1.2 Exact: the full network every frame, fast PRE/POST math. "
-                           @"Lite Lossy: trained INT8 weights. Lossy tiled: experimental half tiles. "
-                           @"These require build/fsr412_lossy/initializers-lite-lossy.bin and import.json; run make lite-lossy-weights. "
-                           @"%@Switching resets history.",
-                           g_has402 ? @"FSR 4: the previous 4.0.2 model. " : @"",
-                           g_has_lossy2 ? @"FSR 4.1.2 Lossy: the full network with six retrained layers, run on every other frame. " : @""];
-    self.profile.accessibilityLabel = @"FSR mode";
-    [v addSubview:self.profile]; y -= 34;
+    int modes[8], count = panel_modes(modes);
+    self.savedProfile = profile;
+    [v addSubview:label(@"Quality", 18, y, 100, YES)];
+    NSTextField *performance = label(@"Performance", W - 138, y, 120, YES);
+    performance.alignment = NSTextAlignmentRight;
+    [v addSubview:performance]; y -= 30;
+    NSInteger stop = stop_for_profile(profile);
+    self.modeSlider = [NSSlider sliderWithValue:stop >= 0 ? stop : stop_for_profile(5)
+        minValue:0 maxValue:count - 1 target:self action:@selector(changed:)];
+    self.modeSlider.frame = NSMakeRect(64, y - 4, W - 128, 28);
+    self.modeSlider.numberOfTickMarks = count;
+    self.modeSlider.allowsTickMarkValuesOnly = YES;
+    self.modeSlider.tickMarkPosition = NSTickMarkPositionBelow;
+    // One change on release avoids recompiling every mode crossed while dragging.
+    self.modeSlider.continuous = NO;
+    self.modeSlider.toolTip = kModeExplanation;
+    self.modeSlider.accessibilityLabel = @"FSR processing mode, quality to performance";
+    [v addSubview:self.modeSlider];
+    for (int i = 0; i < count; ++i) {
+        const CGFloat center = 70 + (W - 140) * i / (count - 1);
+        NSTextField *name = label([NSString stringWithUTF8String:mode_title(modes[i], true)],
+                                  center - 58, y - 24, 116, NO);
+        name.alignment = NSTextAlignmentCenter;
+        name.font = [NSFont systemFontOfSize:11];
+        name.textColor = NSColor.lightGrayColor;
+        [v addSubview:name];
+    }
+    y -= 50;
+    self.modeExplanation = [NSTextField wrappingLabelWithString:kModeExplanation];
+    self.modeExplanation.frame = NSMakeRect(12, y - 48, W - 24, 48);
+    self.modeExplanation.font = [NSFont systemFontOfSize:11];
+    self.modeExplanation.textColor = NSColor.lightGrayColor;
+    self.modeExplanation.maximumNumberOfLines = 3;
+    [v addSubview:self.modeExplanation]; y -= 72;
     [v addSubview:label(@"Sharpness", 12, y, 70, NO)];
     self.slider = [NSSlider sliderWithValue:sharp minValue:0.0 maxValue:1.0 target:self action:@selector(changed:)];
     self.slider.frame = NSMakeRect(84, y - 2, W - 84 - 12 - 50, 22);
@@ -329,13 +376,9 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
 }
 
 - (void)changed:(id)sender {
-    // No selected segment means the saved mode is unavailable right now
-    // (for example Lite Lossy without its pinned weights). Keep it instead of
-    // silently rewriting the user's choice to Lite.
-    if (self.profile.selectedSegment < 0) return;
     const bool fix = self.pixelFix.state == NSControlStateValueOn;
-    int profile = segment_profile(self.profile.selectedSegment);
-    if (profile == 5 && fix) profile = 6;
+    const int profile = profile_after_change(self.savedProfile, (NSInteger)llround(self.modeSlider.doubleValue),
+                                              sender == self.modeSlider, fix);
     const bool saved = write_settings((float)self.slider.doubleValue, self.rcas.state == NSControlStateValueOn,
                                      profile, fix, (float)self.fixStrength.doubleValue);
     self.settingsError = saved ? nil : @"Could not save panel settings.";
@@ -406,10 +449,17 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
         self.frame.stringValue = @"Game frame: —";
     float s, strength; bool rc, fix; int profile;
     read_settings(s, rc, profile, fix, strength, st.ok && age <= 3.0 ? st.profile : -1);
-    self.profile.selectedSegment = segment_for_profile(profile);
+    self.savedProfile = profile;
+    const NSInteger stop = stop_for_profile(profile);
+    if (!self.modeSlider.highlighted)
+        self.modeSlider.doubleValue = stop >= 0 ? stop : stop_for_profile(5);
+    self.modeValue.stringValue = [NSString stringWithFormat:@"%s%@", mode_title(profile),
+                                  stop < 0 ? @" - not selectable" : @""];
+    self.modeSlider.accessibilityValueDescription = self.modeValue.stringValue;
+    self.modeSlider.alphaValue = stop >= 0 ? 1.0 : 0.5;
     // FSR4_VERSION=4.0.2 in the bottle pins the old model; the modes then do nothing.
     const bool pinned = st.ok && st.active && age <= 3.0 && st.version == "4.0.2" && profile != 3;
-    self.profile.enabled = !pinned;
+    self.modeSlider.enabled = !pinned;
     const bool lite = profile == 5 || profile == 6;
     self.pixelFix.hidden = !lite || pinned;
     NSControlStateValue wantFix = profile == 6 || (!lite && fix) ? NSControlStateValueOn : NSControlStateValueOff;
@@ -425,7 +475,7 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
         : (profile == 7 || profile == 8) && !g_has_lite_lossy
             ? @"Lite Lossy weights/import.json missing or invalid. Run make lite-lossy-weights; saved mode is unchanged."
         : profile == 7 ? @"FSR 4.1.2 Lite Lossy: trained INT8 weights, no fallback to ordinary Lite."
-        : profile == 8 ? @"FSR 4.1.2 Lite Lossy Tiled (experimental): half tiles with the trained INT8 weights."
+        : profile == 8 ? @"Tiled is no longer offered in the panel. Choose another mode; your saved setting is kept until then."
         : profile == 5 ? @"FSR 4.1.2 INT8 Lite: AMD's smaller model, evaluated every frame."
         : profile == 6 ? @"FSR 4.1.2 Lite with pixelization fix: wider filter where history is rejected."
         : profile == 3 ? @"FSR 4: previous model (4.0.2)."

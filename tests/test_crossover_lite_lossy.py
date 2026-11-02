@@ -26,6 +26,7 @@ class LiteLossyInstallerTest(unittest.TestCase):
             self.assertEqual(options["fetch_command"], "make lite-lossy-weights")
             self.assertFalse(options["weights_included"])
             self.assertEqual(options["experimental"], profile.endswith("-tiled"))
+            self.assertEqual(options["panel_selectable"], not profile.endswith("-tiled"))
             self.assertEqual(options["required_inputs"],
                              ["build/fsr412_lossy/initializers-lite-lossy.bin", "build/fsr412_lossy/import.json"])
             for path in options["required_inputs"]:

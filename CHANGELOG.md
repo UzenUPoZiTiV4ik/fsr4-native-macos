@@ -1,5 +1,22 @@
 # Releases
 
+## v3.0 (2026-11-02)
+
+A quality/performance panel and fresh, heat-aware 1080p/1440p model timings.
+Full notes: [docs/releases/v3.0.md](docs/releases/v3.0.md).
+
+- Replace the mode segments with a discrete **Quality -> Performance** slider.
+  Apply a mode once on release, not every stop crossed while dragging.
+- English guidance: this selects FSR processing modes, not resolution presets;
+  switching can stutter/pause. Try different modes to find the best quality/speed balance.
+- Remove Lite Lossy Tiled from the panel choices. Keep its CLI profile and saved
+  ID readable; unrelated sharpness/RCAS edits never silently replace a saved mode.
+- Fresh whole-frame M5 INT8 timings for all models at 1920x1080 and 2560x1440:
+  sustained warmups, serial per-frame interleaving, ABBA resolution order,
+  round ranges and thermal-pressure telemetry. New table on the main README.
+- Native AppKit click/layout tests and CPU benchmark-report validation.
+- No neural model, weight, default-profile or hook-ABI changes from v2.6.
+
 ## v2.6 (2026-11-02)
 
 FSR 4.1.2 Lite Lossy, the opt-in original-graph route, and macOS 27 /
@@ -21,7 +38,7 @@ CrossOver fixes. Full notes: [docs/releases/v2.6.md](docs/releases/v2.6.md).
   version display (issue #14), external-drive bottles (#11), and Xcode macro
   plugins for the Swift installer.
 
-## Unreleased (2026-11-01)
+### Additional v2.6 implementation notes (2026-11-01)
 
 - Optional FSR 4.1.2 Lite Lossy: statically decoded, pinned trained weights;
   native/scalar/SIMD integer backends, whole-frame reuse and panel/installer integration.

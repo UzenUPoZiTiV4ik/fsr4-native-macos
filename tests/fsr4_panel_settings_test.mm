@@ -40,8 +40,8 @@ int main() { @autoreleasepool { try {
     g_has402 = g_has_lossy2 = false;
     g_has_lite_lossy = has_lite_lossy();
     require(!g_has_lite_lossy, "missing weights offered Lite Lossy");
-    require(segment_for_profile(7) == -1 && segment_for_profile(8) == -1, "missing modes are shown");
-    require(segment_profile(-1) == 5, "documented unselected fallback changed");
+    require(stop_for_profile(7) == -1 && stop_for_profile(8) == -1, "missing modes are shown");
+    require(mode_profile(-1) == 5, "documented unselected fallback changed");
     fixture(base + "/initializers-lite-lossy.bin", "weights");
     require(!has_lite_lossy(), "initializer without receipt offered Lite Lossy");
     unlink((base + "/initializers-lite-lossy.bin").c_str());
@@ -65,13 +65,32 @@ int main() { @autoreleasepool { try {
     require(!has_lite_lossy(), "production pin accepted self-consistent replacement weights");
     g_has_lite_lossy = has_lite_lossy(fixturePin.c_str());
     require(g_has_lite_lossy, "both required inputs did not enable Lite Lossy");
-    require(segment_profile(segment_for_profile(7)) == 7, "Lite Lossy segment ID mismatch");
-    require(segment_profile(segment_for_profile(8)) == 8, "tiled segment ID mismatch");
+    require(mode_profile(stop_for_profile(7)) == 7, "Lite Lossy stop ID mismatch");
+    require(stop_for_profile(8) == -1, "tiled is still offered in the panel");
     {
         int modes[8]; const int count = panel_modes(modes);
-        require(count == 4 && modes[0] == 5 && modes[1] == 2 && modes[2] == 7 && modes[3] == 8,
-                "Lossy segments are not appended after the existing modes");
-        require(segment_for_profile(6) == segment_for_profile(5), "pixelization fix must reuse the Lite segment");
+        require(count == 3 && modes[0] == 2 && modes[1] == 5 && modes[2] == 7,
+                "quality/performance stops have the wrong order");
+        require(stop_for_profile(6) == stop_for_profile(5), "pixelization fix must reuse the Lite stop");
+        for (int optional = 0; optional < 4; ++optional) {
+            g_has402 = (optional & 1) != 0; g_has_lossy2 = (optional & 2) != 0;
+            const int available = panel_modes(modes);
+            require(modes[0] == 2 && modes[available - 1] == 7, "slider endpoints changed");
+            for (int i = 0; i < available; ++i) {
+                require(modes[i] != 8, "tiled is selectable");
+                require(mode_profile(i) == modes[i] && stop_for_profile(modes[i]) == i, "stop/ID round trip failed");
+            }
+        }
+        g_has402 = g_has_lossy2 = false;
+        require(profile_after_change(8, stop_for_profile(5), false, true) == 8, "sharpness edit silently replaced tiled");
+        require(profile_after_change(7, -1, true, false) == 7, "invalid stop replaced the saved mode");
+        require(profile_after_change(8, stop_for_profile(5), true, false) == 5, "explicit mode switch failed");
+        require(profile_after_change(2, stop_for_profile(5), true, true) == 6, "Lite switch lost the pixelization fix");
+        require(profile_after_change(6, stop_for_profile(2), true, true) == 2, "fix forced the wrong model");
+        require(profile_after_change(6, -1, false, false) == 5, "disabling the fix did not return to Lite");
+        require([kModeExplanation containsString:@"Render and output resolution stay unchanged"], "resolution disclaimer missing");
+        require([kModeExplanation containsString:@"stutters or pauses"] && [kModeExplanation containsString:@"Try different modes"],
+                "switching guidance missing");
     }
     require(profile_from_name("lite-lossy", -1) == 7 && profile_from_name("7", -1) == 7, "Lossy aliases rejected");
     require(profile_from_name("lite-lossy-tiled", -1) == 8 && profile_from_name("8", -1) == 8, "tiled aliases rejected");
@@ -85,7 +104,7 @@ int main() { @autoreleasepool { try {
         float sharp, strength; bool rcas, fix; int profile;
         read_settings(sharp, rcas, profile, fix, strength);
         require(profile == id && fabs(sharp - .6f) < 1e-4 && !rcas && !fix, "unavailable saved mode was discarded");
-        require(segment_for_profile(profile) == -1, "unavailable saved mode remains visible");
+        require(stop_for_profile(profile) == -1, "unavailable saved mode remains selectable");
         fixture(base + "/initializers-lite-lossy.bin", "weights");
         g_has_lite_lossy = has_lite_lossy(fixturePin.c_str());
     }

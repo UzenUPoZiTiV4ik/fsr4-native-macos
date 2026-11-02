@@ -39,7 +39,8 @@ def optional_profile_metadata():
     # turn an ordinary Lite release into an implicit GPL-weight install.
     required = ["build/fsr412_lossy/initializers-lite-lossy.bin", "build/fsr412_lossy/import.json"]
     return {profile: {"required_inputs": list(required), "weights_included": False,
-                      "fetch_command": "make lite-lossy-weights", "experimental": tiled}
+                      "fetch_command": "make lite-lossy-weights", "experimental": tiled,
+                      "panel_selectable": not tiled}
             for profile, tiled in (("int8-lite-lossy", False), ("int8-lite-lossy-tiled", True))}
 
 

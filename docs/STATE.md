@@ -1,6 +1,18 @@
 # FSR4-Metal — project state & handoff
 
-Last updated: **2026-10-30**, **FSR 4.1.2 Lossy**.
+Last updated: **2026-11-02**, **v3.0**.
+
+2026-11-02 (v3.0): the panel has a discrete Quality -> Performance mode
+slider, applied on release, with an English resolution/stutter disclaimer.
+Tiled is no longer a selectable stop; its CLI/saved ID remains compatible.
+Defaults, model weights and the hook ABI are unchanged. Fresh fanless M5
+1080p/1440p measurements use serial interleaving, sustained warmups and an
+ABBA resolution order: [FSR_V3_BENCHMARKS.md](FSR_V3_BENCHMARKS.md).
+The earlier dated measurements below are historical, not the v3.0 table.
+
+2026-11-02 (v2.6): optional Lite Lossy with pinned external trained data,
+whole-frame reuse and an original-graph route validated against the
+original-shader oracle. See [releases/v2.6.md](releases/v2.6.md).
 
 2026-10-30: `lossy2` (panel **FSR 4.1.2 Lossy**) ports the retrained weights
 and the depth-edge speck clamp of upstream `dll-2026-10-29`. The weights are

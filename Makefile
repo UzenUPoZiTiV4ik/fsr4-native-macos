@@ -282,6 +282,16 @@ build/tests/fsr4_panel_settings_test: tests/fsr4_panel_settings_test.mm tools/cr
 test-fsr4-panel-settings: build/tests/fsr4_panel_settings_test
 	$<
 
+build/tests/fsr4_panel_ui_test: tests/fsr4_panel_ui_test.mm tools/crossover/panel_app.mm Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -fobjc-arc $< -framework Foundation -framework AppKit -framework QuartzCore -o $@
+
+# Requires a macOS GUI session; does not launch a game or load the hook.
+test-fsr4-panel-ui: build/tests/fsr4_panel_ui_test
+	$<
+
+.PHONY: test-fsr4-panel-ui
+
 build/tests/fsr412_modes_ab: tools/bench/fsr412_modes_ab.mm src/fsr411_runtime.h src/fsr412_runtime.h src/fsr412_session.inc src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h src/fsr412_neural_tile.h src/fsr411_model.h Makefile
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -fobjc-arc -I src $< $(FRAMEWORKS) -o $@
@@ -292,6 +302,10 @@ test-fsr412-lossy: build/tests/fsr412_modes_ab
 
 bench-fsr412-modes: build/tests/fsr412_modes_ab
 	$< "$(CURDIR)" --bench 30 --size 864 560 1712 1112
+
+build/tests/fsr_modes_thermal: tools/bench/fsr_modes_thermal.mm src/fsr4_live.mm src/fsr411_live.mm src/fsr412_live.mm $(wildcard src/*.h src/*.inc) Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) -I src $< src/fsr4_live.mm src/fsr411_live.mm src/fsr412_live.mm $(FRAMEWORKS) $(ZLIB) -o $@
 
 # Opt-in int8-lite-lossy-original: production Runtime::encode versus the
 # original-shader oracle, byte for byte. Needs build/fsr412_upstream assets

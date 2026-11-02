@@ -108,9 +108,15 @@ cache in `build/`.
 ## Use
 
 Start the game and select **DLSS** in its graphics settings. The **FSR 4**
-panel opens next to the game:
+panel opens next to the game. Use its discrete **Quality -> Performance**
+slider to switch between FSR processing modes; the selected mode is applied
+when you release it. **Render and output resolution stay unchanged.**
+Switching may cause stutters or pauses while shaders are prepared and history
+resets. Try different modes and choose the best image-quality/performance
+balance for your game. The axis is guidance, not a measured quality score or
+a guarantee that each next mode is faster.
 
-- **FSR 4.1.2 Exact**: the full network every frame, best quality.
+- **FSR 4.1.2 Exact**: the full network every frame, quality-oriented.
 - **FSR 4.1.2 Lite**: AMD's compact INT8 architecture, evaluated every frame; the default.
 - **Pixelization fix** (shown with FSR 4.1.2 Lite): a wider current-frame
   filter where the network rejects history, so moving hair and thin detail
@@ -119,8 +125,14 @@ panel opens next to the game:
 - **FSR 4.1.2 Lossy**: six retrained layers and fewer dark specks in
   foliage, shown once `make lossy2-weights` has fetched its weights; closer
   to FSR 4 on thin detail, slower to follow brightness changes.
+- **FSR 4.1.2 Lite Lossy**: retrained compact INT8 network with inference
+  reuse; shown only with its pinned weights/receipt after `make lite-lossy-weights`.
+- **FSR 4**: optional older 4.0.2 model, only with its separately installed weights.
 - **Sharpness** and **RCAS** apply immediately.
 
+**Lossy Tiled is no longer selectable in the panel.** Its experimental
+`int8-lite-lossy-tiled` CLI profile remains available. An old saved mode is
+kept until you explicitly select another one, even if its data is unavailable.
 The old Lite mode has been removed. Status "FSR 4.1.2 active" means the
 game goes through the new FSR model. If it says
 inactive, the reason is shown in the panel and in `dist/crossover/hook.log`.

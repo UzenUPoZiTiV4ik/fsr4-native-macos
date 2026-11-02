@@ -3,11 +3,53 @@
 AMD FSR 4.1.2 INT8 Lite upscaling running natively on Apple Silicon (Metal).
 Works as a standalone tool and inside games via CrossOver (DLSS → FSR 4).
 
-![First release (FSR 4.0.2) vs FSR 4.1.2 Lite on Apple M5: 4.47 vs 2.70 ms per frame](docs/images/fsr4-first-vs-fsr412-lite-m5.png)
+## M5 performance: 1080p and 1440p (v3.0)
 
-The first release ran AMD's FSR 4.0.2 network at **4.47 ms** mean GPU time per
-frame on an M5; the current **4.1.2 Lite** does 2.70 ms on the same recorded
-sequence, 40% less. Method and limits: [FSR 4.1.2 stability](docs/FSR412_STABILITY.md).
+**Fresh 2026-11-02 measurements on a fanless MacBook Air M5, 16 GB.**
+Whole-upscaler GPU milliseconds, **not game FPS**. The value is the median
+of 12 round means; parentheses show the observed range of those means.
+
+| Mode | 1080p GPU ms | 1440p GPU ms |
+| --- | ---: | ---: |
+| FSR 4.1.2 Exact (`exact-fast`) | 4.52 (4.10-5.03) | 8.72 (8.42-8.93) |
+| FSR 4 (4.0.2, optional data) | 5.48 (5.01-6.13) | 10.47 (10.13-10.77) |
+| FSR 4.1.2 Lossy (`lossy2`) | 3.07 (2.75-3.35) | 5.73 (5.50-5.96) |
+| **FSR 4.1.2 Lite (default)** | 2.78 (2.52-3.13) | 5.37 (5.20-5.67) |
+| Lite + Pixelization fix (0.5) | 2.82 (2.52-3.15) | 5.35 (5.13-5.57) |
+| FSR 4.1.2 Lite Lossy (optional data) | 2.96 (2.69-3.23) | 5.84 (5.60-5.94) |
+
+### Other command-line variants
+
+| Mode | 1080p GPU ms | 1440p GPU ms |
+| --- | ---: | ---: |
+| Exact IEEE reference (`exact`, CLI) | 5.69 (5.19-6.42) | 11.03 (10.75-11.43) |
+| Legacy Lossy (`lossy`, retired from panel) | 3.03 (2.72-3.32) | 5.82 (5.59-5.96) |
+| Lossy + `--temporal-quality 1` | 4.62 (4.20-5.04) | 8.93 (8.62-9.15) |
+| Lossy + `--temporal-quality 2` | 4.14 (3.78-4.70) | 7.98 (7.76-8.27) |
+| Lite Lossy Tiled (512, CLI-only) | 3.73 (3.48-4.03) | 7.02 (6.64-7.20) |
+| Lite Lossy Original (CLI-only) | 8.64 (7.92-9.62) | 10.87 (10.44-11.28) |
+
+Input/output: **1280x720 -> 1920x1080** and **1706x960 -> 2560x1440**.
+Native INT8 MPP, auto-exposure on, RCAS off, identical deterministic synthetic
+motion/noise inputs. Reuse-eligible modes use 50:50 full/reused frames;
+tiled updates half the tiles on every measured frame.
+
+**Heat is included:** 120 s initial warmup per resolution, 30 s on repeat,
+resolution order 1080p/1440p/1440p/1080p; all models interleaved per frame.
+Each model/resolution has **768 measured frames**. All measured rounds had
+thermal pressure **fair**. The later 1080p Lite series was about **20% slower**
+than the earlier already-warmed series, so the table retains both and shows
+the range instead of advertising the cold/best result. Thermal-pressure
+state is not a temperature/frequency measurement.
+
+Lite Lossy is **not automatically faster** than Lite; quality and speed depend
+on the scene. These are observations on one synthetic fixture, not a quality
+ranking or guaranteed game timings. CLI-only variants do not appear as panel
+choices. [Method, full/reuse costs and thermal history](docs/FSR_V3_BENCHMARKS.md)
+| [Numeric report](docs/reports/m5-modes-v3-2026-11-02.json).
+
+Older recorded-capture measurements remain in
+[FSR 4.1.2 stability](docs/FSR412_STABILITY.md); they are not the table above.
 
 **Русская инструкция:** [docs/GUIDE.md](docs/GUIDE.md)
 
@@ -20,7 +62,7 @@ sequence, 40% less. Method and limits: [FSR 4.1.2 stability](docs/FSR412_STABILI
 
 ## Easiest: the FSR4 Installer app
 
-1. Download **FSR4-Installer-v2.5.dmg** from the
+1. Download **FSR4-Installer-v3.0.dmg** from the
    [latest release](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/releases/latest)
    and drag **FSR4 Installer** to Applications.
 2. First launch: the app is not notarized, so macOS blocks it. Open
@@ -59,29 +101,23 @@ Close the game and its bottle first. Then launch the game and turn on **DLSS**.
 The install prints `D3DMetal: … (redirect)` on CrossOver 24/25 or `(in-place)`
 on 26; on 26 it patches CrossOver's own D3DMetal (the app is changed only
 while installed) and the restore command below puts the original back.
-The **FSR 4** panel lets you switch modes on the fly:
+The **FSR 4** panel switches processing modes with a discrete
+**Quality -> Performance** slider. It applies the chosen mode after you release
+the thumb, not every intermediate mode you drag across.
 
 ![FSR4 Panel](docs/images/panel.png)
 
-| Panel mode | What it is | Speed on M5* |
-| --- | --- | ---: |
-| FSR 4.1.2 Lite | Three-pass AMD INT8 Lite model (default) | 2.70 ms mean* |
-| FSR 4.1.2 Lossy | Six retrained layers, speck clamp on depth edges (`lossy2`) | 2.78 ms mean with reuse* |
-| FSR 4.1.2 Lite Lossy | Retrained Lite with optional inference reuse | [new measurements](docs/FSR412_LOSSY.md) |
-| Lite Lossy Tiled | Experimental half-tile cadence (optional) | Slower in the current M5 tests |
-| FSR 4.1.2 Exact | Full quality, fast math (`exact-fast`) | ~4.3 ms |
-| FSR 4 | Older 4.0.2 model, for comparison | ~4.5 ms |
+This is **not a resolution/preset control**: the game's render and output
+resolution stay unchanged. Switching may cause stutters or pauses while
+shaders are prepared and temporal history resets. Try different modes and
+choose the best image-quality/performance balance for your game. The axis is
+a suggested trade-off, not a measured quality ranking or a speed guarantee.
 
-\* Recorded 864×560 → 1712×1112 sequence on M5, 480 measured frames per model,
-interleaved runs, RCAS off. FSR 4.1.2: P99 3.87 ms, maximum 4.93 ms, full
-inference on every frame. Lossy: maximum 5.56 ms, 240 neural frames
-and 240 inference reuses. Both measured before v2.3, which makes Lite about
-9% and Lossy about 10% faster with the same picture (synthetic 1712×1112
-scene, against v2.2: Lite 2.56 -> 2.32 ms median, Lossy 2.94 -> 2.65 ms
-mean); see [FSR 4.1.2 Lossy](docs/FSR411_LOSSY2.md) for the numbers and the
-Lossy vs Lite comparison. [Method and validation](docs/FSR412_STABILITY.md).
-These are standalone replay GPU times, not a guaranteed ceiling in a running game.
-The old FSR 4.1 Lite mode has been removed from the panel.
+Exact, Lossy, Lite (default) and Lite Lossy are the current stops; optional
+models appear only when their required data is installed. Pixelization fix
+stays a separate checkbox/strength slider for Lite. **Lossy Tiled is no
+longer offered in the panel**, but its CLI profile remains available. A saved
+unavailable or retired mode is kept until you explicitly choose another one.
 
 Undo the bottle change (on CrossOver 26 this also restores the original
 D3DMetal; if another bottle uses the same patched framework, restore asks you
@@ -122,7 +158,8 @@ its trained weights into `build/`; they are not distributed with this MIT reposi
 `make lite-lossy-weights` statically imports the pinned upstream Lite Lossy
 weights into `build/` (GPL-trained data, not included in the MIT release).
 Use `--fsr-version 4.1.2 --profile int8-lite-lossy`; the panel also offers it
-once the verified inputs are present. `int8-lite-lossy-tiled` is experimental.
+once the verified inputs are present. `int8-lite-lossy-tiled` is experimental
+and CLI-only; it is not offered by the panel.
 `--fsr-version 4.1.1 --profile lossy2 --temporal-quality 1` enables fine motion
 and persistent-change repairs; `2` uses optional fast Wave32 notes.
 Defaults are unchanged. [Implementation, tradeoffs, timings and tests](docs/FSR412_LOSSY.md).
@@ -137,6 +174,7 @@ Lite Lossy path and is not a default.
 
 ```sh
 make test                 # includes the installer app tests
+make test-fsr4-panel-ui    # native AppKit clicks/layout; requires a GUI session
 make build-fsr411-tests
 make test-fsr411-gpu
 make test-fsr412-optimization
@@ -146,8 +184,8 @@ make test-fsr411-mpp-fast  # GPU-probed M5 kernels and forced fallback
 make test-fsr-pre-m5      # forced SIMD and exact Winograd
 ```
 
-Build the installer app and DMG: `make installer INSTALLER_VERSION=v2.6`
-(or `python3 tools/installer/build_app.py v2.6 --dmg`).
+Build the installer app and DMG: `make installer INSTALLER_VERSION=v3.0`
+(or `python3 tools/installer/build_app.py v3.0 --dmg`).
 
 ## Documentation
 
@@ -158,7 +196,8 @@ Build the installer app and DMG: `make installer INSTALLER_VERSION=v2.6`
 | FSR 4.1.2 Lossy (formerly Lite 2) | [docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md) |
 | Lite Lossy, tiled inference and new temporal repairs | [docs/FSR412_LOSSY.md](docs/FSR412_LOSSY.md) |
 | Original-shader oracle, geometry and POST CNB | [docs/FSR412_UPSTREAM_ORACLE.md](docs/FSR412_UPSTREAM_ORACLE.md) |
-| v2.6 release notes | [docs/releases/v2.6.md](docs/releases/v2.6.md) |
+| v3.0 release notes | [docs/releases/v3.0.md](docs/releases/v3.0.md) |
+| Heat-aware 1080p/1440p model measurements | [docs/FSR_V3_BENCHMARKS.md](docs/FSR_V3_BENCHMARKS.md) |
 | M5 INT8 register-chain optimization | [docs/FSR_M5_INT8_OPTIMIZATION.md](docs/FSR_M5_INT8_OPTIMIZATION.md) |
 | Pre-M5 SIMD optimization and exact Winograd | [docs/FSR_PRE_M5_OPTIMIZATION.md](docs/FSR_PRE_M5_OPTIMIZATION.md) |
 | Latest memory optimization and timing limits | [docs/FSR411_MEMORY_OPTIMIZATION.md](docs/FSR411_MEMORY_OPTIMIZATION.md) |
