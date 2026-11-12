@@ -107,6 +107,12 @@ cache in `build/`.
 
 ## Use
 
+For optional ANR frame generation, use the separate
+`frame-generation anr --anr-runtime /path/to/prepared/runtime --bottle ...`
+command. It replaces MetalFX FG used by DLSS FG without changing your saved
+SR mode. [Required inputs, tests and game limitations](../../docs/ANR_RESEARCH.md).
+The original test kit must first be prepared locally; it is not a game library.
+
 Start the game and select **DLSS** in its graphics settings. The **FSR 4**
 panel opens next to the game. Use its discrete **Quality -> Performance**
 slider to switch between FSR processing modes; the selected mode is applied

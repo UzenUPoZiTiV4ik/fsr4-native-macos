@@ -45,6 +45,9 @@ typedef struct Fsr4LiveFrameV2 {
 } Fsr4LiveFrameV2;
 
 int fsr4_encode_live_frame_v2(const Fsr4LiveFrameV2 *frame);
+// Optional scaler fence, without changing either existing frame ABI. Used by
+// Netal's texture adapter; legacy FSR entry points continue to work unchanged.
+int fsr4_encode_live_frame_with_fence_v2(const Fsr4LiveFrameV2 *frame, void *fence);
 
 // A frame that uses the original MetalFX scaler creates a temporal gap. The
 // next FSR frame must reset. The lifecycle callback drops a destroyed scaler's
@@ -122,7 +125,10 @@ void fsr4_live_set_sharpness(float sharpness, int rcas);
 // pixelization fix ("int8-lite-pixfix", alias "int8-lite-hair"),
 // 7 = Lite Lossy ("int8-lite-lossy", alias "lite-lossy"),
 // 8 = experimental half-tile Lite Lossy ("int8-lite-lossy-tiled",
-// alias "lite-lossy-tiled"). Lossy modes require the pinned initializer
+// alias "lite-lossy-tiled"), 9 = experimental DLSS SR via Netal ("netal",
+// alias "dlss"). Netal requires separately linked source and a complete local
+// netal.sr.runtime.v2 Preset K bundle; no NVIDIA models are bundled.
+// Lossy modes require the pinned initializer
 // and receipt in build/fsr412_lossy (fetch with make lite-lossy-weights).
 // FSR4_PROFILE sets the initial preference; panel.conf overrides it unless
 // FSR4_SETTINGS=none. The 4.1.1 bridge includes 0-2 in its session/history
@@ -133,7 +139,8 @@ void fsr4_live_get_profile(int *profile);
 void fsr4_live_get_pixelization_strength(float *strength);
 void fsr4_live_set_profile(int profile);
 // Model the live bridge encodes: "4.0.2" when FSR4_VERSION=4.0.2 or the
-// profile is 3, "4.1.2" for INT8 Lite modes 5-8, otherwise "4.1.1".
+// profile is 3, "netal" for mode 9, "4.1.2" for INT8 Lite modes 5-8,
+// otherwise "4.1.1". A legacy FSR4_VERSION pin still takes precedence.
 const char *fsr4_live_model_version(void);
 
 // FSR4_PANEL=1: launch dist/crossover/FSR4 Panel.app once (src/fsr4_panel.mm).

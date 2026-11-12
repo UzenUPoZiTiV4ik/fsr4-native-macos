@@ -29,6 +29,10 @@ HOOK_SRC = ROOT / "hook" / "fsr4_metalfx.m"
 LIVE_SRC = ROOT / "src" / "fsr4_live.mm"
 LIVE411_SRC = ROOT / "src" / "fsr411_live.mm"
 LIVE412_SRC = ROOT / "src" / "fsr412_live.mm"
+NETAL_SRC = ROOT / "src" / "netal_live.mm"
+sys.path.insert(0, str(ROOT / "tools"))
+from netal_integration import prepare_sources, validate_runtime
+from anr.manifest import validate_runtime as validate_anr_runtime
 PANEL_SRC = ROOT / "src" / "fsr4_panel.mm"          # hook side: status publish + app launch
 PANEL_APP_SRC = ROOT / "tools" / "crossover" / "panel_app.mm"
 PANEL_APP = DIST / "FSR4 Panel.app"
@@ -64,6 +68,9 @@ PANEL_KEY = "FSR4_PANEL"
 VERSION_KEY = "FSR4_VERSION"
 PROFILE_KEY = "FSR4_PROFILE"
 FRAMEWORK_KEY = "FSR4_FRAMEWORK"
+NETAL_RUNTIME_KEY = "FSR4_NETAL_RUNTIME"
+FG_KEY = "FSR4_FG"
+ANR_RUNTIME_KEY = "FSR4_ANR_RUNTIME"
 METALFX_KEY = "D3DM_ENABLE_METALFX"
 ORIGINAL_SUFFIX = ".fsr4-original"
 HOOK_NAME = "libfsr4hook.dylib"
@@ -76,8 +83,9 @@ LITE_LOSSY_INITIALIZER_SHA256 = "c77c2d1a4d119ed76d94b8c23335490cc38280db3346c72
 LITE_LOSSY_PROFILES = ("int8-lite-lossy", "int8-lite-lossy-tiled")
 LITE_PROFILES = ("int8-lite", "int8-lite-pixfix", "int8-lite-hair", *LITE_LOSSY_PROFILES)
 LEGACY_PROFILES = ("exact", "exact-fast", "lossy", "lossy2", "fsr4")
-PROFILES = (*LITE_PROFILES, *LEGACY_PROFILES)
-OURS = (KEY, LOG_KEY, ROOT_KEY, REPLACE_KEY, PANEL_KEY, VERSION_KEY, PROFILE_KEY, FRAMEWORK_KEY)
+PROFILES = (*LITE_PROFILES, *LEGACY_PROFILES, "netal")
+OURS = (KEY, LOG_KEY, ROOT_KEY, REPLACE_KEY, PANEL_KEY, VERSION_KEY, PROFILE_KEY, FRAMEWORK_KEY,
+        NETAL_RUNTIME_KEY, FG_KEY, ANR_RUNTIME_KEY)
 
 
 def run(cmd, **kw):
@@ -89,7 +97,9 @@ def sdk():
     return subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
 
 
-def build_hook(log_path: Path) -> Path:
+def build_hook(log_path: Path, netal_source=None) -> Path:
+    netal_source = netal_source or os.environ.get("FSR4_NETAL_SOURCE")
+    generated = prepare_sources(netal_source) if netal_source else None
     DIST.mkdir(parents=True, exist_ok=True)
     out = DIST / "libfsr4hook.dylib"
     common = ["-O2", "-fobjc-arc", "-arch", "x86_64", f"-mmacosx-version-min={MIN_MACOS}",
@@ -99,9 +109,32 @@ def build_hook(log_path: Path) -> Path:
     run(["clang++", "-c", "-std=c++17", *common, str(LIVE411_SRC), "-o", str(DIST / "live411.o")])
     run(["clang++", "-c", "-std=c++17", *common, str(LIVE412_SRC), "-o", str(DIST / "live412.o")])
     run(["clang++", "-c", "-std=c++17", *common, str(PANEL_SRC), "-o", str(DIST / "panel.o")])
+    anr_objects = []
+    for name, source in (("anr_hook", ROOT / "hook/anr_metalfx.mm"),
+                         ("anr_live", ROOT / "src/anr_live.mm"), ("anr_runtime", ROOT / "src/anr_runtime.mm")):
+        object_path = str(DIST / (name + ".o"))
+        run(["clang++", "-c", "-std=c++17", *common, str(source), "-o", object_path])
+        anr_objects.append(object_path)
+    # Keep the old helper intact for hooks already mapped in a running game.
+    # UI v2 adds noise-aware recomposition and sampled statistics (ABI 36 bytes).
+    helper = ROOT / "build/anr_helpers_ui_v2.metallib"
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    run(["xcrun", "metal", "-std=metal3.0", "-O2", "-c", str(ROOT / "src/anr_helpers.metal"),
+         "-o", str(ROOT / "build/anr_helpers_ui_v2.air")])
+    run(["xcrun", "metallib", str(ROOT / "build/anr_helpers_ui_v2.air"), "-o", str(helper)])
+    netal_objects = [str(DIST / "netal.o")]
+    netal_flags = ["-DFSR4_WITH_NETAL=1", "-I", str(generated)] if generated else []
+    run(["clang++", "-c", "-std=c++17", *common, *netal_flags, str(NETAL_SRC), "-o", netal_objects[0]])
+    if generated:
+        for name in ("dlss_sr_session", "dlss_sr_texture_adapter"):
+            out_object = str(DIST / ("netal_" + name + ".o"))
+            run(["clang++", "-c", "-std=c++20", *common, "-I", str(generated),
+                 str(generated / (name + ".mm")), "-o", out_object])
+            netal_objects.append(out_object)
     run([
         "clang++", "-dynamiclib", *common,
         str(DIST / "hook.o"), str(DIST / "live.o"), str(DIST / "live411.o"), str(DIST / "live412.o"), str(DIST / "panel.o"),
+        *netal_objects, *anr_objects,
         "-framework", "Foundation", "-framework", "Metal", "-framework", "MetalFX",
         # Darwin ld needs an explicit allowance as well as weak_import when
         # linking an encoder without the optional 4.1.1 symbol. The public
@@ -114,6 +147,13 @@ def build_hook(log_path: Path) -> Path:
         "-o", str(out),
     ])
     run(["codesign", "-f", "-s", "-", str(out)])
+    receipt = DIST / "netal-build.json"
+    if generated:
+        receipt.write_text(json.dumps({"schema": "fsr4_netal_link_v1", "linked": True,
+            "hook_sha256": hashlib.sha256(out.read_bytes()).hexdigest(),
+            "source_receipt": json.loads((generated / "source-receipt.json").read_text())}, indent=2) + "\n")
+    elif receipt.exists():
+        receipt.unlink()
     return out
 
 
@@ -142,6 +182,92 @@ def build_live() -> Path:
         "-o", str(out),
     ])
     return out
+
+
+def build_anr_live() -> Path:
+    out = DIST / "anr_live_test"
+    run(["clang++", "-O2", "-fobjc-arc", "-std=c++17", "-arch", "x86_64",
+         f"-mmacosx-version-min={MIN_MACOS}", "-isysroot", sdk(), "-I", str(ROOT / "src"),
+         str(ROOT / "tests/anr_live_test.mm"), str(DIST / "libfsr4hook.dylib"),
+         "-framework", "Foundation", "-framework", "Metal", "-framework", "MetalFX",
+         "-Wl,-rpath", str(DIST), "-o", str(out)])
+    return out
+
+
+def preserve_panel_preferences(conf: Path):
+    text = conf.read_text()
+    hit = re.search(r'^\s*"FSR4_ROOT"\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    if not hit:
+        return
+    old_root = Path(hit.group(1)).expanduser()
+    if not old_root.is_absolute() or old_root.resolve() == ROOT.resolve():
+        return
+    source = old_root / "dist/crossover/panel.conf"
+    if not source.is_file():
+        return
+    target = DIST / "panel.conf"
+    previous = target.read_bytes() if target.exists() else None
+    if previous is not None and previous != source.read_bytes():
+        backup = DIST / "backups/panel-before-anr.conf"
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        if not backup.exists():
+            backup.write_bytes(previous)
+    temporary = target.with_name(target.name + f".tmp.{os.getpid()}")
+    shutil.copy2(source, temporary)
+    temporary.replace(target)
+    print("preserved existing SR panel sharpness/profile preferences")
+
+
+def cmd_frame_generation(args):
+    runtime = None
+    netal_source = getattr(args, "netal_source", "") or os.environ.get("FSR4_NETAL_SOURCE")
+    netal_runtime = getattr(args, "netal_runtime", "") or os.environ.get(NETAL_RUNTIME_KEY)
+    if args.mode == "anr" and netal_source:
+        try:
+            prepare_sources(netal_source)
+            if netal_runtime:
+                netal_runtime = validate_runtime(netal_runtime)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise SystemExit("Netal: " + str(error)) from error
+    elif args.mode == "anr" and netal_runtime:
+        raise SystemExit("--netal-runtime requires --netal-source")
+    if args.mode == "anr":
+        try:
+            runtime = validate_anr_runtime(args.anr_runtime)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise SystemExit("ANR: " + str(error)) from error
+    bottle = resolve_bottle(args.bottle) if args.bottle else default_bottle(crossover=args.crossover)
+    # Do not change the SR profile or panel preferences. Install the combined
+    # hook and update only FG/root/framework keys in the selected bottle.
+    if args.mode == "anr":
+        framework = find_framework(args.crossover)
+        hook = build_hook(DIST / "hook.log", netal_source=netal_source)
+        binary = copy_framework(hook, framework)
+        test = build_anr_live()
+        test_runtime = runtime if (runtime / "manifest.json").is_file() else runtime / "1920x1080"
+        if not (test_runtime / "manifest.json").is_file():
+            test_runtime = next(p.parent for p in runtime.glob("*/manifest.json"))
+        if (test_runtime / "manifest.json").is_file():
+            run(["arch", "-x86_64", str(test), str(ROOT), str(test_runtime), "classic"])
+            run(["arch", "-x86_64", str(test), str(ROOT), str(test_runtime), "metal4"])
+        values = {KEY: str(binary), ROOT_KEY: str(ROOT), LOG_KEY: str(DIST / "hook.log"),
+                  FG_KEY: "anr", ANR_RUNTIME_KEY: str(runtime), METALFX_KEY: "1"}
+        if netal_source:
+            if netal_runtime:
+                values[NETAL_RUNTIME_KEY] = str(netal_runtime)
+                receipt_path = DIST / "netal-build.json"
+                receipt = json.loads(receipt_path.read_text())
+                receipt["runtime"] = str(netal_runtime)
+                receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+            print("Netal SR engine is linked" + (" with a validated runtime" if netal_runtime else
+                  "; SR profile remains unchanged because a complete Netal runtime is not supplied"))
+        print("ANR FG hook verified; only the chosen bottle will use the new runtime")
+        preserve_panel_preferences(bottle)
+        build_panel_app()
+        conf_set(bottle, values)
+    else:
+        conf_set(bottle, {FG_KEY: "metalfx"})
+    print("Frame generation selected: " + args.mode + "; SR profile/settings were not changed")
 
 
 def build_panel_app() -> Path:
@@ -796,6 +922,36 @@ def build_reference(env):
 
 
 def cmd_install(args):
+    netal_source = getattr(args, "netal_source", "") or os.environ.get("FSR4_NETAL_SOURCE")
+    netal_runtime = getattr(args, "netal_runtime", "") or os.environ.get(NETAL_RUNTIME_KEY)
+    fg = getattr(args, "frame_generation", "metalfx")
+    anr_runtime = getattr(args, "anr_runtime", "") or os.environ.get(ANR_RUNTIME_KEY)
+    if fg == "anr":
+        if not anr_runtime:
+            raise SystemExit("--frame-generation anr requires --anr-runtime (prepared model, not the test kit)")
+        try:
+            anr_runtime = validate_anr_runtime(anr_runtime)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise SystemExit("ANR: " + str(error)) from error
+    if netal_runtime and not netal_source:
+        raise SystemExit("--netal-runtime requires --netal-source (or FSR4_NETAL_SOURCE)")
+    if netal_source and args.profile != "netal":
+        try:
+            prepare_sources(netal_source)
+            if netal_runtime:
+                netal_runtime = validate_runtime(netal_runtime)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise SystemExit("Netal: " + str(error)) from error
+    if args.profile == "netal":
+        if args.fsr_version == "4.0.2":
+            raise SystemExit("Netal cannot be selected with --fsr-version 4.0.2 (the legacy model pin)")
+        if not netal_source or not netal_runtime:
+            raise SystemExit("Netal requires --netal-source and --netal-runtime (complete Preset K SR bundle); models are not downloaded")
+        try:
+            prepare_sources(netal_source)
+            netal_runtime = validate_runtime(netal_runtime)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise SystemExit("Netal: " + str(error)) from error
     if args.profile in LITE_LOSSY_PROFILES:
         if args.fsr_version != "4.1.2":
             raise SystemExit("Lite Lossy profiles require --fsr-version 4.1.2")
@@ -821,7 +977,7 @@ def cmd_install(args):
     log = DIST / "hook.log"
     DIST.mkdir(parents=True, exist_ok=True)
     log.write_text("")
-    hook = build_hook(log)
+    hook = build_hook(log, netal_source=netal_source)
     binary = copy_framework(hook, framework)
     env = os.environ.copy()
     env["FSR4_HOOK_LOG"] = str(log)
@@ -845,9 +1001,25 @@ def cmd_install(args):
     env["FSR4_REPLACE"] = "1"
     env["FSR4_SHARPNESS"] = "0"   # the CLI reference frame has no RCAS
     env["FSR4_SETTINGS"] = "none"  # ignore the panel's saved sharpness
-    ref = build_reference(env)
+    # The existing synthetic FSR fixture has normal depth and cannot prove
+    # DLSS output. Still verify the FSR router, then require an independent
+    # Netal session initialization for the supplied, fully validated runtime.
+    reference_env = env.copy()
+    if args.profile == "netal":
+        reference_env[VERSION_KEY] = "4.1.2"
+        reference_env[PROFILE_KEY] = "int8-lite"
+    ref = build_reference(reference_env)
     run(["arch", "-x86_64", str(live),
-         str(ROOT / "testcases" / "testcase_quality_720to1080"), str(ref)], env=env)
+         str(ROOT / "testcases" / "testcase_quality_720to1080"), str(ref)], env=reference_env)
+    if args.profile == "netal":
+        run([sys.executable, str(ROOT / "tools/netal_probe.py"), "--source", str(netal_source),
+             "--runtime", str(netal_runtime), "--arch", "x86_64"], cwd=ROOT)
+        print("Netal session initialized; game image quality is not validated by the FSR fixture")
+    if netal_source and netal_runtime:
+        receipt_path = DIST / "netal-build.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["runtime"] = str(netal_runtime)
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     print(loaded.strip())
     build_panel_app()
     installed = None
@@ -868,13 +1040,18 @@ def cmd_install(args):
             ROOT_KEY: str(ROOT),
             REPLACE_KEY: "1",
             VERSION_KEY: args.fsr_version,
+            FG_KEY: fg,
         }
         if mode == "inplace":
             values[FRAMEWORK_KEY] = str(installed)
         else:
             values[KEY] = str(binary)
+        if fg == "anr":
+            values[ANR_RUNTIME_KEY] = str(anr_runtime)
         if args.fsr_version in ("4.1.1", "4.1.2"):
             values[PROFILE_KEY] = args.profile
+        if netal_source and netal_runtime:
+            values[NETAL_RUNTIME_KEY] = str(netal_runtime)
         if args.panel:
             values[PANEL_KEY] = "1"   # status/sharpness panel in the game process
         # DLSS reaches MetalFX only with this D3DMetal switch. Not in OURS:
@@ -948,7 +1125,12 @@ def main():
     i.add_argument("--fsr-version", choices=("4.0.2", "4.1.1", "4.1.2"), default="4.1.2",
                    help="FSR model version for the live bridge and installation test (default: 4.1.2)")
     i.add_argument("--profile", choices=PROFILES, default="int8-lite",
-                   help="initial panel mode: FSR 4.1.2 Lite, Lite Lossy (tiled is experimental), or legacy 4.1.1 profiles")
+                   help="initial panel mode: FSR variants or experimental Netal DLSS SR")
+    i.add_argument("--netal-source", default="", help="pinned local Netal checkout to link SR (no upstream hook)")
+    i.add_argument("--netal-runtime", default="", help="complete local netal.sr.runtime.v2 Preset K bundle; no model download")
+    i.add_argument("--frame-generation", choices=("metalfx", "anr"), default="metalfx",
+                   help="replace the MetalFX FG used for DLSS FG with experimental ANR")
+    i.add_argument("--anr-runtime", default="", help="prepared ANR Metal runtime or resolution-profile directory")
     i.add_argument("--panel", action="store_true",
                    help="also set FSR4_PANEL=1 in the bottle (status/sharpness panel)")
     i.set_defaults(func=cmd_install)
@@ -957,6 +1139,14 @@ def main():
                    help="bottle name or path, as given to install "
                         "(default: the only bottle with fsr4-mac keys)")
     r.set_defaults(func=cmd_restore)
+    fg = sub.add_parser("frame-generation", help="switch FG without changing the upscaler profile")
+    fg.add_argument("mode", choices=("anr", "metalfx"))
+    fg.add_argument("--anr-runtime", default="", help="prepared ANR runtime or profile directory")
+    fg.add_argument("--bottle", default="", help="bottle name or full cxbottle.conf path")
+    fg.add_argument("--crossover", default="", help="CrossOver app to copy D3DMetal from")
+    fg.add_argument("--netal-source", default="", help="also link the pinned Netal SR source, without changing the current SR profile")
+    fg.add_argument("--netal-runtime", default="", help="optional complete local Netal SR runtime; no automatic model download")
+    fg.set_defaults(func=cmd_frame_generation)
     args = p.parse_args()
     args.func(args)
 

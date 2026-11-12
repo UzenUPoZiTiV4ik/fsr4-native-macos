@@ -1,0 +1,100 @@
+{
+  "schema": "fsr4_anr_integration_report_v1",
+  "release": "FG-V.B14",
+  "device": "Apple M5",
+  "nvidia_model_required": false,
+  "dll_validation": {
+    "nvngx_dlss.dll": {
+      "version": "310.8.0.0",
+      "sha256": "c85f971ce023c9f3492fc7455f0b01a24ba18ea39636407a846902c4360b0b7e",
+      "matches_netal_sr": true
+    },
+    "nvngx_dlssg.dll": {
+      "version": "310.8.0.0",
+      "sha256": "5d5cbf14d2727d47f93fd10bf77bd91708ae122482a6f86fd564971641ebd47b",
+      "matches_netal_fg": true
+    }
+  },
+  "independent_runtime": {
+    "testkit_executable_used_in_game": false,
+    "supported_game_multiplier": 2,
+    "native_kernel_count": 7,
+    "converted_kernel_count": 21,
+    "packed_native_kernel_count": 3,
+    "packed_converted_kernel_count": 25,
+    "cpu_write_slots": 4,
+    "original_weights_and_shaders_modified": false
+  },
+  "quality": [
+    {"width": 1920, "height": 1080, "backend": "native", "t": 0.5, "psnr_db": 87.87186825755708, "bar_db": 79.3012, "passes": true, "gpu_median_ms": 4.068791666666667},
+    {"width": 1920, "height": 1080, "backend": "packed", "t": 0.5, "psnr_db": 83.90007610798804, "bar_db": 79.3012, "passes": true, "gpu_median_ms": 3.830333333333334},
+    {"width": 1920, "height": 1080, "backend": "packed", "t": 0.75, "psnr_db": 85.3342904112369, "bar_db": 80.9135, "passes": true, "gpu_median_ms": 3.786291666666667},
+    {"width": 2560, "height": 1440, "backend": "packed", "t": 0.5, "psnr_db": 84.2057539353778, "bar_db": 79.2153, "passes": true, "gpu_median_ms": 6.905875},
+    {"width": 2560, "height": 1440, "backend": "packed", "t": 0.75, "psnr_db": 85.44224679711556, "bar_db": 80.7649, "passes": true, "gpu_median_ms": 6.884916666666667},
+    {"width": 3840, "height": 2160, "backend": "packed", "t": 0.5, "psnr_db": 84.34174137597095, "bar_db": 79.9559, "passes": true, "gpu_median_ms": 14.775375},
+    {"width": 3840, "height": 2160, "backend": "packed", "t": 0.75, "psnr_db": 85.86739936045758, "bar_db": 81.3325, "passes": true, "gpu_median_ms": 14.76}
+  ],
+  "ui_recomposition": {
+    "policy": "noise-aware adaptive overlay residual for precomposited UI, premultiplied alpha for separate UI",
+    "helper": "build/anr_helpers_ui_v2.metallib",
+    "synthetic_shader_cases": 32,
+    "shader_formats": ["PQ10", "linear HDR", "hardware sRGB", "8-bit SDR"],
+    "full_screen_dither_phase_regression_pass": true,
+    "completed_sparse_ui_stats_pass": true,
+    "world_control_differs_from_real_frames": true,
+    "opaque_hud_pixels_exact_per_live_run": 8192,
+    "live_generated_frames_per_run": 11,
+    "changing_ui_modes_in_flight": 3,
+    "metal3_metal4_and_rosetta_pass": true,
+    "unsafe_ui_rejection_pass": true,
+    "synthetic_receipts_disabled": true,
+    "installed_hook_sha256": "af2f17253ea0b7cf77961f0f88f18942964dde958f94a7ac234c06af54e97846",
+    "installed_backup": "dist/crossover/backups/anr-ui-stability.20261112-233320",
+    "bottle_config_and_panel_settings_unchanged": true,
+    "spider_man_gameplay_verified": false
+  },
+  "camera_shake_investigation": {
+    "sr_captures_analyzed": 8,
+    "sr_frames_analyzed": 64,
+    "moving_sequences_matching_declared_mv": 7,
+    "game_encoding_observed": true,
+    "game_generated_counter_observed": 5197,
+    "game_fallback_counter_observed": 0,
+    "old_binary_ui_mask_defect_reproduced": true,
+    "old_shader_value": 0.130987,
+    "expected_generated_world_value": 0.430978,
+    "moving_midpoints_metal3_and_metal4_verified": true,
+    "full_and_1280x720_motion_inputs_verified": true,
+    "changing_jitter_stationary_control_verified": true,
+    "native_static_evidence": "build/anr_diagnostics/d3dmetal-native-evidence.json",
+    "game_shake_fixed_confirmed": false,
+    "claim_scope": "Verified shader phase-switch bug; suspected contributor to user-reported game shake, pending new game validation."
+  },
+  "timing_scope": "Separate standalone fixed-pair replay runs, eight warmups, calibrated Metal 4 GPU timestamps; not game FPS or frame pacing. No import/export in these times.",
+  "verification": {
+    "metalfx_metal3": true,
+    "metalfx_metal4": true,
+    "rosetta_x86_64": true,
+    "pq10_and_linear_hdr": true,
+    "three_queued_frames": true,
+    "stationary_output_readback": true,
+    "python_tests_ran": 284,
+    "python_tests_skipped": 4,
+    "python_tests_failed": 0,
+    "game_integration_verified": false,
+    "bottle_modified": true,
+    "installed_bottle": "Игры",
+    "installed_frame_generation": "anr",
+    "netal_engine_linked": true,
+    "netal_runtime_provisioned": false,
+    "upscaler_profile_preserved": "exact-fast",
+    "backup": "dist/crossover/backups/Игры.cxbottle.conf"
+  },
+  "limitations": [
+    "Only exact prepared 1080p, 1440p and 2160p output profiles.",
+    "UI recomposition requires matching read-space/formats and safe resource layouts; distortion and nonzero FG offsets still retain MetalFX.",
+    "Precomposited UI opacity is estimated from two RGB images; arbitrary translucent/low-contrast HUD reconstruction is not exact.",
+    "Game colorspace/camera conventions, artifact behavior and actual presentation are not yet tested.",
+    "Extracted models, shaders, original executable and Apple converter remain local and are excluded from source release packaging."
+  ]
+}

@@ -24,6 +24,9 @@ EXCLUDE_PREFIXES = (
     "third_party/fsr4/internal/shaders/fsr4_model_v07_i8_",  # FSR 4.0.2 weights
     "build/fsr412_lossy/",  # GPL-derived initializer stays an explicit external fetch
     "build/fsr412_upstream/",  # translated original shaders/data stay external
+    "build/netal_src/", "build/netal_runtime/",  # optional source/model stay local
+    "build/anr",  # proprietary models, kernel packs and recordings stay local
+    "tests/netal",  # initialization harness is a source-only developer tool
     "tests/", "tools/bench/", "tools/installer/", "tools/fsr411/test_", "docs/benchmarks/",
     "docs/FSR402_", "docs/GUIDE_FSR402", "docs/HARDWARE_FSR402", "patches/",
     "build_shaders.sh", "TESTDATA.md", "VERIFICATION.md", ".gitignore",
@@ -31,6 +34,10 @@ EXCLUDE_PREFIXES = (
 
 
 def included(path: str) -> bool:
+    # Keep the source-only optional initialization/seam/UI probes, unlike
+    # the development test suites and their recordings.
+    if path in ("tests/anr_live_test.mm", "tests/anr_ui_test.mm", "tests/anr_motion_test.mm", "tests/netal_probe.mm"):
+        return True
     return not path.startswith(EXCLUDE_PREFIXES)
 
 

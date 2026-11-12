@@ -1,0 +1,16 @@
+{
+  "schema": "fsr4_netal_source_v1",
+  "repository": "https://github.com/nschlaepfer/Netal",
+  "revision": "bc50c7f4cc16bb2f86c25be16ce72ca4c8896356",
+  "license": "MIT",
+  "files": {
+    "src/macos_host/dlss_sr_session.h": "15bb5a69af7379900e84e5f197c17ef8e89b57f6f6c2242cb733d80e2a878559",
+    "src/macos_host/dlss_sr_session.mm": "62a8b5598f43b35ac107883ac303e7d455cd4c2fc6a8e02f724ac76e25f58c4c",
+    "src/macos_host/dlss_sr_texture_adapter.h": "214308d0175fc4155fdd6f81ac783e79e7acb1feb88b9a3f77735f8d2d4b8741",
+    "src/macos_host/dlss_sr_texture_adapter.mm": "2cae8834e46637e922d8fb28c9d2016b6495f2f26d903dd1c58021493a86b454",
+    "src/macos_host/netal_sr_boundary_geometry.h": "312184744390bab27318e8ac90990db2b01531ae5a354a01d26336db5805efd6",
+    "src/macos_host/netal_sr_runtime_manifest.h": "0aa2e51470ee652f8ac2aa8b8a129b545b0ed0c8434b6d394442d5b363bd5295",
+    "LICENSE": "e23b759b0656e4dfeb928641b06480ce95b462391a12c9ebecf9ac89c1562a06"
+  },
+  "models_included": false
+}

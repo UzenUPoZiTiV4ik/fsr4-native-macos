@@ -9,7 +9,7 @@ BINDIR   := tools/bin
 
 all: $(BINDIR)/fsr4mac $(BINDIR)/gen_testcase $(BINDIR)/compare $(BINDIR)/bilin $(BINDIR)/bin2png
 
-test: test-input test-settings test-fsr411-math test-installer test-fsr411-layout test-fsr411-cache test-fsr411-mpp-policy test-fsr412-options test-fsr412-neural-tiles test-fsr4-panel-settings
+test: test-input test-settings test-fsr411-math test-installer test-fsr411-layout test-fsr411-cache test-fsr411-mpp-policy test-fsr412-options test-fsr412-neural-tiles test-fsr4-panel-settings test-netal-input test-anr-input
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) tests/backend_policy_test.cpp -o build/tests/backend_policy_test
 	build/tests/backend_policy_test
@@ -33,7 +33,7 @@ test-fsr411-layout:
 
 test-settings:
 	mkdir -p build/tests
-	$(CXX) $(CXXFLAGS) -fobjc-arc -x objective-c++ -I src tests/fsr4_settings_test.cpp src/fsr4_live.mm src/fsr4_panel.mm $(FRAMEWORKS) -Wl,-U,_fsr411_encode_live_frame -Wl,-U,_fsr411_invalidate_owner -Wl,-U,_fsr411_release_owner -Wl,-U,_fsr412_encode_live_frame -Wl,-U,_fsr412_invalidate_owner -Wl,-U,_fsr412_release_owner -o build/tests/fsr4_settings_test
+	$(CXX) $(CXXFLAGS) -fobjc-arc -x objective-c++ -I src tests/fsr4_settings_test.cpp src/fsr4_live.mm src/fsr4_panel.mm $(FRAMEWORKS) -Wl,-U,_fsr411_encode_live_frame -Wl,-U,_fsr411_invalidate_owner -Wl,-U,_fsr411_release_owner -Wl,-U,_fsr412_encode_live_frame -Wl,-U,_fsr412_invalidate_owner -Wl,-U,_fsr412_release_owner -Wl,-U,_fsr4_netal_encode_live_frame -Wl,-U,_fsr4_netal_invalidate_owner -Wl,-U,_fsr4_netal_release_owner -o build/tests/fsr4_settings_test
 	build/tests/fsr4_settings_test default
 	build/tests/fsr4_settings_test environment
 	build/tests/fsr4_settings_test environment-fast
@@ -48,6 +48,7 @@ test-settings:
 	build/tests/fsr4_settings_test legacy-default
 	build/tests/fsr4_settings_test environment-fsr4
 	build/tests/fsr4_settings_test model
+	build/tests/fsr4_settings_test netal
 	build/tests/fsr4_settings_test file
 
 test-gpu: $(BINDIR)/fsr4mac $(BINDIR)/gen_testcase
@@ -213,7 +214,7 @@ test-fsr411-cadence: build/tests/fsr411_lossy_cadence_test
 	build/tests/fsr411_lossy_cadence_test "$(CURDIR)" --compile --inflight
 	build/tests/fsr411_lossy_cadence_test "$(CURDIR)" --compile --inflight --mtl4
 
-dist/crossover/libfsr4hook.dylib: Makefile tools/crossover/crossover_fsr4.py hook/fsr4_metalfx.m src/fsr4_live.mm src/fsr4_panel.mm src/fsr4_live.h src/fsr4_input.h src/fsr4_log.h src/fsr4_device.h src/fsr4_backend.h src/i8mpp_host.h src/fsr411_live.mm src/fsr411_runtime.h src/fsr411_capture_io.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_live.mm src/fsr412_runtime.h src/fsr412_session.inc src/fsr411_simd_weights.h src/fsr411_mpp_policy.h src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h
+dist/crossover/libfsr4hook.dylib: Makefile tools/crossover/crossover_fsr4.py hook/fsr4_metalfx.m src/fsr4_live.mm src/fsr4_panel.mm src/fsr4_live.h src/fsr4_input.h src/fsr4_log.h src/fsr4_device.h src/fsr4_backend.h src/i8mpp_host.h src/fsr411_live.mm src/fsr411_runtime.h src/fsr411_capture_io.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_live.mm src/fsr412_runtime.h src/fsr412_session.inc src/fsr411_simd_weights.h src/fsr411_mpp_policy.h src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h src/netal_live.h src/netal_live.mm tools/netal_integration.py third_party/netal/source_manifest.json src/anr_runtime.h src/anr_runtime.mm src/anr_live.h src/anr_live.mm src/anr_helpers.metal hook/anr_metalfx.mm
 	python3 -c 'import sys; sys.path.insert(0, "tools/crossover"); import crossover_fsr4 as c; c.build_hook(c.DIST / "hook.log")'
 
 dist/crossover/fsr411_live_regions_test: tests/fsr411_live_regions_test.mm src/fsr4_live.h src/fsr4_input.h dist/crossover/libfsr4hook.dylib Makefile
@@ -426,6 +427,63 @@ test-fsr411-live-simd: dist/crossover/fsr411_live_regions_test
 	FSR4_COMPILE=1 arch -x86_64 $< "$(CURDIR)" simd mtl4 switch
 
 .PHONY: test-fsr411-live-simd
+
+# Netal stays opt-in. Source compilation requires no NVIDIA model; an actual
+# probe needs a separately supplied complete runtime (see docs/NETAL.md).
+test-netal-input: build/tests/netal_input_test
+	$<
+
+build/tests/netal_input_test: tests/netal_input_test.cpp src/netal_live.h src/fsr4_live.h src/fsr4_input.h Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -Wextra -Werror -I src $< -o $@
+
+netal-source-check:
+	python3 tools/netal_probe.py --source "$(NETAL_SOURCE)" --build-only --arch arm64
+	python3 tools/netal_probe.py --source "$(NETAL_SOURCE)" --build-only --arch x86_64
+
+build/anr_helpers_ui_v2.metallib: src/anr_helpers.metal
+	mkdir -p build
+	xcrun metal -std=metal3.0 -O2 -c $< -o build/anr_helpers_ui_v2.air
+	xcrun metallib build/anr_helpers_ui_v2.air -o $@
+
+build/anr_tools/anr_replay: tools/anr/replay.mm src/anr_runtime.mm src/anr_runtime.h
+	mkdir -p build/anr_tools
+	$(CXX) $(CXXFLAGS) -Wextra -Werror -fobjc-arc -I src tools/anr/replay.mm src/anr_runtime.mm $(FRAMEWORKS) -o $@
+
+build/anr_tools/anr_live_test: tests/anr_live_test.mm src/anr_live.h src/anr_live.mm src/anr_runtime.h src/anr_runtime.mm hook/anr_metalfx.mm build/anr_helpers_ui_v2.metallib
+	mkdir -p build/anr_tools
+	$(CXX) $(CXXFLAGS) -Wextra -Werror -Wno-unused-parameter -fobjc-arc -I src tests/anr_live_test.mm src/anr_live.mm src/anr_runtime.mm hook/anr_metalfx.mm $(FRAMEWORKS) -framework MetalFX -o $@
+
+test-anr-input: build/tests/anr_input_test
+	$<
+
+build/tests/anr_input_test: tests/anr_input_test.cpp src/anr_live.h
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -Wextra -Werror -I src $< -o $@
+
+build/anr_tools/anr_motion_test: tests/anr_motion_test.mm src/anr_live.h src/anr_live.mm src/anr_runtime.h src/anr_runtime.mm hook/anr_metalfx.mm build/anr_helpers_ui_v2.metallib
+	mkdir -p build/anr_tools
+	$(CXX) $(CXXFLAGS) -Wextra -Werror -fobjc-arc -I src tests/anr_motion_test.mm src/anr_live.mm src/anr_runtime.mm hook/anr_metalfx.mm $(FRAMEWORKS) -framework MetalFX -o $@
+
+test-anr-motion: build/anr_tools/anr_motion_test
+	$< "$(CURDIR)" "$(ANR_RUNTIME)" classic
+	$< "$(CURDIR)" "$(ANR_RUNTIME)" metal4
+
+build/anr_tools/anr_ui_test: tests/anr_ui_test.mm src/anr_live.h build/anr_helpers_ui_v2.metallib
+	mkdir -p build/anr_tools
+	$(CXX) $(CXXFLAGS) -Wextra -Werror -fobjc-arc -I src $< $(FRAMEWORKS) -o $@
+
+test-anr-ui: build/anr_tools/anr_ui_test
+	$< "$(CURDIR)" classic
+	$< "$(CURDIR)" metal4
+
+test-anr-live: build/anr_tools/anr_live_test
+	$< "$(CURDIR)" "$(ANR_RUNTIME)" classic
+	$< "$(CURDIR)" "$(ANR_RUNTIME)" metal4
+	ANR_TEST_HDR=1 $< "$(CURDIR)" "$(ANR_RUNTIME)" classic
+	ANR_TEST_HDR=1 $< "$(CURDIR)" "$(ANR_RUNTIME)" metal4
+
+.PHONY: test-netal-input netal-source-check test-anr-live test-anr-input test-anr-ui test-anr-motion
 
 clean:
 	rm -f $(BINDIR)/fsr4mac $(BINDIR)/gen_testcase $(BINDIR)/compare $(BINDIR)/bilin $(BINDIR)/bin2png

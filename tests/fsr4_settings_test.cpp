@@ -52,11 +52,21 @@ int main(int argc,char **argv) {try {
             check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"4.1.1 environment routed Lite Lossy to legacy");
             setenv("FSR4_VERSION","4.1.2",1);
             fsr4_live_set_sharpness(.6f,0);check(profile()==id,"sharpness setter discarded Lite Lossy ID");
-            fsr4_live_set_profile(9);check(profile()==id,"out-of-range profile 9 was accepted");
+            fsr4_live_set_profile(10);check(profile()==id,"out-of-range profile 10 was accepted");
             fsr4_live_set_profile(-1);check(profile()==id,"negative profile was accepted");
         }
         fsr4_live_set_profile(5);
         setenv("FSR4_VERSION","4.0.2",1);check(!std::strcmp(fsr4_live_model_version(),"4.0.2"),"FSR4_VERSION=4.0.2 was not honoured");
+    } else if(!std::strcmp(argv[1],"netal")) {
+        for(const char *name : {"netal","dlss","9"}) {
+            setenv("FSR4_PROFILE",name,1);
+            fsr4_live_set_profile(9);check(profile()==9,"Netal profile rejected");
+            check(!std::strcmp(fsr4_live_model_version(),"netal"),"Netal routed to FSR");
+        }
+        fsr4_live_set_sharpness(.6f,0);check(profile()==9,"sharpness discarded Netal");
+        fsr4_live_set_profile(5);check(!std::strcmp(fsr4_live_model_version(),"4.1.2"),"Netal to FSR switch failed");
+        fsr4_live_set_profile(9);setenv("FSR4_VERSION","4.0.2",1);
+        check(!std::strcmp(fsr4_live_model_version(),"4.0.2"),"legacy pin not honoured");
     } else if(!std::strcmp(argv[1],"legacy-default")) {
         setenv("FSR4_VERSION","4.1.1",1);check(profile()==1,"explicit 4.1.1 default is not Lossy");
         check(!std::strcmp(fsr4_live_model_version(),"4.1.1"),"explicit 4.1.1 default did not select 4.1.1");

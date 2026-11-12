@@ -7,7 +7,7 @@
 
 Сборка CLI и шейдеры описаны в [README.md](../README.md) и [STATE.md](STATE.md), пошаговая установка и откат — в [GUIDE.md](GUIDE.md). Здесь только то, как FSR4 встаёт на место DLSS внутри CrossOver Preview, и какие файлы при этом меняются.
 
-DLSS в CrossOver Preview — это не отдельный `nvngx.so`. D3DMetal (GPTK, каталог `lib64/apple_gptk` в CrossOver 26 и `lib/apple_gptk` в 24/25) сам реализует NGX и для временного апскейла вызывает MetalFX. Хук подменяет только `encodeToCommandBuffer:` у временного скейлера. Пространственный скейл, генерация кадров и денойз остаются на MetalFX. Путь DXMT не используется.
+DLSS в CrossOver Preview — это не отдельный `nvngx.so`. D3DMetal (GPTK, каталог `lib64/apple_gptk` в CrossOver 26 и `lib/apple_gptk` в 24/25) сам реализует NGX и для временного апскейла вызывает MetalFX. По умолчанию хук подменяет `encodeToCommandBuffer:` у временного скейлера. Опциональный `FSR4_FG=anr` отдельно заменяет MetalFX FG, который D3DMetal вызывает для DLSS FG. Пространственный скейл и денойз остаются на MetalFX. [ANR: подключение и ограничения](ANR_RESEARCH.md). Путь DXMT не используется.
 
 CrossOver 24/25: `CrossOver.app` не изменяется, бутылка указывает на копию
 фреймворка в `dist/crossover/`. CrossOver 26: `libd3dshared.dylib` больше не

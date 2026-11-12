@@ -69,9 +69,10 @@ void fsr4_panel_publish(void) {
     fsr4_live_get_status(&st);
     int profile = 5;
     fsr4_live_get_profile(&profile);
-    const char *version = !strncmp(st.variant, "fsr412_", 7) ? "4.1.2"
+    const char *version = !strncmp(st.variant, "netal_sr_", 9) ? "netal"
+                        : !strncmp(st.variant, "fsr412_", 7) ? "4.1.2"
                         : !strncmp(st.variant, "fsr411_", 7) ? "4.1.1" : "4.0.2";
-    if (!st.variant[0]) version = fsr4_live_model_version();
+    if (!st.active || !st.variant[0]) version = fsr4_live_model_version();
     FILE *f = fopen(tmp.c_str(), "w");
     if (!f) return;
     fprintf(f,
@@ -82,7 +83,7 @@ void fsr4_panel_publish(void) {
             st.rw, st.rh, st.uw, st.uh, st.uwA, st.uhA, st.frameMs,
             (unsigned long long)st.encodes, (unsigned long long)st.replaced, (unsigned long long)st.stubs,
             st.sharpness, version,
-            profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
+            profile == 9 ? "netal" : profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
                          : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : profile == 6 ? "int8-lite-pixfix"
                          : profile == 7 ? "int8-lite-lossy" : profile == 8 ? "int8-lite-lossy-tiled" : "exact");
     fclose(f);

@@ -1,9 +1,11 @@
 // Loaded by D3DMetal (LC_LOAD_DYLIB): either the bottle's copy (CrossOver
 // 24/25) or CrossOver's own framework (26+). Swizzles only the temporal
-// scaler D3DMetal creates for DLSS. Spatial, frame generation and denoise
-// stay on MetalFX. FSR4_ROOT must be set (only FSR 4 bottles set it), then
-// FSR4_REPLACE=1 is the switch; until the encoder returns success the
-// original encode still runs, so a bad build does not black the frame.
+// scaler D3DMetal creates for DLSS. Spatial and denoise stay on MetalFX;
+// optional frame generation is handled separately by anr_metalfx.mm.
+// FSR4_ROOT must be set (only FSR 4 bottles set it), then FSR4_REPLACE=1 is
+// the switch; until the encoder returns success the original encode still
+// runs, so a bad build does not black the frame.
+// Optional Netal SR uses the same router, not a second swizzle.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -19,6 +21,7 @@
 // A newer hook may be loaded beside an older encoder. Never read a V2-sized
 // frame through the V1 entry point or silently discard an active subrect.
 extern int fsr4_encode_live_frame_v2(const Fsr4LiveFrameV2 *) __attribute__((weak_import));
+extern int fsr4_encode_live_frame_with_fence_v2(const Fsr4LiveFrameV2 *, void *) __attribute__((weak_import));
 extern void fsr4_invalidate_live_owner(void *, void *) __attribute__((weak_import));
 extern void fsr4_release_live_owner(void *, void *) __attribute__((weak_import));
 
@@ -166,6 +169,10 @@ static int fsr4_replace_encode(id scaler, id commandBuffer) {
         fsr4_live_set_inactive("texture size or offset does not fit the input ABI"); return 0;
     }
     f->mvOffX = v2.geometry.motion.offsetX; f->mvOffY = v2.geometry.motion.offsetY;
+    if (fsr4_encode_live_frame_with_fence_v2) {
+        id fence = [scaler respondsToSelector:@selector(fence)] ? s.fence : nil;
+        return fsr4_encode_live_frame_with_fence_v2(&v2, (__bridge void *)fence);
+    }
     if (fsr4_encode_live_frame_v2) return fsr4_encode_live_frame_v2(&v2);
 
     // Compatibility with a V1 encoder is limited to its actual contract.

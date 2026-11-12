@@ -183,6 +183,15 @@ release's own PRE/BORDER/POST shaders from a verified external bundle
 matches the original-shader oracle byte for byte. It is slower than the adjusted
 Lite Lossy path and is not a default.
 
+## Experimental ANR frame generation
+
+An independent ANR runtime can replace the **MetalFX FG that D3DMetal uses
+for DLSS FG**. The game seam is 2x; native model replay and real MetalFX
+Metal 3/4 hooks have been tested on M5, including Rosetta and queued frames.
+Supply the local FG-V.B14 test kit to prepare model/kernel assets; they are
+not distributed here. Game-specific image quality and pacing are not yet
+verified. [Setup, measured cost and limitations](docs/ANR_RESEARCH.md).
+
 ## Tests
 
 ```sh
@@ -218,6 +227,8 @@ Build the installer app and DMG: `make installer INSTALLER_VERSION=v3.0`
 | Input format | [docs/FSR411_INPUT_CONTRACT.md](docs/FSR411_INPUT_CONTRACT.md) |
 | GPU profiling | [docs/FSR411_PROFILING.md](docs/FSR411_PROFILING.md) |
 | Current status and limits | [docs/STATE.md](docs/STATE.md) |
+| Experimental Netal DLSS SR | [docs/NETAL.md](docs/NETAL.md) |
+| Experimental ANR FG / MetalFX replacement | [docs/ANR_RESEARCH.md](docs/ANR_RESEARCH.md) |
 | Model sources | [third_party/fsr411/README.md](third_party/fsr411/README.md) |
 | Old FSR 4.0.2 model | [architecture](docs/FSR402_ARCHITECTURE.md), [guide](docs/GUIDE_FSR402.md) |
 
