@@ -1,5 +1,19 @@
 # Releases
 
+## v3.1 (2026-11-13)
+
+Experimental ANR frame generation on top of v3.0.
+Full notes: [docs/releases/v3.1.md](docs/releases/v3.1.md).
+
+- New experimental **ANR** engine replaces the MetalFX frame interpolator that
+  D3DMetal uses for DLSS FG (2x). Panel switch **MetalFX / ANR** with a warning
+  and live FG status; switching applies in-game without touching SR settings.
+- Adaptive HUD recomposition; unsafe UI keeps the original MetalFX.
+- MetalFX mode is a native passthrough (no ANR GPU work); `FSR4_REPLACE=0`
+  no longer swizzles SR methods.
+- ANR assets are prepared locally and not distributed. Netal SR is hidden.
+- No FSR model, weight or default-profile changes from v3.0.
+
 ## v3.0 (2026-11-02)
 
 A quality/performance panel and fresh, heat-aware 1080p/1440p model timings.

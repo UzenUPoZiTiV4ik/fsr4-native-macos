@@ -116,7 +116,7 @@ int main() { @autoreleasepool { try {
         float sharp,strength;bool rc,fix;int profile;read_settings(sharp,rc,profile,fix,strength);
         require(profile==8&&fabs(sharp-.6f)<1e-4&&!rc,"FG mode changed SR settings");
     }
-    require(write_settings(.2f,true,7),"cannot save SR settings");
+    require(write_settings(.2f,true,7,false,.5f),"cannot save SR settings");
     require(read_frame_generation()==fsr4_fg::Mode::ANR,"SR change discarded FG mode");
     for(const char *bad:{"", "mode=other\n", "mode=anr\nmode=metalfx\n", "mode=anr\ngarbage\n"})
         require(!fsr4_fg::parse_settings(bad).valid,"malformed FG settings accepted");

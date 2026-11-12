@@ -520,7 +520,7 @@ class CrossoverReferenceTest(unittest.TestCase):
             def fake_run(cmd, **kw):
                 text = " ".join(map(str, cmd))
                 if "smoke" in text:
-                    log.write_text("swizzled X encodeToCommandBuffer:\n")
+                    log.write_text("SR native passthrough: FSR4_REPLACE=0, original methods retained\n")
                 elif "dlopen_test" in text:
                     log.write_text("loaded pid=1\n")
 

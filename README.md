@@ -227,13 +227,12 @@ Build the installer app and DMG: `make installer INSTALLER_VERSION=v3.0`
 | Input format | [docs/FSR411_INPUT_CONTRACT.md](docs/FSR411_INPUT_CONTRACT.md) |
 | GPU profiling | [docs/FSR411_PROFILING.md](docs/FSR411_PROFILING.md) |
 | Current status and limits | [docs/STATE.md](docs/STATE.md) |
-| Experimental Netal DLSS SR | [docs/NETAL.md](docs/NETAL.md) |
 | Experimental ANR FG / MetalFX replacement | [docs/ANR_RESEARCH.md](docs/ANR_RESEARCH.md) |
 | Model sources | [third_party/fsr411/README.md](third_party/fsr411/README.md) |
 | Old FSR 4.0.2 model | [architecture](docs/FSR402_ARCHITECTURE.md), [guide](docs/GUIDE_FSR402.md) |
 
 The Lossy network keeps the numerical policy of the
-[RX 7000 optimization project](https://github.com/zgauthier2000/fsr4-shader-performance-overrides)
+[FSR 4 performance project](https://github.com/zgauthier2000/fsr4-shader-performance-overrides)
 (release `dll-2026-10-07`), implemented independently on MIT sources. Selected
 temporal fixes through October 14, the October 15 dark-band guard and the
 October 29 depth-edge clamp retain thin detail and update effects without motion vectors. A separate PRE for reused frames
