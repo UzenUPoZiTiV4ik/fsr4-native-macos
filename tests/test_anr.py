@@ -113,10 +113,28 @@ class AnrTest(unittest.TestCase):
     def test_fg_switch_has_no_upscaler_profile_change(self):
         with patch("sys.argv", ["crossover_fsr4.py", "frame-generation", "metalfx", "--bottle", "Games"]), \
              patch.object(installer, "resolve_bottle", return_value=Path("/fixture/config")), \
-             patch.object(installer, "conf_set") as config, patch.object(installer, "select_panel_profile") as profile:
+             patch.object(installer, "conf_set") as config, patch.object(installer, "select_panel_profile") as profile, \
+             patch.object(installer, "select_frame_generation") as fg:
             installer.main()
         self.assertEqual(config.call_args.args[1], {"FSR4_FG": "metalfx"})
         profile.assert_not_called()
+        fg.assert_called_once_with("metalfx")
+
+    def test_fg_file_keeps_sr_settings_and_rejects_unknown_modes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            panel = root / "panel.conf"
+            original = "sharpness=0.200\nrcas=0\nprofile=int8-lite-lossy\n"
+            panel.write_text(original)
+            with patch.object(installer, "DIST", root):
+                installer.select_frame_generation("anr")
+                self.assertEqual((root / "fg-settings.conf").read_text(), "schema=fsr4.fg.settings.v1\nmode=anr\n")
+                installer.select_frame_generation("metalfx")
+                self.assertIn("mode=metalfx", (root / "fg-settings.conf").read_text())
+                self.assertIn("mode=anr", (root / "backups/fg-settings.conf").read_text())
+                with self.assertRaises(ValueError):
+                    installer.select_frame_generation("other")
+            self.assertEqual(panel.read_text(), original)
 
     def test_fg_preserves_existing_sharpness_profile(self):
         with tempfile.TemporaryDirectory() as directory:

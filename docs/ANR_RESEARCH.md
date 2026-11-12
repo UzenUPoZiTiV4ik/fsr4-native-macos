@@ -205,6 +205,42 @@ python3 tools/crossover/crossover_fsr4.py frame-generation metalfx --bottle "Gam
 The regular `restore` also removes the ANR keys and restores the framework
 route to CrossOver's bundled D3DMetal.
 
+### Live panel switch and native passthrough
+
+The panel offers `MetalFX / ANR` under `Генерация кадров`, with the visible
+orange warning `! Экспериментальная функция`. This selects an FG engine;
+DLSS Frame Generation must still be enabled in the game.
+
+`dist/crossover/fg-settings.conf` stores only the FG choice, independently
+of SR `panel.conf`. The shared-root preference overrides `FSR4_FG` and is
+read by a background controller twice per second. `FSR4_FG_SETTINGS=none`
+disables file overrides for controlled tests. CLI install/FG commands
+synchronize that preference. All bottles using the same root share it.
+
+MetalFX at startup retains the original FG encode IMP. ANR mode installs
+the replacement; switching back requires one original-history reset per
+used interpolator, then restores the original method. An inactive cached
+interpolator may still owe its reset; already-reset instances take a tiny
+bridge with no registry scan or ANR GPU work until all pending instances
+are handled/retired. ANR resources are retired without waiting for the GPU.
+Native mode never enters the ANR frame encoder or submits ANR kernels,
+imports, exports or barriers. Descriptor discovery and the 2 Hz controller
+remain startup/background costs, not a claim of zero total process overhead.
+
+The SR hook caches descriptor flags and optional selector availability at
+creation, while still reading changing offsets every frame. A launch with
+`FSR4_REPLACE=0` does not swizzle SR methods at all. Netal and FSR keep the
+same SR router, not competing temporal-scaler hooks.
+
+`tools/crossover/benchmark_passthrough.py` measures a supplied compiled
+hook against original Metal3/4 FG in fresh x86_64/Rosetta processes, with
+alternating A/B order, 32 warmups, 512 samples, exact output hashes, method
+identity assertions and zero ANR encodes. M5 runs with controller status IO
+enabled showed about +0.63% GPU median for Metal3 and -0.62% for Metal4;
+these small differences are within observed run variation. This is an
+isolated fixed-frame FG measurement, not overall CrossOver/game FPS.
+See [the compact report](reports/metalfx-passthrough-m5.json).
+
 Status is separate from SR: `dist/crossover/fg-status.conf` reports active
 ANR, generated/primed/fallback counts and the exact fallback reason. UI
 mode/counts and input pixel formats are recorded separately. The panel

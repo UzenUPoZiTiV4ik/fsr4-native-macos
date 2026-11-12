@@ -2,6 +2,7 @@
 // Replacement for the exact MetalFX FG encode created by D3DMetal.
 #include "anr_live.h"
 #include "anr_runtime.h"
+#include "fsr4_fg_settings.h"
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <chrono>
@@ -70,6 +71,9 @@ void publish(){
         status.uiSamples,status.uiChanged,status.uiSoft,status.uiOpaque,
         status.uiSamples?double(status.uiOpacitySum)/(4096.0*status.uiSamples):0.0,
         status.motionScaleX,status.motionScaleY,status.anrMotionScaleX,status.anrMotionScaleY);
+    fprintf(f,"selected_mode=%s\nnative_passthrough=%d\nanr_configured=%d\n",
+        status.selectedAnr?"anr":"metalfx",status.selectedAnr?0:1,
+        getenv("FSR4_ANR_RUNTIME")&&*getenv("FSR4_ANR_RUNTIME")?1:0);
     fclose(f);rename(temporary.c_str(),path.c_str());
 }
 int reject(const char *why){
@@ -180,7 +184,8 @@ bool helper(View &v,id command,bool metal4,int which,id<MTLTexture> color,id<MTL
 }
 int fsr4_anr_encode_frame(const Fsr4AnrFrame *frame){@autoreleasepool{
     std::lock_guard<std::mutex> lock(mutex);++status.encodes;collect();
-    const char *enabled=getenv("FSR4_FG");if(!enabled||strcmp(enabled,"anr"))return reject("MetalFX FG selected");
+    status.selectedAnr=fsr4_anr_is_selected();
+    if(!status.selectedAnr)return reject("MetalFX FG selected");
     const char *reason=fsr4_anr_frame_reason(frame);if(reason)return reject(reason);const auto &f=*frame;
     status.width=f.uw;status.height=f.uh;status.uiMode=fsr4_anr_ui_mode(&f);
     status.motionScaleX=f.motionScaleX;status.motionScaleY=f.motionScaleY;
@@ -302,5 +307,18 @@ int fsr4_anr_encode_frame(const Fsr4AnrFrame *frame){@autoreleasepool{
 }}
 void fsr4_anr_invalidate_owner(void *device,void *owner){std::lock_guard<std::mutex> lock(mutex);auto it=views.find(key(device,owner));if(it!=views.end()&&it->second)it->second->history=false;}
 void fsr4_anr_release_owner(void *device,void *owner){std::lock_guard<std::mutex> lock(mutex);auto it=views.find(key(device,owner));if(it!=views.end()){if(it->second&&!it->second->finished())retired.push_back(it->second);views.erase(it);}failures.erase(key(device,owner));collect();}
+extern "C" void fsr4_anr_mode_changed(int anr){
+    std::lock_guard<std::mutex> lock(mutex);
+    status.selectedAnr=anr;status.active=0;
+    for(auto &entry:views)if(entry.second&&!entry.second->finished())retired.push_back(entry.second);
+    views.clear();failures.clear();collect();
+    snprintf(status.reason,sizeof status.reason,"%s",anr?"ANR selected; waiting for an accepted frame":"MetalFX selected; original native encode");
+    publish();
+}
+void fsr4_anr_publish_passthrough(void){
+    std::lock_guard<std::mutex> lock(mutex);collect();
+    status.selectedAnr=0;status.active=0;
+    snprintf(status.reason,sizeof status.reason,"MetalFX selected; original native encode");publish();
+}
 void fsr4_anr_set_inactive(const char *why){std::lock_guard<std::mutex> lock(mutex);reject(why?why:"ANR inactive");}
 void fsr4_anr_get_status(Fsr4AnrStatus *out){if(!out)return;std::lock_guard<std::mutex> lock(mutex);*out=status;}

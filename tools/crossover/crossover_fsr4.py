@@ -218,6 +218,21 @@ def preserve_panel_preferences(conf: Path):
     print("preserved existing SR panel sharpness/profile preferences")
 
 
+def select_frame_generation(mode):
+    if mode not in ("metalfx", "anr"):
+        raise ValueError("unknown frame generation mode")
+    DIST.mkdir(parents=True, exist_ok=True)
+    path = DIST / "fg-settings.conf"
+    if path.exists():
+        backup = DIST / "backups/fg-settings.conf"
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        if not backup.exists():
+            shutil.copy2(path, backup)
+    temporary = path.with_name(path.name + f".tmp.{os.getpid()}")
+    temporary.write_text("schema=fsr4.fg.settings.v1\nmode=" + mode + "\n")
+    temporary.replace(path)
+
+
 def cmd_frame_generation(args):
     runtime = None
     netal_source = getattr(args, "netal_source", "") or os.environ.get("FSR4_NETAL_SOURCE")
@@ -267,6 +282,7 @@ def cmd_frame_generation(args):
         conf_set(bottle, values)
     else:
         conf_set(bottle, {FG_KEY: "metalfx"})
+    select_frame_generation(args.mode)
     print("Frame generation selected: " + args.mode + "; SR profile/settings were not changed")
 
 
@@ -983,14 +999,16 @@ def cmd_install(args):
     env["FSR4_HOOK_LOG"] = str(log)
     env["FSR4_ROOT"] = str(ROOT)
     env["FSR4_REPLACE"] = "0"
+    env["FSR4_FG_SETTINGS"] = "none"
+    env["FSR4_ANR_STATUS_DISABLED"] = "1"
     env[VERSION_KEY] = args.fsr_version
     if args.fsr_version in ("4.1.1", "4.1.2"):
         env[PROFILE_KEY] = args.profile
     smoke = build_smoke()
     run(["arch", "-x86_64", str(smoke)], env=env)
     text = log.read_text()
-    if "swizzled" not in text or "encodeToCommandBuffer:" not in text:
-        raise SystemExit(f"smoke did not swizzle encode:\n{text}")
+    if "SR native passthrough" not in text:
+        raise SystemExit(f"smoke did not retain original SR methods:\n{text}")
     dl = build_dlopen()
     log.write_text("")
     run(["arch", "-x86_64", str(dl), str(binary)], env=env)
@@ -1061,6 +1079,7 @@ def cmd_install(args):
             # Keep only the key of the mode actually used.
             conf_remove(bottle, [FRAMEWORK_KEY] if mode == "redirect" else [KEY])
             conf_set(bottle, values)
+            select_frame_generation(fg)
             select_panel_profile("fsr4" if args.fsr_version == "4.0.2" else args.profile)
         except BaseException:
             if installed and not other_bottles_using(installed, bottle):

@@ -1,0 +1,50 @@
+{
+  "schema": "fsr4_metalfx_passthrough_report_v1",
+  "hook_sha256": "5137d54fd882f061c4a73961a8d7b903457a9487bcfc2f73ef28852c558f814c",
+  "device": "Apple M5",
+  "host_arch": "x86_64-Rosetta",
+  "scope": "Standalone fixed-frame FG; no game FPS, SR workload or presentation timing",
+  "controller_hz": 2,
+  "controller_status_io_enabled": true,
+  "warmups_per_run": 32,
+  "samples_per_run": 512,
+  "tests": {
+    "classic": {
+      "repeats": 3,
+      "gpu_median_ms": {
+        "bare": 6.850709003629163,
+        "hook": 6.893875004607253
+      },
+      "cpu_encode_median_us": {
+        "bare": 57.166,
+        "hook": 52.792
+      },
+      "gpu_delta_percent": 0.6300953807149456,
+      "cpu_delta_us": -4.373999999999995,
+      "output_identical": true,
+      "original_fg_method_retained": true,
+      "disabled_sr_methods_retained": true,
+      "anr_encodes": 0
+    },
+    "metal4": {
+      "repeats": 3,
+      "gpu_median_ms": {
+        "bare": 0.167716,
+        "hook": 0.166675
+      },
+      "cpu_encode_median_us": {
+        "bare": 47.083,
+        "hook": 44.375
+      },
+      "gpu_delta_percent": -0.6206921223973927,
+      "cpu_delta_us": -2.7079999999999984,
+      "output_identical": true,
+      "original_fg_method_retained": true,
+      "disabled_sr_methods_retained": true,
+      "anr_encodes": 0
+    }
+  },
+  "sr_cached_hook_exact_output_verified": true,
+  "live_fg_switch_and_history_reset_verified": true,
+  "overall_game_fps_verified": false
+}

@@ -214,7 +214,7 @@ test-fsr411-cadence: build/tests/fsr411_lossy_cadence_test
 	build/tests/fsr411_lossy_cadence_test "$(CURDIR)" --compile --inflight
 	build/tests/fsr411_lossy_cadence_test "$(CURDIR)" --compile --inflight --mtl4
 
-dist/crossover/libfsr4hook.dylib: Makefile tools/crossover/crossover_fsr4.py hook/fsr4_metalfx.m src/fsr4_live.mm src/fsr4_panel.mm src/fsr4_live.h src/fsr4_input.h src/fsr4_log.h src/fsr4_device.h src/fsr4_backend.h src/i8mpp_host.h src/fsr411_live.mm src/fsr411_runtime.h src/fsr411_capture_io.h src/fsr411_model.h src/fsr411_scratch_layout.h src/fsr412_live.mm src/fsr412_runtime.h src/fsr412_session.inc src/fsr411_simd_weights.h src/fsr411_mpp_policy.h src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h src/netal_live.h src/netal_live.mm tools/netal_integration.py third_party/netal/source_manifest.json src/anr_runtime.h src/anr_runtime.mm src/anr_live.h src/anr_live.mm src/anr_helpers.metal hook/anr_metalfx.mm
+dist/crossover/libfsr4hook.dylib: Makefile src/fsr4_fg_settings.h tools/crossover/crossover_fsr4.py hook/fsr4_metalfx.m src/fsr4_live.mm src/fsr4_panel.mm src/fsr4_live.h src/fsr4_input.h src/fsr4_log.h src/fsr4_device.h src/fsr4_backend.h src/i8mpp_host.h src/fsr411_live.mm src/fsr411_runtime.h src/fsr411_simd_weights.h src/fsr411_capture_io.h src/fsr411_model.h src/fsr411_mpp_policy.h src/fsr411_scratch_layout.h src/fsr412_live.mm src/fsr412_runtime.h src/fsr412_session.inc src/fsr412_original_session.inc src/fsr412_original_geometry.h src/fsr412_mpp_policy.h src/netal_live.h src/netal_live.mm tools/netal_integration.py third_party/netal/source_manifest.json src/anr_runtime.h src/anr_runtime.mm src/anr_live.h src/anr_live.mm src/anr_helpers.metal hook/anr_metalfx.mm
 	python3 -c 'import sys; sys.path.insert(0, "tools/crossover"); import crossover_fsr4 as c; c.build_hook(c.DIST / "hook.log")'
 
 dist/crossover/fsr411_live_regions_test: tests/fsr411_live_regions_test.mm src/fsr4_live.h src/fsr4_input.h dist/crossover/libfsr4hook.dylib Makefile
@@ -450,7 +450,7 @@ build/anr_tools/anr_replay: tools/anr/replay.mm src/anr_runtime.mm src/anr_runti
 	mkdir -p build/anr_tools
 	$(CXX) $(CXXFLAGS) -Wextra -Werror -fobjc-arc -I src tools/anr/replay.mm src/anr_runtime.mm $(FRAMEWORKS) -o $@
 
-build/anr_tools/anr_live_test: tests/anr_live_test.mm src/anr_live.h src/anr_live.mm src/anr_runtime.h src/anr_runtime.mm hook/anr_metalfx.mm build/anr_helpers_ui_v2.metallib
+build/anr_tools/anr_live_test: tests/anr_live_test.mm src/fsr4_fg_settings.h src/anr_live.h src/anr_live.mm src/anr_runtime.h src/anr_runtime.mm hook/anr_metalfx.mm build/anr_helpers_ui_v2.metallib
 	mkdir -p build/anr_tools
 	$(CXX) $(CXXFLAGS) -Wextra -Werror -Wno-unused-parameter -fobjc-arc -I src tests/anr_live_test.mm src/anr_live.mm src/anr_runtime.mm hook/anr_metalfx.mm $(FRAMEWORKS) -framework MetalFX -o $@
 
@@ -461,13 +461,17 @@ build/tests/anr_input_test: tests/anr_input_test.cpp src/anr_live.h
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -Wextra -Werror -I src $< -o $@
 
-build/anr_tools/anr_motion_test: tests/anr_motion_test.mm src/anr_live.h src/anr_live.mm src/anr_runtime.h src/anr_runtime.mm hook/anr_metalfx.mm build/anr_helpers_ui_v2.metallib
+build/anr_tools/anr_motion_test: tests/anr_motion_test.mm src/fsr4_fg_settings.h src/anr_live.h src/anr_live.mm src/anr_runtime.h src/anr_runtime.mm hook/anr_metalfx.mm build/anr_helpers_ui_v2.metallib
 	mkdir -p build/anr_tools
 	$(CXX) $(CXXFLAGS) -Wextra -Werror -fobjc-arc -I src tests/anr_motion_test.mm src/anr_live.mm src/anr_runtime.mm hook/anr_metalfx.mm $(FRAMEWORKS) -framework MetalFX -o $@
 
 test-anr-motion: build/anr_tools/anr_motion_test
 	$< "$(CURDIR)" "$(ANR_RUNTIME)" classic
 	$< "$(CURDIR)" "$(ANR_RUNTIME)" metal4
+
+build/anr_tools/benchmark_passthrough: tools/crossover/benchmark_passthrough.mm src/anr_live.h src/fsr4_fg_settings.h Makefile
+	mkdir -p build/anr_tools
+	$(CXX) $(CXXFLAGS) -arch x86_64 -Wextra -Werror -fobjc-arc -I src $< $(FRAMEWORKS) -framework MetalFX -o $@
 
 build/anr_tools/anr_ui_test: tests/anr_ui_test.mm src/anr_live.h build/anr_helpers_ui_v2.metallib
 	mkdir -p build/anr_tools

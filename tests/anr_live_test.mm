@@ -3,12 +3,16 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <MetalFX/MetalFX.h>
+#import <objc/runtime.h>
 #include "anr_live.h"
+#include "fsr4_fg_settings.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
+#include <thread>
+#include <chrono>
 static void need(bool value,const char *why){if(!value)throw std::runtime_error(why);}
 static id<MTLTexture> texture(id<MTLDevice> device,unsigned w,unsigned h,MTLPixelFormat format,bool privateMode=false){
     auto d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:w height:h mipmapped:NO];
@@ -18,7 +22,7 @@ static id<MTLTexture> texture(id<MTLDevice> device,unsigned w,unsigned h,MTLPixe
 int main(int argc,char **argv){@autoreleasepool{try{
     need(argc>=3,"usage: anr_live_test <root> <runtime> [metal4|classic]");
     setenv("FSR4_ROOT",argv[1],1);setenv("FSR4_ANR_RUNTIME",argv[2],1);setenv("FSR4_FG","anr",1);
-    setenv("FSR4_ANR_STATUS_DISABLED","1",1);
+    setenv("FSR4_ANR_STATUS_DISABLED","1",1);setenv("FSR4_FG_SETTINGS","none",1);
     const bool metal4=argc>3&&!strcmp(argv[3],"metal4");
     setenv("FSR4_ANR_COLOR","pq10",1);
     id<MTLDevice> device=MTLCreateSystemDefaultDevice();need(device!=nil,"no device");
@@ -30,11 +34,14 @@ int main(int argc,char **argv){@autoreleasepool{try{
     MTLPixelFormat colorFormat=getenv("ANR_TEST_HDR")?MTLPixelFormatRGBA16Float:MTLPixelFormatRGB10A2Unorm;
     setenv("FSR4_ANR_COLOR",getenv("ANR_TEST_HDR")?"linear":"pq10",1);
     d.colorTextureFormat=d.outputTextureFormat=d.uiTextureFormat=colorFormat;d.depthTextureFormat=MTLPixelFormatR32Float;d.motionTextureFormat=MTLPixelFormatRG16Float;
+    setenv("FSR4_FG","metalfx",1);fsr4_anr_refresh_settings();
     NSError *error=nil;id fg=nil;
     if(metal4){id<MTL4Compiler> compiler=[device newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&error];
         fg=[d newFrameInterpolatorWithDevice:device compiler:compiler];}
     else fg=[d newFrameInterpolatorWithDevice:device];
     need(fg!=nil,"no MetalFX frame interpolator");
+    const IMP nativeIMP=method_getImplementation(class_getInstanceMethod(object_getClass(fg),@selector(encodeToCommandBuffer:)));
+    setenv("FSR4_FG","anr",1);fsr4_anr_refresh_settings();
     id<MTLFXFrameInterpolatorBase> base=fg;
     auto c=texture(device,w,h,colorFormat),prev=texture(device,w,h,colorFormat);
     auto z=texture(device,w,h,MTLPixelFormatR32Float),mv=texture(device,w,h,MTLPixelFormatRG16Float),out=texture(device,w,h,colorFormat,true);
@@ -65,8 +72,20 @@ int main(int argc,char **argv){@autoreleasepool{try{
     };
     encode();Fsr4AnrStatus s={};fsr4_anr_get_status(&s);need(s.primed==1,"ANR did not prime actual FG hook");
     base.shouldResetHistory=NO;encode();fsr4_anr_get_status(&s);need(s.generated==1&&s.active,"ANR did not replace actual FG hook");
-    setenv("FSR4_FG","metalfx",1);encode();fsr4_anr_get_status(&s);need(s.generated==1,"opt-out still generated ANR");
-    setenv("FSR4_FG","anr",1);encode();fsr4_anr_get_status(&s);need(s.primed==2,"fallback did not reset ANR history");
+    const uint64_t beforeNative=s.encodes;
+    char preferenceDirectory[]="/tmp/anr-live-switch-XXXXXX";need(mkdtemp(preferenceDirectory)!=nullptr,"FG preference directory failed");
+    const std::string preference=std::string(preferenceDirectory)+"/fg-settings.conf";
+    need(fsr4_fg::write_settings(preference,fsr4_fg::Mode::MetalFX),"native preference write failed");
+    setenv("FSR4_FG_SETTINGS",preference.c_str(),1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(650));
+    need(!fsr4_anr_is_selected(),"background controller did not apply MetalFX preference");encode();
+    need(method_getImplementation(class_getInstanceMethod(object_getClass(fg),@selector(encodeToCommandBuffer:)))==nativeIMP,"MetalFX did not restore original IMP");
+    encode();fsr4_anr_get_status(&s);need(s.generated==1&&s.encodes==beforeNative,"native mode entered ANR per-frame path");
+    setenv("FSR4_FG","metalfx",1);
+    need(fsr4_fg::write_settings(preference,fsr4_fg::Mode::ANR),"ANR preference write failed");
+    std::this_thread::sleep_for(std::chrono::milliseconds(650));
+    need(fsr4_anr_is_selected(),"saved ANR preference did not override native environment");
+    encode();fsr4_anr_get_status(&s);need(s.primed==2,"fallback did not reset ANR history");
     encode();fsr4_anr_get_status(&s);need(s.generated==2,"ANR did not resume after fallback");
     // Queue three frames without waiting. Their CPU descriptor/constants
     // must not overwrite one another while the GPU is still working.
@@ -191,5 +210,6 @@ int main(int argc,char **argv){@autoreleasepool{try{
     need(fsr4_anr_encode_frame(&check)==0,"UI color format mismatch was accepted");
     fsr4_anr_get_status(&s);need(strstr(s.reason,"UI and scene color formats differ"),"UI format diagnostic missing");
     fprintf(stdout,"ANR live MetalFX %s hook passed (generated=%llu primed=%llu, %u exact HUD pixels, 3 changing UI modes in flight, unsafe UI rejected)\n",metal4?"Metal4":"Metal3",(unsigned long long)s.generated,(unsigned long long)s.primed,hudPixels);
+    unlink(preference.c_str());rmdir(preferenceDirectory);
     return 0;
 }catch(const std::exception &e){fprintf(stderr,"ANR live test: %s\n",e.what());return 1;}}}

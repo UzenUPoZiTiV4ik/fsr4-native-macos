@@ -108,6 +108,21 @@ int main() { @autoreleasepool { try {
         fixture(base + "/initializers-lite-lossy.bin", "weights");
         g_has_lite_lossy = has_lite_lossy(fixturePin.c_str());
     }
+    unsetenv("FSR4_FG");unsetenv("FSR4_FG_SETTINGS");
+    require([frame_generation_warning() containsString:@"!"]&&[frame_generation_warning() containsString:@"Experimental feature"],"FG warning missing");
+    for(auto mode:{fsr4_fg::Mode::MetalFX,fsr4_fg::Mode::ANR}){
+        require(write_frame_generation(mode),"cannot save FG mode");
+        require(read_frame_generation()==mode,"saved FG mode not reflected");
+        float sharp,strength;bool rc,fix;int profile;read_settings(sharp,rc,profile,fix,strength);
+        require(profile==8&&fabs(sharp-.6f)<1e-4&&!rc,"FG mode changed SR settings");
+    }
+    require(write_settings(.2f,true,7),"cannot save SR settings");
+    require(read_frame_generation()==fsr4_fg::Mode::ANR,"SR change discarded FG mode");
+    for(const char *bad:{"", "mode=other\n", "mode=anr\nmode=metalfx\n", "mode=anr\ngarbage\n"})
+        require(!fsr4_fg::parse_settings(bad).valid,"malformed FG settings accepted");
+    require(fsr4_fg::parse_settings("# mode\nschema=fsr4.fg.settings.v1\nmode=metalfx\n").valid,"valid FG file rejected");
+    require(!write_frame_generation(static_cast<fsr4_fg::Mode>(99)),"unknown FG mode saved");
+    unlink(dist_path("fg-settings.conf").c_str());
     unlink(dist_path("panel.conf").c_str());
     rmdir((g_root + "/dist/crossover").c_str()); rmdir((g_root + "/dist").c_str());
     unlink((base + "/initializers-lite-lossy.bin").c_str()); unlink((base + "/import.json").c_str());

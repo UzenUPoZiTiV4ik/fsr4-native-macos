@@ -30,7 +30,7 @@ static inline Fsr4AnrUIMode fsr4_anr_ui_mode(const Fsr4AnrFrame *f) {
         f->uiComposited ? FSR4_ANR_UI_PRECOMPOSITED : FSR4_ANR_UI_OVERLAY;
 }
 typedef struct Fsr4AnrStatus {
-    int active;
+    int active,selectedAnr;
     char reason[160];
     uint32_t width,height,colorFormat,uiFormat;
     uint64_t encodes,generated,primed,fallbacks;
@@ -46,6 +46,7 @@ void fsr4_anr_invalidate_owner(void *device,void *owner);
 void fsr4_anr_release_owner(void *device,void *owner);
 void fsr4_anr_get_status(Fsr4AnrStatus *out);
 void fsr4_anr_set_inactive(const char *reason);
+void fsr4_anr_publish_passthrough(void);
 
 static inline const char *fsr4_anr_frame_reason(const Fsr4AnrFrame *f) {
     if(!f || f->abiVersion!=FSR4_ANR_FG_ABI || f->structSize<sizeof(*f))return "ANR: incompatible FG ABI";

@@ -4,6 +4,7 @@
 #import <Metal/Metal.h>
 #import <MetalFX/MetalFX.h>
 #include "anr_live.h"
+#include "fsr4_fg_settings.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -29,7 +30,7 @@ static uint32_t pixel(float x,float y){auto p=pattern(x,y);uint32_t v=0xc0000000
 int main(int argc,char **argv){@autoreleasepool{try{
     need(argc>=3,"usage: anr_motion_test <root> <runtime> [classic|metal4]");
     setenv("FSR4_ROOT",argv[1],1);setenv("FSR4_ANR_RUNTIME",argv[2],1);
-    setenv("FSR4_ANR_COLOR","pq10",1);setenv("FSR4_ANR_STATUS_DISABLED","1",1);
+    setenv("FSR4_ANR_COLOR","pq10",1);setenv("FSR4_ANR_STATUS_DISABLED","1",1);setenv("FSR4_FG_SETTINGS","none",1);
     const bool m4=argc>3&&!strcmp(argv[3],"metal4");
     auto device=MTLCreateSystemDefaultDevice();need(device!=nil,"no Metal device");
     auto metadata=[NSData dataWithContentsOfFile:[[NSString stringWithUTF8String:argv[2]] stringByAppendingPathComponent:@"manifest.json"]];

@@ -15,6 +15,7 @@
 #include <map>
 #include <cmath>
 #include <mach-o/dyld.h>
+#include "../../src/fsr4_fg_settings.h"
 
 struct Status {
     bool ok = false, active = false;
@@ -204,6 +205,27 @@ static bool write_settings(float sharp, bool rcas, int profile, bool pixelFix, f
     return true;
 }
 
+static NSString *frame_generation_warning() {
+    return @"! Experimental feature. ANR may cause artifacts and judder.";
+}
+static fsr4_fg::Mode read_frame_generation() {
+    fsr4_fg::Mode mode = fsr4_fg::Mode::MetalFX;
+    auto status = read_kv(dist_path("fg-status.conf"));
+    if (!fsr4_fg::parse_mode(status["selected_mode"], mode) && atoi(status["active"].c_str()))
+        mode = fsr4_fg::Mode::ANR;
+    if (const char *env = getenv("FSR4_FG")) fsr4_fg::parse_mode(env, mode);
+    auto path = fsr4_fg::settings_path(g_root.c_str(), getenv("FSR4_FG_SETTINGS"));
+    if (!path.empty()) {
+        auto saved = fsr4_fg::read_settings(path);
+        if (saved.valid) mode = saved.mode;
+    }
+    return mode;
+}
+static bool write_frame_generation(fsr4_fg::Mode mode) {
+    auto path = fsr4_fg::settings_path(g_root.c_str(), getenv("FSR4_FG_SETTINGS"));
+    return !path.empty() && fsr4_fg::write_settings(path, mode);
+}
+
 static NSString *capture_status_stamp() {
     struct stat st = {};
     if (stat(dist_path("capture-status.conf").c_str(), &st) != 0) return @"";
@@ -223,7 +245,9 @@ static bool write_capture_request(NSString **reason) {
 
 @interface PanelApp : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) NSPanel *panel;
-@property(nonatomic, strong) NSTextField *status, *res, *frame, *sharpVal, *fixVal;
+@property(nonatomic, strong) NSTextField *status, *res, *frame, *sharpVal, *fixVal, *fgStatus, *fgWarning;
+@property(nonatomic, strong) NSSegmentedControl *frameGeneration;
+@property(nonatomic, strong) NSString *fgSettingsError;
 @property(nonatomic, strong) NSSlider *slider, *fixStrength;
 @property(nonatomic, strong) NSButton *rcas, *pixelFix;
 @property(nonatomic, strong) NSSlider *modeSlider;
@@ -249,7 +273,7 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
 }
 
 - (void)build {
-    const CGFloat W = 660, H = 460;
+    const CGFloat W = 660, H = 550;
     NSUInteger style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskUtilityWindow
                      | NSWindowStyleMaskNonactivatingPanel | NSWindowStyleMaskHUDWindow;
     NSPanel *p = [[NSPanel alloc] initWithContentRect:NSMakeRect(40, 80, W, H)
@@ -272,7 +296,25 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     [v addSubview:label(@"FSR 4 replacing DLSS (CrossOver)", 12, y, W - 24, YES)]; y -= 22;
     self.status = label(@"", 12, y, W - 24, NO); [v addSubview:self.status]; y -= 20;
     self.res = label(@"", 12, y, W - 24, NO); [v addSubview:self.res]; y -= 20;
-    self.frame = label(@"", 12, y, W - 24, NO); [v addSubview:self.frame]; y -= 30;
+    self.frame = label(@"", 12, y, W - 24, NO); [v addSubview:self.frame]; y -= 20;
+    self.fgStatus = label(@"FG: no data", 12, y, W - 24, NO); [v addSubview:self.fgStatus]; y -= 30;
+    self.fgStatus.accessibilityLabel = @"Frame generation status";
+    [v addSubview:label(@"Frame generation", 12, y, 180, YES)];
+    self.frameGeneration = [[NSSegmentedControl alloc] initWithFrame:NSMakeRect(202, y - 4, W - 214, 26)];
+    self.frameGeneration.segmentCount = 2;
+    [self.frameGeneration setLabel:@"MetalFX" forSegment:0];
+    [self.frameGeneration setLabel:@"ANR" forSegment:1];
+    self.frameGeneration.trackingMode = NSSegmentSwitchTrackingSelectOne;
+    self.frameGeneration.target = self; self.frameGeneration.action = @selector(frameGenerationChanged:);
+    self.frameGeneration.accessibilityLabel = @"Frame generation";
+    self.frameGeneration.toolTip = @"MetalFX: Apple's original method, no ANR GPU work. ANR: experimental generator "
+                                   @"with a local runtime. DLSS Frame Generation must be enabled in the game.";
+    [v addSubview:self.frameGeneration]; y -= 30;
+    self.fgWarning = label(frame_generation_warning(), 12, y, W - 24, NO);
+    self.fgWarning.font = [NSFont systemFontOfSize:11];
+    self.fgWarning.textColor = NSColor.systemOrangeColor;
+    self.fgWarning.accessibilityLabel = @"Experimental frame generation";
+    [v addSubview:self.fgWarning]; y -= 34;
 
     float sharp, strength; bool rc, fix; int profile;
     read_settings(sharp, rc, profile, fix, strength);
@@ -385,6 +427,38 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     [self refresh];
 }
 
+- (void)frameGenerationChanged:(id)sender {
+    const NSInteger selected = self.frameGeneration.selectedSegment;
+    if (selected < 0 || selected > 1) return;
+    const auto mode = selected == 1 ? fsr4_fg::Mode::ANR : fsr4_fg::Mode::MetalFX;
+    self.fgSettingsError = write_frame_generation(mode) ? nil : @"! Could not save the frame generation mode.";
+    [self refresh];
+}
+
+- (void)refreshFrameGeneration {
+    auto fg = read_kv(dist_path("fg-status.conf"));
+    const auto requested = read_frame_generation();
+    self.frameGeneration.selectedSegment = requested == fsr4_fg::Mode::ANR ? 1 : 0;
+    self.frameGeneration.enabled = !fsr4_fg::settings_path(g_root.c_str(), getenv("FSR4_FG_SETTINGS")).empty();
+    self.fgWarning.stringValue = self.fgSettingsError ?: frame_generation_warning();
+    self.fgWarning.textColor = self.fgSettingsError ? NSColor.systemRedColor : NSColor.systemOrangeColor;
+    const double fgAge = fg.empty() ? 1e9 : (double)time(NULL) - atof(fg["t"].c_str());
+    if (!fg.empty() && fg.count("selected_mode") && fg["selected_mode"] != fsr4_fg::name(requested))
+        self.fgStatus.stringValue = @"FG: switching mode...";
+    else if (requested == fsr4_fg::Mode::MetalFX)
+        self.fgStatus.stringValue = @"FG: MetalFX selected (original encode, no ANR)";
+    else if (fg.empty()) self.fgStatus.stringValue = @"FG: no data (enable DLSS FG in the game)";
+    else if (fgAge > 3) self.fgStatus.stringValue = @"FG: no recent frames";
+    else if (atoi(fg["active"].c_str())) {
+        const char *ui = (fg["ui_mode"] == "precomposited-copy" || fg["ui_mode"] == "precomposited-adaptive") ? ", HUD recomposited"
+                       : fg["ui_mode"] == "premultiplied-overlay" ? ", UI overlay" : "";
+        self.fgStatus.stringValue = [NSString stringWithFormat:@"FG: ANR active (2x), generated %s%s", fg["generated"].c_str(), ui];
+    } else
+        self.fgStatus.stringValue = [NSString stringWithFormat:@"FG: original MetalFX, %s", fg["reason"].c_str()];
+    self.fgStatus.toolTip = [NSString stringWithFormat:@"UI: %s, precomposited frames %s, overlay frames %s",
+        fg["ui_mode"].c_str(), fg["ui_composited"].c_str(), fg["ui_overlay"].c_str()];
+}
+
 - (void)requestCapture:(id)sender {
     self.captureStatusBaseline = capture_status_stamp();
     NSString *reason = nil;
@@ -426,6 +500,7 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
 }
 
 - (void)refresh {
+    [self refreshFrameGeneration];
     Status st = read_status();
     const double age = st.ok ? (double)time(NULL) - st.t : 1e9;
     if (!st.ok)

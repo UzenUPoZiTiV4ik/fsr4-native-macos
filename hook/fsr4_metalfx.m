@@ -25,7 +25,9 @@ extern int fsr4_encode_live_frame_with_fence_v2(const Fsr4LiveFrameV2 *, void *)
 extern void fsr4_invalidate_live_owner(void *, void *) __attribute__((weak_import));
 extern void fsr4_release_live_owner(void *, void *) __attribute__((weak_import));
 
-@interface Fsr4OwnerLifetime : NSObject
+@interface Fsr4OwnerLifetime : NSObject {
+@public int flags[4]; SEL offsets[8]; BOOL hasFence,replaced; IMP original;
+}
 @property(nonatomic, strong) id<MTLDevice> device;
 @property(nonatomic, assign) void *owner;
 @end
@@ -39,15 +41,18 @@ extern void fsr4_release_live_owner(void *, void *) __attribute__((weak_import))
 
 static IMP g_orig_new = NULL;
 static IMP g_orig_new4 = NULL;
-static const void *kFlagsAssoc = &kFlagsAssoc;
+static BOOL g_replace_enabled = YES;
 static const void *kLifetimeAssoc = &kLifetimeAssoc;
 
 typedef struct { Class cls; IMP imp; } EncodeSlot;
 static EncodeSlot g_encode[4];
 
 static IMP orig_encode(Class cls) {
-    for (int i = 0; i < 4; i++)
-        if (g_encode[i].cls == cls) return g_encode[i].imp;
+    @synchronized([MTLFXTemporalScalerDescriptor class]) {
+        for(Class current=cls;current;current=class_getSuperclass(current))
+            for (int i = 0; i < 4; i++)
+                if (g_encode[i].cls == current) return g_encode[i].imp;
+    }
     return NULL;
 }
 
@@ -85,8 +90,11 @@ static void remember_flags(id scaler, id desc, id<MTLDevice> device) {
     int outres = desc_flag(desc, @selector(isOutputResolutionMotionVectorsEnabled));
     int ae = desc_flag(desc, @selector(isAutoExposureEnabled));
     int props = desc_flag(desc, @selector(isInputContentPropertiesEnabled));
-    NSArray *flags = @[@(jit), @(outres), @(ae), @(props)];
-    objc_setAssociatedObject(scaler, kFlagsAssoc, flags, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    lifetime->flags[0]=jit;lifetime->flags[1]=outres;lifetime->flags[2]=ae;lifetime->flags[3]=props;
+    const char *names[]={"colorContentOffsetX","colorContentOffsetY","depthContentOffsetX","depthContentOffsetY",
+                         "motionContentOffsetX","motionContentOffsetY","outputOffsetX","outputOffsetY"};
+    for(unsigned i=0;i<8;++i){SEL sel=sel_registerName(names[i]);lifetime->offsets[i]=[scaler respondsToSelector:sel]?sel:NULL;}
+    lifetime->hasFence=[scaler respondsToSelector:@selector(fence)];
     MTLFXTemporalScalerDescriptor *d = desc;
     hook_log("scaler %p created: desc in %lux%lu out %lux%lu color %lu depth %lu motion %lu out %lu "
              "jitteredMV=%d outputResMV=%d autoExposure=%d inputContentProps=%d minScale %.3f maxScale %.3f",
@@ -97,9 +105,8 @@ static void remember_flags(id scaler, id desc, id<MTLDevice> device) {
              jit, outres, ae, props, d.inputContentMinScale, d.inputContentMaxScale);
 }
 
-static NSUInteger optional_offset(id scaler, const char *name) {
-    SEL sel = sel_registerName(name);
-    if (![scaler respondsToSelector:sel]) return 0;
+static NSUInteger optional_offset(id scaler,Fsr4OwnerLifetime *lifetime,unsigned index) {
+    SEL sel=lifetime->offsets[index];if(!sel)return 0;
     NSUInteger (*get)(id, SEL) = (NSUInteger (*)(id, SEL))objc_msgSend;
     return get(scaler, sel);
 }
@@ -115,7 +122,8 @@ static int capture_surface(Fsr4InputSurface *surface, id<MTLTexture> texture,
 }
 
 // Returns 1 if this encode was consumed by FSR4.
-static int fsr4_replace_encode(id scaler, id commandBuffer) {
+static int fsr4_replace_encode(id scaler,id commandBuffer,Fsr4OwnerLifetime *lifetime) {
+    if(!lifetime)return 0;
     id<MTLFXTemporalScaler> s = scaler;
     id<MTLTexture> color = s.colorTexture;
     id<MTLTexture> depth = s.depthTexture;
@@ -132,7 +140,6 @@ static int fsr4_replace_encode(id scaler, id commandBuffer) {
         || s.inputWidth > UINT32_MAX || s.inputHeight > UINT32_MAX) {
         fsr4_live_set_inactive("scaler size does not fit the input ABI"); return 0;
     }
-    NSArray *flags = objc_getAssociatedObject(scaler, kFlagsAssoc);
     Fsr4LiveFrameV2 v2;
     memset(&v2, 0, sizeof v2);
     v2.structSize = sizeof v2;
@@ -156,21 +163,19 @@ static int fsr4_replace_encode(id scaler, id commandBuffer) {
     f->preExposure = s.preExposure;
     f->reset = s.reset ? 1 : 0;
     f->depthReversed = s.depthReversed ? 1 : 0;
-    f->jitteredMV = flags.count > 0 ? [flags[0] intValue] : -1;
-    f->outputResMV = flags.count > 1 ? [flags[1] intValue] : -1;
-    f->autoExposure = flags.count > 2 ? [flags[2] intValue] : -1;
-    v2.inputContentProperties = flags.count > 3 ? [flags[3] intValue] : -1;
+    f->jitteredMV=lifetime->flags[0];f->outputResMV=lifetime->flags[1];
+    f->autoExposure=lifetime->flags[2];v2.inputContentProperties=lifetime->flags[3];
     v2.geometry.maxInputWidth = (uint32_t)s.inputWidth;
     v2.geometry.maxInputHeight = (uint32_t)s.inputHeight;
-    if (!capture_surface(&v2.geometry.color, color, optional_offset(scaler, "colorContentOffsetX"), optional_offset(scaler, "colorContentOffsetY"))
-        || !capture_surface(&v2.geometry.depth, depth, optional_offset(scaler, "depthContentOffsetX"), optional_offset(scaler, "depthContentOffsetY"))
-        || !capture_surface(&v2.geometry.motion, motion, optional_offset(scaler, "motionContentOffsetX"), optional_offset(scaler, "motionContentOffsetY"))
-        || !capture_surface(&v2.geometry.output, output, optional_offset(scaler, "outputOffsetX"), optional_offset(scaler, "outputOffsetY"))) {
+    if (!capture_surface(&v2.geometry.color,color,optional_offset(scaler,lifetime,0),optional_offset(scaler,lifetime,1))
+        || !capture_surface(&v2.geometry.depth,depth,optional_offset(scaler,lifetime,2),optional_offset(scaler,lifetime,3))
+        || !capture_surface(&v2.geometry.motion,motion,optional_offset(scaler,lifetime,4),optional_offset(scaler,lifetime,5))
+        || !capture_surface(&v2.geometry.output,output,optional_offset(scaler,lifetime,6),optional_offset(scaler,lifetime,7))) {
         fsr4_live_set_inactive("texture size or offset does not fit the input ABI"); return 0;
     }
     f->mvOffX = v2.geometry.motion.offsetX; f->mvOffY = v2.geometry.motion.offsetY;
     if (fsr4_encode_live_frame_with_fence_v2) {
-        id fence = [scaler respondsToSelector:@selector(fence)] ? s.fence : nil;
+        id fence = lifetime->hasFence?s.fence:nil;
         return fsr4_encode_live_frame_with_fence_v2(&v2, (__bridge void *)fence);
     }
     if (fsr4_encode_live_frame_v2) return fsr4_encode_live_frame_v2(&v2);
@@ -190,14 +195,14 @@ static int fsr4_replace_encode(id scaler, id commandBuffer) {
 }
 
 static void hooked_encode(id self, SEL _cmd, id commandBuffer) {
-    IMP orig = orig_encode(object_getClass(self));
-    const char *rep = getenv("FSR4_REPLACE");
-    if (rep && rep[0] == '0') fsr4_live_set_inactive("FSR4_REPLACE=0");
-    else if (fsr4_replace_encode(self, commandBuffer))
-        return;
-    Fsr4OwnerLifetime *lifetime = objc_getAssociatedObject(self, kLifetimeAssoc);
-    if (lifetime && fsr4_invalidate_live_owner)
-        fsr4_invalidate_live_owner((__bridge void *)lifetime.device, (__bridge void *)self);
+    Fsr4OwnerLifetime *lifetime=objc_getAssociatedObject(self,kLifetimeAssoc);
+    IMP orig=lifetime&&lifetime->original?lifetime->original:orig_encode(object_getClass(self));
+    if(g_replace_enabled&&fsr4_replace_encode(self,commandBuffer,lifetime)){
+        lifetime->replaced=YES;return;
+    }
+    if(lifetime&&lifetime->replaced&&fsr4_invalidate_live_owner){
+        fsr4_invalidate_live_owner((__bridge void*)lifetime.device,(__bridge void*)self);lifetime->replaced=NO;
+    }
     if (!orig) {
         hook_log("encode: no original IMP on %s", class_getName(object_getClass(self)));
         return;
@@ -206,6 +211,7 @@ static void hooked_encode(id self, SEL _cmd, id commandBuffer) {
 }
 
 static void install_encode(Class cls) {
+    @synchronized([MTLFXTemporalScalerDescriptor class]) {
     if (!cls || orig_encode(cls)) return;
     SEL sel = @selector(encodeToCommandBuffer:);
     Method m = class_getInstanceMethod(cls, sel);
@@ -222,8 +228,10 @@ static void install_encode(Class cls) {
     }
     g_encode[slot].cls = cls;
     g_encode[slot].imp = method_getImplementation(m);
-    method_setImplementation(m, (IMP)hooked_encode);
+    class_addMethod(cls,sel,g_encode[slot].imp,method_getTypeEncoding(m));
+    method_setImplementation(class_getInstanceMethod(cls,sel), (IMP)hooked_encode);
     hook_log("swizzled %s encodeToCommandBuffer:", class_getName(cls));
+    }
 }
 
 static id hooked_new(id self, SEL _cmd, id device) {
@@ -231,6 +239,8 @@ static id hooked_new(id self, SEL _cmd, id device) {
     if (scaler) {
         remember_flags(scaler, self, device);
         install_encode(object_getClass(scaler));
+        Fsr4OwnerLifetime *lifetime=objc_getAssociatedObject(scaler,kLifetimeAssoc);
+        lifetime->original=orig_encode(object_getClass(scaler));
     }
     return scaler;
 }
@@ -240,6 +250,8 @@ static id hooked_new4(id self, SEL _cmd, id device, id compiler) {
     if (scaler) {
         remember_flags(scaler, self, device);
         install_encode(object_getClass(scaler));
+        Fsr4OwnerLifetime *lifetime=objc_getAssociatedObject(scaler,kLifetimeAssoc);
+        lifetime->original=orig_encode(object_getClass(scaler));
     }
     return scaler;
 }
@@ -261,6 +273,8 @@ static void fsr4_hook_init(void) {
     if (!root || !root[0]) return;
     @autoreleasepool {
     hook_log("loaded pid=%d", getpid());
+    const char *replace=getenv("FSR4_REPLACE");g_replace_enabled=!(replace&&replace[0]=='0');
+    if(!g_replace_enabled){hook_log("SR native passthrough: FSR4_REPLACE=0, original methods retained");return;}
     Class desc = objc_getClass("MTLFXTemporalScalerDescriptor");
     if (!desc) {
         hook_log("MTLFXTemporalScalerDescriptor missing");
