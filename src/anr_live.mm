@@ -45,15 +45,25 @@ struct View {
     bool gpu_failed()const{for(const auto &slot:slots)if(slot.busy&&__atomic_load_n((uint32_t*)slot.completion.contents,__ATOMIC_ACQUIRE)==2)return true;return false;}
 };
 using Key=std::pair<uintptr_t,uintptr_t>;
-std::mutex mutex;
-std::map<Key,std::shared_ptr<View>> views;
-std::vector<std::shared_ptr<View>> retired;
 struct Failure {std::string directory,reason;std::chrono::steady_clock::time_point retry;};
-std::map<Key,Failure> failures;
-Fsr4AnrStatus status={};
-std::chrono::steady_clock::time_point lastPublish;
+struct LiveState {
+    std::mutex mutex;
+    std::map<Key,std::shared_ptr<View>> views;
+    std::vector<std::shared_ptr<View>> retired;
+    std::map<Key,Failure> failures;
+    Fsr4AnrStatus status={};
+    std::chrono::steady_clock::time_point lastPublish;
+};
+LiveState &live_state(){
+    // The FG dylib constructor may run before this translation unit's
+    // globals. Construct the containers on first access, independent of
+    // link order. Keep state alive for the controller/owner teardown too.
+    static LiveState *const state=new LiveState;
+    return *state;
+}
 Key key(void *device,void *owner){return {(uintptr_t)device,(uintptr_t)owner};}
 void publish(){
+    auto &state=live_state();auto &status=state.status;auto &lastPublish=state.lastPublish;
     // Synthetic GPU checks must not overwrite the running game's receipt.
     if(const char *disabled=getenv("FSR4_ANR_STATUS_DISABLED"))if(!strcmp(disabled,"1"))return;
     const char *root=getenv("FSR4_ROOT");if(!root||!*root)return;
@@ -77,6 +87,7 @@ void publish(){
     fclose(f);rename(temporary.c_str(),path.c_str());
 }
 int reject(const char *why){
+    auto &status=live_state().status;
     const bool changed=strncmp(status.reason,why,sizeof status.reason)!=0||status.active;
     if(changed){
         fprintf(stderr,"[anr-fg] %s\n",why);
@@ -139,8 +150,9 @@ std::shared_ptr<View> create(const Fsr4AnrFrame &f,const std::string &directory,
     }
     return v;
 }
-void collect(){for(auto it=retired.begin();it!=retired.end();)if((*it)->finished())it=retired.erase(it);else ++it;}
+void collect(){auto &retired=live_state().retired;for(auto it=retired.begin();it!=retired.end();)if((*it)->finished())it=retired.erase(it);else ++it;}
 void read_ui_stats(View &v){
+    auto &status=live_state().status;
     for(const auto &slot:v.slots)if(slot.uiSequence>v.uiStatsRead&&slot.finished()){
         uint32_t values[5];memcpy(values,(const uint8_t*)slot.completion.contents+16,sizeof values);
         status.uiSamples=values[0];status.uiChanged=values[1];status.uiSoft=values[2];
@@ -183,7 +195,10 @@ bool helper(View &v,id command,bool metal4,int which,id<MTLTexture> color,id<MTL
 }
 }
 int fsr4_anr_encode_frame(const Fsr4AnrFrame *frame){@autoreleasepool{
-    std::lock_guard<std::mutex> lock(mutex);++status.encodes;collect();
+    auto &state=live_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    auto &status=state.status;auto &views=state.views;auto &retired=state.retired;auto &failures=state.failures;
+    ++status.encodes;collect();
     status.selectedAnr=fsr4_anr_is_selected();
     if(!status.selectedAnr)return reject("MetalFX FG selected");
     const char *reason=fsr4_anr_frame_reason(frame);if(reason)return reject(reason);const auto &f=*frame;
@@ -305,20 +320,30 @@ int fsr4_anr_encode_frame(const Fsr4AnrFrame *frame){@autoreleasepool{
     else if(status.uiMode==FSR4_ANR_UI_OVERLAY)++status.uiOverlay;
     publish();return 1;
 }}
-void fsr4_anr_invalidate_owner(void *device,void *owner){std::lock_guard<std::mutex> lock(mutex);auto it=views.find(key(device,owner));if(it!=views.end()&&it->second)it->second->history=false;}
-void fsr4_anr_release_owner(void *device,void *owner){std::lock_guard<std::mutex> lock(mutex);auto it=views.find(key(device,owner));if(it!=views.end()){if(it->second&&!it->second->finished())retired.push_back(it->second);views.erase(it);}failures.erase(key(device,owner));collect();}
+void fsr4_anr_invalidate_owner(void *device,void *owner){
+    auto &state=live_state();std::lock_guard<std::mutex> lock(state.mutex);
+    auto it=state.views.find(key(device,owner));if(it!=state.views.end()&&it->second)it->second->history=false;
+}
+void fsr4_anr_release_owner(void *device,void *owner){
+    auto &state=live_state();std::lock_guard<std::mutex> lock(state.mutex);
+    auto it=state.views.find(key(device,owner));if(it!=state.views.end()){
+        if(it->second&&!it->second->finished())state.retired.push_back(it->second);state.views.erase(it);
+    }
+    state.failures.erase(key(device,owner));collect();
+}
 extern "C" void fsr4_anr_mode_changed(int anr){
-    std::lock_guard<std::mutex> lock(mutex);
+    auto &state=live_state();std::lock_guard<std::mutex> lock(state.mutex);
+    auto &status=state.status;
     status.selectedAnr=anr;status.active=0;
-    for(auto &entry:views)if(entry.second&&!entry.second->finished())retired.push_back(entry.second);
-    views.clear();failures.clear();collect();
+    for(auto &entry:state.views)if(entry.second&&!entry.second->finished())state.retired.push_back(entry.second);
+    state.views.clear();state.failures.clear();collect();
     snprintf(status.reason,sizeof status.reason,"%s",anr?"ANR selected; waiting for an accepted frame":"MetalFX selected; original native encode");
     publish();
 }
 void fsr4_anr_publish_passthrough(void){
-    std::lock_guard<std::mutex> lock(mutex);collect();
-    status.selectedAnr=0;status.active=0;
-    snprintf(status.reason,sizeof status.reason,"MetalFX selected; original native encode");publish();
+    auto &state=live_state();std::lock_guard<std::mutex> lock(state.mutex);collect();
+    state.status.selectedAnr=0;state.status.active=0;
+    snprintf(state.status.reason,sizeof state.status.reason,"MetalFX selected; original native encode");publish();
 }
-void fsr4_anr_set_inactive(const char *why){std::lock_guard<std::mutex> lock(mutex);reject(why?why:"ANR inactive");}
-void fsr4_anr_get_status(Fsr4AnrStatus *out){if(!out)return;std::lock_guard<std::mutex> lock(mutex);*out=status;}
+void fsr4_anr_set_inactive(const char *why){auto &state=live_state();std::lock_guard<std::mutex> lock(state.mutex);reject(why?why:"ANR inactive");}
+void fsr4_anr_get_status(Fsr4AnrStatus *out){if(!out)return;auto &state=live_state();std::lock_guard<std::mutex> lock(state.mutex);*out=state.status;}

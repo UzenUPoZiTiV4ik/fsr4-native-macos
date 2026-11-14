@@ -301,6 +301,19 @@ test-fsr412-lossy: build/tests/fsr412_modes_ab
 	$< "$(CURDIR)"
 	$< "$(CURDIR)" --mtl4
 
+build/tests/fsr412_new_look_gpu: tests/fsr412_new_look_gpu.mm tools/fsr412/new_look.py Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) -Wextra -Werror -fobjc-arc $< $(FRAMEWORKS) -o $@
+
+# Experimental new-look: scalar formulas, complete model/backend parity, switches.
+test-fsr412-new-look: build/tests/fsr412_new_look_gpu build/tests/fsr412_modes_ab
+	FSR412_NEW_LOOK_GPU_TEST=1 python3 -m unittest discover -s tests -p test_fsr412_new_look.py
+	build/tests/fsr412_modes_ab "$(CURDIR)" --new-look
+	build/tests/fsr412_modes_ab "$(CURDIR)" --new-look --mtl4
+	build/tests/fsr412_modes_ab "$(CURDIR)" --new-look --ultra --size 88 48 256 160
+
+.PHONY: test-fsr412-new-look
+
 bench-fsr412-modes: build/tests/fsr412_modes_ab
 	$< "$(CURDIR)" --bench 30 --size 864 560 1712 1112
 
@@ -487,7 +500,10 @@ test-anr-live: build/anr_tools/anr_live_test
 	ANR_TEST_HDR=1 $< "$(CURDIR)" "$(ANR_RUNTIME)" classic
 	ANR_TEST_HDR=1 $< "$(CURDIR)" "$(ANR_RUNTIME)" metal4
 
-.PHONY: test-netal-input netal-source-check test-anr-live test-anr-input test-anr-ui test-anr-motion
+test-anr-startup:
+	python3 -m unittest discover -s tests -p test_anr_startup.py
+
+.PHONY: test-netal-input netal-source-check test-anr-live test-anr-input test-anr-ui test-anr-motion test-anr-startup
 
 clean:
 	rm -f $(BINDIR)/fsr4mac $(BINDIR)/gen_testcase $(BINDIR)/compare $(BINDIR)/bilin $(BINDIR)/bin2png

@@ -163,7 +163,7 @@ def signed_square(text: str) -> str:
 
 
 def compile_metal(src: Path, out: Path, entry: str, external: bool = False, tier: int = 1080, prepared=False, stage="", pixel_fix=False,
-                  lossy=False, low_res_mv=True, depth_inverted=False, initializer=None, base_initializer=None, receipt=None):
+                  lossy=False, low_res_mv=True, depth_inverted=False, initializer=None, base_initializer=None, receipt=None, new_look=False):
     text = src.read_text()
     if external:
         text=external_post_cnb(text,tier)
@@ -181,9 +181,9 @@ def compile_metal(src: Path, out: Path, entry: str, external: bool = False, tier
     if lossy:
         from fsr412.lossy_shaders import apply_lossy_pre, apply_lossy_post
         if stage in ("pre","pre_reuse"):
-            text=apply_lossy_pre(text,tier,low_res_mv=bool(low_res_mv),depth_inverted=bool(depth_inverted),reuse_only=stage=="pre_reuse")
+            text=apply_lossy_pre(text,tier,low_res_mv=bool(low_res_mv),depth_inverted=bool(depth_inverted),reuse_only=stage=="pre_reuse",new_look=new_look)
         elif stage=="post":
-            text=apply_lossy_post(text,tier)
+            text=apply_lossy_post(text,tier,new_look=new_look)
             if initializer is not None and receipt is not None:
                 text=patch_post_biases_by_tap(text,initializer,receipt)
     if pixel_fix and stage == "post" and not lossy:
@@ -224,6 +224,7 @@ def main():
     ap.add_argument("--ultra-performance",type=int,choices=(0,1),default=0); ap.add_argument("--external-post-cnb",type=int,choices=(0,1),default=0)
     ap.add_argument("--pixelization-fix","--hair-fix",dest="pixelization_fix",type=int,choices=(0,1),default=0)
     ap.add_argument("--lossy",type=int,choices=(0,1),default=0)
+    ap.add_argument("--new-look",type=int,choices=(0,1),default=0)
     ap.add_argument("--neural-tile-size",type=int,choices=(0,128,256,512,1024,2048),default=0)
     a=ap.parse_args(); root=Path(a.root).resolve(); bdir=Path(a.builddir).resolve()
     if a.lossy and not a.external_post_cnb:
@@ -232,6 +233,8 @@ def main():
         raise ValueError("the pixelization fix patches the ordinary Lite POST; Lite Lossy keeps the release POST")
     if a.neural_tile_size and not a.lossy:
         raise ValueError("neural tiling is only supported by Lite Lossy")
+    if a.new_look and (not a.lossy or a.colorspace != 0 or a.neural_tile_size or a.res > 2160):
+        raise ValueError("new-look requires whole-frame Lite Lossy, linear input and a tier up to 2160")
     preset="ultraperformance" if a.ultra_performance else "normal"
     profile="int8-lite-lossy" if a.lossy else "int8-lite"
     init,initializer,trained=initializer_for(root,a.res,preset,profile)
@@ -241,6 +244,7 @@ def main():
     prepared=bool(a.optimize and a.external_post_cnb and a.colorspace==0)
     key=f"fsr412_{a.res}_di{a.depth_inverted}_lm{a.low_res_mv}_jm{a.jittered_mv}_cs{a.colorspace}_ae{a.auto_exposure}_o{a.optimize}_up{a.ultra_performance}_pc{a.external_post_cnb}"
     if a.lossy:key+="_lossy2"
+    if a.new_look:key+="_nl1"
     if a.neural_tile_size:key+=f"_nt{a.neural_tile_size}"
     if prepared: key+=f"_v{REVISION}"
     if a.pixelization_fix: key+="_px2"
@@ -256,6 +260,7 @@ def main():
     extra=[init,Path(__file__).with_name("model_data.py")]
     if a.lossy:extra += [Path(__file__).with_name("lossy_shaders.py"),Path(__file__).with_name("lossy_weights.py"),
         root/"build/fsr412_lossy/import.json",root/"src/fsr412_neural_tile.h",Path(__file__).with_name("neural_tiling.py")]
+    if a.new_look:extra.append(Path(__file__).with_name("new_look.py"))
     for path in [Path(__file__),Path(__file__).with_name("optimization.py"),CATALOG,*extra,
                  *[source_for(row) for row in selected.values()],
                  *[support_dir/support_manifest["kernels"][s]["library"] for s in ("ae","ae_finalize","rcas")]]:
@@ -276,7 +281,7 @@ def main():
         src=source_for(row); base=out/stage
         generated,lib=compile_metal(src,base,row["entry"],stage=="post" and bool(a.external_post_cnb),a.res,prepared,stage,bool(a.pixelization_fix),
             lossy=lossy_active,low_res_mv=a.low_res_mv,depth_inverted=a.depth_inverted,
-            initializer=initializer if trained else None,base_initializer=base_initializer,receipt=receipt)
+            initializer=initializer if trained else None,base_initializer=base_initializer,receipt=receipt,new_look=bool(a.new_look))
         entry="fsr412_"+row["entry"]
         bufs,tex,sam=reflect_bindings(generated.read_text(),entry)
         info={"stage":stage,"entry":entry,"library":lib.name,"wgsize":row.get("wgsize",[256,1,1]),"buffers":bufs,"textures":tex,"samplers":sam,"source_sha256":row["sha256"]}
@@ -298,7 +303,7 @@ def main():
     if lossy_active:
         row=selected["pre"];base=out/"pre_reuse"
         generated,lib=compile_metal(source_for(row),base,row["entry"],False,a.res,prepared,"pre_reuse",False,
-            lossy=True,low_res_mv=a.low_res_mv,depth_inverted=a.depth_inverted)
+            lossy=True,low_res_mv=a.low_res_mv,depth_inverted=a.depth_inverted,new_look=bool(a.new_look))
         entry="fsr412_"+row["entry"]
         buffers,textures,samplers=reflect_bindings(generated.read_text(),entry)
         kernels["pre_reuse"]={"stage":"pre_reuse","entry":entry,"library":lib.name,"wgsize":row.get("wgsize",[256,1,1]),
@@ -323,6 +328,7 @@ def main():
         "prepared_color":prepared,"post_ct_bias_revision":1 if trained else 0,
         "pixelization_fix":bool(a.pixelization_fix),"lossy":bool(a.lossy),"lossy_active":lossy_active,"trained":trained,
         "neural_tile_size":a.neural_tile_size,"lossy_cache_bytes_per_pixel":cache_bytes,
+        "new_look":bool(a.new_look),"new_look_revision":1 if a.new_look else 0,
         "order":order,"kernels":kernels,"scratch_bytes":scratch,"initializer":str(init.resolve()),
         "initializer_sha256":hashlib.sha256(initializer).hexdigest(),"external_post_cnb":bool(a.external_post_cnb),"post_pixels_per_group":32,"geometry":{"pre":{"kind":"pre","tile":[16,16],"threads":[256,1,1]},"post":{"kind":"post","tile":[16,16],"threads":[256,1,1]}}}
     temporary=out/f".bindings.{os.getpid()}.json"

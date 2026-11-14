@@ -61,6 +61,9 @@ inline bool parse_neural_tile_size(const std::string &text,unsigned &size) {
     return false;
 }
 inline bool validate_options(const Options &o,std::string &error) {
+    if(o.newLook && (o.profile!=Profile::Int8LiteLossy || o.originalLossy || o.neuralTileSize || o.colorspace!=0 || o.tier==4320)) {
+        error="Experimental new-look requires whole-frame Lite Lossy with linear input up to 4K (not original/tiled)";return false;
+    }
     if(o.temporalQuality!=0) {
         error="--temporal-quality / FSR4_TEMPORAL_QUALITY is only supported by FSR 4.1.1 Lossy/lossy2; set it to 0 for FSR 4.1.2";
         return false;

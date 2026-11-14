@@ -381,6 +381,7 @@ void usage() {
         "  INT8 neural stages; needs the external bundle from tools/fsr412/compile_original.py (see docs/FSR412_LOSSY.md).\n"
         "Lite Lossy requires make lite-lossy-weights and does not support --reference/--int8.\n"
         "--neural-tile-size is Lossy-only; 0 disables partial tiles.\n"
+        "--new-look: experimental whole-frame Lite Lossy visual rules, linear input up to 4K.\n"
         "Use --fsr-version 4.1.1 for the earlier Exact, Exact Fast, Lite and Lite 2 profiles.\n"
         "Use --fsr-version 4.0.2 to select the legacy model and its FP16 backend.\n"
         "GPU timings cover the full frame command buffer; diagnostic copies are labelled separately.\n");
@@ -424,6 +425,7 @@ int fsr412_main(int argc, char **argv) {
             else if(arg=="--root") root=value();
             else if(arg=="--profile") profile=value();
             else if(arg=="--no-compile") options.allowCompile=false;
+            else if(arg=="--new-look") options.newLook=true;
             else if(arg=="--pixelization-fix" || arg=="--hair-fix") options.pixelFix=true;
             else if(arg=="--neural-tile-size") {
                 if(!fsr412::parse_neural_tile_size(value(),neuralTileOverride))
@@ -516,6 +518,7 @@ int fsr412_main(int argc, char **argv) {
         else if(colorspace=="pq") options.colorspace=3;
         else fail("meta.json: colorspace must be linear, nonlinear, srgb, or pq");
         options.rcas=flag(meta,@"rcas",0); options.sharpness=float(number(meta,@"sharpness",0));
+        if(!fsr412::validate_options(options,optionError)) fail(optionError);
         if(![NSFileManager.defaultManager createDirectoryAtPath:ns(outputDir) withIntermediateDirectories:YES
             attributes:nil error:&error]) fail("cannot create output directory: "+fsr412::metal_error(error));
         id<MTLCommandQueue> queue=[device newCommandQueue];
@@ -645,7 +648,7 @@ int fsr412_main(int argc, char **argv) {
             @"profile":ns(profile),@"model":@"amd-int8-lite",@"neural_passes":@3,
             @"backend":ns(actualBackend),@"variant":ns(variant),@"testcase":ns(inputDir),
             @"preset":ns(preset),@"colorspace":ns(colorspace),@"benchmark_iterations":@(bench),
-            @"optimize":@(options.optimize),@"pixelization_fix":@(options.pixelFix),@"pixelization_strength":@(pixelStrength),@"requested_tier":@(options.tier),
+            @"optimize":@(options.optimize),@"new_look":@(options.newLook),@"pixelization_fix":@(options.pixelFix),@"pixelization_strength":@(pixelStrength),@"requested_tier":@(options.tier),
             @"neural_tile_size":@(options.neuralTileSize),
             @"warmup_sequences":@(bench?1:0),@"timing_scope":@"full frame command buffer",
             @"measured_frames":@(times.size()),@"neural_runs":@(neuralRuns),@"reused_frames":@(reusedFrames),

@@ -1,5 +1,25 @@
 # Releases
 
+## v3.2 (2026-11-14)
+
+ANR hook startup fix and an optional new look for Lite Lossy.
+Full notes: [docs/releases/v3.2.md](docs/releases/v3.2.md).
+
+- Fix the ANR-at-startup crash from the live-switch implementation: lazy,
+  process-lifetime state avoids accessing C++ containers before their
+  translation unit is initialized. Installer smoke/dlopen checks now use
+  the requested FG mode. New no-model startup tests cover ANR and MetalFX,
+  environment/file overrides and the background controller.
+- Default-off **Experimental new-look** checkbox for whole-frame Lite Lossy:
+  particle arrival/band guard, per-channel spark test, line-preserving speck
+  cap, depth-gated fleck bounds, persistent-change notes and slow fades.
+  Independently implemented from cyboman's issue #20 explanation.
+- Separate shader/history identity; toggling resets history. Old Lite Lossy,
+  ordinary Lite, Exact and ANR remain unchanged. No new model weights.
+- Real Metal 3/4 scalar-rule and MPP/scalar/SIMD tests, plus AppKit/settings
+  checks. Synthetic quality gains and a moving-object regression are recorded
+  in [docs/FSR412_NEW_LOOK.md](docs/FSR412_NEW_LOOK.md).
+
 ## v3.1 (2026-11-13)
 
 Experimental ANR frame generation on top of v3.0.

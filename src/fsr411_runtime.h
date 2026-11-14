@@ -91,6 +91,8 @@ struct Options {
     // Opt-in original Lite Lossy PRE/BORDER/POST and exact native neural stages.
     // Never changes ordinary Lite or the existing experimental tiled profile.
     bool originalLossy = false;
+    // Experimental Lite Lossy visual rules; separate from legacy temporalQuality.
+    bool newLook = false;
     int temporalQuality = 0;
     // Lite Lossy only. Zero alternates whole frames; nonzero updates half the
     // square tiles per frame with a convolution halo and ping-pong parameters.
@@ -369,6 +371,7 @@ public:
         auto fail = [&](const std::string &why) { error = why; view.invalidate(); return false; };
         if (!device_ || !commandBuffer) return fail("missing Metal device or command buffer");
         if (!validate_textures(frame, error)) return fail(error);
+        if (options.newLook && !options.modelLite) return fail("new-look is supported only by FSR 4.1.2 Lite Lossy");
         if (options.colorspace < 0 || options.colorspace > 3 || !std::isfinite(options.sharpness)
             || options.sharpness < 0 || options.sharpness > 1) return fail("invalid colour space or sharpness");
         Fsr4InputPrepared p = {};
@@ -429,7 +432,8 @@ public:
         const bool skip = session->originalLossy ? original_lite_skip(tier,p) :
             lossy && !partial && !session->neuralTileSize && reusable && !view.skippedInference
             && p.jitter[0]<0.f && (liteLossy || (uint64_t(p.rw)*2u>=p.alignedUW && !options.ultraPerformance))
-            && (!liteLossy || (p.alignedUW<=3840u && p.alignedUH<=2160u));
+            && (!liteLossy || (p.alignedUW<=3840u && p.alignedUH<=2160u))
+            && (!options.newLook || original_lite_skip(tier,p));
         TensorSizes sizes = tensor_sizes(p.alignedUW, p.alignedUH);
         if(options.modelLite) {
             constexpr unsigned shifts[9]={1,0,1,2,2,1,0,0,0};

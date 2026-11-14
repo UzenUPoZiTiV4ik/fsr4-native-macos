@@ -194,12 +194,18 @@ static void read_settings(float &sharp, bool &rcas, int &profile, bool &pixelFix
     if (sharp < 0) sharp = 0; if (sharp > 1) sharp = 1;
 }
 
-static bool write_settings(float sharp, bool rcas, int profile, bool pixelFix, float strength) {
+static bool read_new_look() {
+    auto kv = read_kv(dist_path("panel.conf"));
+    return kv["new_look"] == "1";
+}
+
+static bool write_settings(float sharp, bool rcas, int profile, bool pixelFix, float strength, int newLook = -1) {
+    if (newLook < 0) newLook = read_new_look() ? 1 : 0;
     const std::string p = dist_path("panel.conf"), tmp = p + ".tmp." + std::to_string(getpid());
     FILE *f = fopen(tmp.c_str(), "w");
     if (!f) return false;
-    bool ok = fprintf(f, "sharpness=%.3f\nrcas=%d\nprofile=%s\npixelization_fix=%d\npixelization_strength=%.3f\n",
-                      sharp, rcas ? 1 : 0, profile_label(profile), pixelFix ? 1 : 0, strength) > 0;
+    bool ok = fprintf(f, "sharpness=%.3f\nrcas=%d\nprofile=%s\npixelization_fix=%d\npixelization_strength=%.3f\nnew_look=%d\n",
+                      sharp, rcas ? 1 : 0, profile_label(profile), pixelFix ? 1 : 0, strength, newLook == 1 ? 1 : 0) > 0;
     if (fclose(f) != 0) ok = false;
     if (!ok || rename(tmp.c_str(), p.c_str()) != 0) { unlink(tmp.c_str()); return false; }
     return true;
@@ -250,6 +256,7 @@ static bool write_capture_request(NSString **reason) {
 @property(nonatomic, strong) NSString *fgSettingsError;
 @property(nonatomic, strong) NSSlider *slider, *fixStrength;
 @property(nonatomic, strong) NSButton *rcas, *pixelFix;
+@property(nonatomic, strong, getter=experimentalLook) NSButton *newLook;
 @property(nonatomic, strong) NSSlider *modeSlider;
 @property(nonatomic, strong) NSTextField *modeValue, *modeExplanation, *profileHint;
 @property(nonatomic) int savedProfile;
@@ -273,7 +280,7 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
 }
 
 - (void)build {
-    const CGFloat W = 660, H = 550;
+    const CGFloat W = 660, H = 578;
     NSUInteger style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskUtilityWindow
                      | NSWindowStyleMaskNonactivatingPanel | NSWindowStyleMaskHUDWindow;
     NSPanel *p = [[NSPanel alloc] initWithContentRect:NSMakeRect(40, 80, W, H)
@@ -390,7 +397,17 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     [v addSubview:self.fixStrength];
     self.fixVal = label(@"", W - 12 - 46, y, 46, NO);
     self.fixVal.alignment = NSTextAlignmentRight;
-    [v addSubview:self.fixVal]; y -= 24;
+    [v addSubview:self.fixVal]; y -= 26;
+    self.newLook = [NSButton checkboxWithTitle:@"Experimental new-look" target:self action:@selector(changed:)];
+    self.newLook.frame = NSMakeRect(12, y, W - 24, 20);
+    self.newLook.state = read_new_look() ? NSControlStateValueOn : NSControlStateValueOff;
+    self.newLook.attributedTitle = [[NSAttributedString alloc] initWithString:self.newLook.title
+        attributes:@{NSForegroundColorAttributeName: NSColor.systemOrangeColor, NSFontAttributeName: [NSFont systemFontOfSize:12]}];
+    self.newLook.accessibilityLabel = @"Experimental new-look";
+    self.newLook.toolTip = @"Lite Lossy only: experimental particle, thin-line and depth-edge history rules. "
+                           @"May change softness, flicker and GPU cost. Switching resets history and may compile shaders. "
+                           @"Other FSR modes and ANR are unchanged.";
+    [v addSubview:self.newLook]; y -= 26;
     self.profileHint = label(@"", 12, y, W - 24, NO);
     self.profileHint.font = [NSFont systemFontOfSize:11];
     self.profileHint.textColor = NSColor.lightGrayColor;
@@ -422,7 +439,8 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     const int profile = profile_after_change(self.savedProfile, (NSInteger)llround(self.modeSlider.doubleValue),
                                               sender == self.modeSlider, fix);
     const bool saved = write_settings((float)self.slider.doubleValue, self.rcas.state == NSControlStateValueOn,
-                                     profile, fix, (float)self.fixStrength.doubleValue);
+                                     profile, fix, (float)self.fixStrength.doubleValue,
+                                     self.newLook.state == NSControlStateValueOn ? 1 : 0);
     self.settingsError = saved ? nil : @"Could not save panel settings.";
     [self refresh];
 }
@@ -528,13 +546,17 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     const NSInteger stop = stop_for_profile(profile);
     if (!self.modeSlider.highlighted)
         self.modeSlider.doubleValue = stop >= 0 ? stop : stop_for_profile(5);
-    self.modeValue.stringValue = [NSString stringWithFormat:@"%s%@", mode_title(profile),
+    const bool newLook = read_new_look();
+    self.modeValue.stringValue = [NSString stringWithFormat:@"%s%@%@", mode_title(profile),
+                                  profile == 7 && newLook ? @" + new-look" : @"",
                                   stop < 0 ? @" - not selectable" : @""];
     self.modeSlider.accessibilityValueDescription = self.modeValue.stringValue;
     self.modeSlider.alphaValue = stop >= 0 ? 1.0 : 0.5;
     // FSR4_VERSION=4.0.2 in the bottle pins the old model; the modes then do nothing.
     const bool pinned = st.ok && st.active && age <= 3.0 && st.version == "4.0.2" && profile != 3;
     self.modeSlider.enabled = !pinned;
+    self.newLook.state = newLook ? NSControlStateValueOn : NSControlStateValueOff;
+    self.newLook.enabled = profile == 7 && g_has_lite_lossy && !pinned;
     const bool lite = profile == 5 || profile == 6;
     self.pixelFix.hidden = !lite || pinned;
     NSControlStateValue wantFix = profile == 6 || (!lite && fix) ? NSControlStateValueOn : NSControlStateValueOff;
@@ -549,6 +571,7 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
         ? @"The bottle pins FSR 4.0.2 (FSR4_VERSION)."
         : (profile == 7 || profile == 8) && !g_has_lite_lossy
             ? @"Lite Lossy weights/import.json missing or invalid. Run make lite-lossy-weights; saved mode is unchanged."
+        : profile == 7 && newLook ? @"new-look: experimental visual rules; linear input up to 4K. Turn off to restore the previous look."
         : profile == 7 ? @"FSR 4.1.2 Lite Lossy: trained INT8 weights, no fallback to ordinary Lite."
         : profile == 8 ? @"Tiled is no longer offered in the panel. Choose another mode; your saved setting is kept until then."
         : profile == 5 ? @"FSR 4.1.2 INT8 Lite: AMD's smaller model, evaluated every frame."

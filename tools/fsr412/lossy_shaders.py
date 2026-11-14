@@ -318,9 +318,9 @@ static inline float3 Fsr412LossyResolve(float3 current, float3 history, float hi
 """
 
 
-def _prepare(text, tier, stage, extra=""):
+def _prepare(text, tier, stage, extra="", new_look=False):
     _require(tier in TIERS, "unknown tensor tier")
-    marker = "// FSR412_LOSSY_V1_%s tier=%d %s" % (stage.upper(),tier,extra)
+    marker = "// FSR412_LOSSY_V%d_%s tier=%d %s" % (2 if new_look else 1,stage.upper(),tier,extra)
     if text.startswith(marker+"\n"):
         # Integrity is checked on repeated application, including generated body.
         receipt = re.match(re.escape(marker)+r"\n// payload-sha256=([0-9a-f]{64})\n",text)
@@ -342,7 +342,11 @@ def _prepare(text, tier, stage, extra=""):
                      "device Fsr412LossyRaw* Fsr412LossyCurrent [[buffer(%d)]]" % free[3]]
     signature_end = kernel.end()-len(")\n{\n")
     text = text[:signature_end]+", "+", ".join(bindings)+text[signature_end:]
-    text = text[:kernel.start()]+COMMON+(PRE if stage == "pre" else POST)+text[kernel.start():]
+    helpers = PRE if stage == "pre" else POST
+    if new_look and stage == "post":
+        from fsr412.new_look import COLOR_RULES, MOTION_RULES
+        helpers += COLOR_RULES + MOTION_RULES
+    text = text[:kernel.start()]+COMMON+helpers+text[kernel.start():]
     return text, marker
 
 
@@ -350,10 +354,10 @@ def _receipt(text, marker):
     return marker+"\n// payload-sha256="+hashlib.sha256(text.encode()).hexdigest()+"\n"+text
 
 
-def apply_lossy_pre(text, tier, low_res_mv=True, depth_inverted=False, reuse_only=False):
+def apply_lossy_pre(text, tier, low_res_mv=True, depth_inverted=False, reuse_only=False, new_look=False):
     original = text
     extra="lm=%d di=%d reuse-only=%d" % (bool(low_res_mv),bool(depth_inverted),bool(reuse_only))
-    text, marker = _prepare(text,tier,"pre",extra)
+    text, marker = _prepare(text,tier,"pre",extra,new_look)
     if text is None:
         return original
     velocity = _one(r"^        float2 ("+_NAME+r");\n        bool ("+_NAME+r");\n        do\n        \{",text,"sanitized velocity pair")
@@ -383,13 +387,30 @@ def apply_lossy_pre(text, tier, low_res_mv=True, depth_inverted=False, reuse_onl
     if reuse_only:
         injected += "        if (Fsr412LossyMode(Fsr412LossyConstants, MLSR_Optimized_Constants) == 1u) return;\n"
     text = text[:write.end()]+injected+text[write.end():]
+    if new_look:
+        # Preserve the central Catmull-Rom tap's note in the unused alpha.
+        # The variable is neutral on invalid/reset history and out of bounds.
+        taps = list(re.finditer(r"r_history_color\.sample\(", text))
+        _require(len(taps) == 9, "new-look history tap count")
+        tap = taps[4]
+        close = _close(text, tap.end()-1)
+        sampled_note = text[tap.start():close+1] + ".w"
+        statement_end = text.index(";", close)+1
+        text = text[:statement_end]+("\n                fsr412LookPreviousNote = "
+            "(Fsr412LossyConstants.flags & 4u) != 0u ? float("+sampled_note+") : 0.0f;\n"
+            "                if (!isfinite(fsr412LookPreviousNote)) fsr412LookPreviousNote = 0.0f;")+text[statement_end:]
+        velocity = _one(r"^        float2 ("+_NAME+r");\n        bool ("+_NAME+r");\n        do\n        \{",text,"new-look velocity scope")
+        text = text[:velocity.start()]+"        float fsr412LookPreviousNote = 0.0f;\n"+text[velocity.start():]
+        store = _one(r"rw_reprojected_color\.write\(half3\(("+_NAME+r")\)\.(?:xyzx|xyzz), uint2\(("+_NAME+r")\)\);",text,"new-look reprojection note store")
+        text = text[:store.start()]+("rw_reprojected_color.write(half4(half3("+store[1]+"), "
+            "half(fsr412LookPreviousNote)), uint2("+store[2]+"));")+text[store.end():]
     _require(text.find("ScratchBuffer._m0[") > text.find("Fsr412LossyRecord("+write[1]), "tensor store precedes reuse return")
     return _receipt(text,marker)
 
 
-def apply_lossy_post(text,tier):
+def apply_lossy_post(text,tier,new_look=False):
     original = text
-    text, marker = _prepare(text,tier,"post")
+    text, marker = _prepare(text,tier,"post",new_look=new_look)
     if text is None:
         return original
     tail = _tail(text)
@@ -441,6 +462,9 @@ def apply_lossy_post(text,tier):
     replacements={"pixel":output[1],"raw":raw,"rec":rec[3],"filter":filt[2],
                   "sigmoid":rec[0].replace("float4("+rec[3]+")","float4(fsr412Raw.recurrent)"),
                   "scale":filt[0].replace("float4("+filt[2]+")","float4(fsr412Raw.filter)")}
+    if new_look:
+        code = code.replace("as_type<int2>(fsr412Own.xy)",
+            "Fsr412LookMotion(int2(@pixel@ / 2u), Fsr412LossyMotion, MLSR_Optimized_Constants)")
     for key,value in replacements.items(): code=code.replace("@"+key+"@",value)
     old=body[tail["start"]:filt.end()]+"\n"
     _require(text.count(old)==1,"raw CT replacement boundary")
@@ -449,6 +473,52 @@ def apply_lossy_post(text,tier):
     policy += "                bool fsr412AtRest, fsr412OtherMotion, fsr412Uncovered;\n"
     policy += "                Fsr412LossyClassify("+output[1]+", Fsr412LossyMotion, MLSR_Optimized_Constants, fsr412AtRest, fsr412OtherMotion, fsr412Uncovered);\n"
     policy += "                "+blend[1]+" = Fsr412LossyResolve("+current+", float3(r_reprojected_color.read(uint2("+output[1]+"),0u).xyz), "+history[1]+", fsr412Samples, "+output[1]+", r_reprojected_color, MLSR_Optimized_Constants, fsr412AtRest, fsr412OtherMotion, fsr412Uncovered);\n            }"
+    if new_look:
+        center = _one(r"int2\(uint2\(("+_NAME+r"), ("+_NAME+r")\)\)", samples[4], "new-look center sample")
+        band = [samples[4][:center.start()] + "("+center[0]+" + int2(%d,%d))" % offset + samples[4][center.end():]
+                for offset in ((-8,0),(8,0),(0,-8),(0,8))]
+        policy = """
+            float3 fsr412LookHistory = float3(r_reprojected_color.read(uint2(@pixel@),0u).xyz);
+            bool fsr412LookValid = (Fsr412LossyConstants.flags & 4u) != 0u && MLSR_Optimized_Constants.reset == 0u;
+            float fsr412LookPreviousNote = fsr412LookValid ? float(r_reprojected_color.read(uint2(@pixel@),0u).w) : 0.0f;
+            if (!isfinite(fsr412LookPreviousNote)) fsr412LookPreviousNote = 0.0f;
+            if (fsr412PixelReuse)
+            {
+                float3 fsr412Samples[9] = {@samples@};
+                float3 fsr412HistorySamples[9], fsr412HistoryMaximum = float3(0.0f);
+                for (int y=-1;y<=1;++y) for (int x=-1;x<=1;++x) {
+                    int2 h = clamp(int2(@pixel@)+int2(x,y), int2(0),
+                        int2(MLSR_Optimized_Constants.width,MLSR_Optimized_Constants.height)-int2(1));
+                    float3 value = float3(r_reprojected_color.read(uint2(h),0u).xyz);
+                    fsr412HistorySamples[(y+1)*3+x+1] = value;
+                    fsr412HistoryMaximum = max(fsr412HistoryMaximum,value);
+                }
+                float3 fsr412BandSamples[4] = {float3(0.0f),float3(0.0f),float3(0.0f),float3(0.0f)};
+                if (Fsr412LookArrival(fsr412Samples,fsr412HistoryMaximum) > 0.0f) {
+@band@
+                }
+                bool fsr412Still, fsr412AtRest, fsr412OtherMotion, fsr412Uncovered;
+                Fsr412LookClassify(@pixel@,Fsr412LossyMotion,MLSR_Optimized_Constants,
+                    fsr412Still,fsr412AtRest,fsr412OtherMotion,fsr412Uncovered);
+                bool fsr412DepthEdge = !fsr412AtRest && Fsr412LookDepthEdge(int2(@pixel@ / 2u),Fsr412LossyMotion,MLSR_Optimized_Constants);
+                @blend@ = Fsr412LookResolve(@current@,fsr412LookHistory,@share@,fsr412Samples,
+                    fsr412HistorySamples,fsr412BandSamples,fsr412AtRest,fsr412OtherMotion,
+                    fsr412Uncovered,fsr412DepthEdge,fsr412LookPreviousNote);
+                if (fsr412Still && fsr412OtherMotion)
+                    @recurrent@[@phase@].z = max(@recurrent@[@phase@].z,0.45f);
+            }
+            @blend@ = Fsr412LookFinish(@blend@,@current@,fsr412LookHistory,fsr412LookPreviousNote,
+                fsr412LookValid,fsr412LookNotes[@phase@]);
+"""
+        values = {"pixel":output[1],"samples":", ".join(samples),"blend":blend[1],"current":current,
+                  "share":history[1],"recurrent":rec[1],"phase":tail["loop"][1],
+                  "band":"\n".join("                    fsr412BandSamples[%d] = %s;" % (i,s) for i,s in enumerate(band))}
+        for key,value in values.items(): policy=policy.replace("@"+key+"@",value)
+        text=text.replace(tail["loop"][0],"        float fsr412LookNotes[4] = {0.0f,0.0f,0.0f,0.0f};\n"+tail["loop"][0],1)
+        store=_one(r"^            ("+_NAME+r")\["+re.escape(tail["loop"][1])+r"\] = "+re.escape(blend[1])+r";$",body,"new-look history array")
+        pattern=r"rw_history_color\.write\("+re.escape(store[1])+r"\[([0-3])\]\.(?:xyzx|xyzz), ([^\n]+)\);"
+        text,count=re.subn(pattern,lambda m:"rw_history_color.write(float4("+store[1]+"["+m[1]+"], fsr412LookNotes["+m[1]+"]), "+m[2]+");",text)
+        _require(count==4,"new-look four history note stores")
     _require(text.count(blend[0])==1,"blend replacement boundary")
     text=text.replace(blend[0],blend[0]+policy,1)
     return _receipt(text,marker)

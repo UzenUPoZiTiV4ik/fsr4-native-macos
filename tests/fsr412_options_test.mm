@@ -12,6 +12,8 @@ static id<MTLDevice> fsr412_cpu_only_device() { ++deviceQueries; return nil; }
 #undef MTLCreateSystemDefaultDevice
 
 static int selectedProfile = 5;
+static int selectedNewLook = 0;
+extern "C" void fsr4_live_get_new_look(int *enabled) { if (enabled) *enabled = selectedNewLook; }
 extern "C" void fsr4_live_get_profile(int *profile) { if (profile) *profile = selectedProfile; }
 extern "C" void fsr4_live_get_sharpness(float *sharpness, int *rcas) {
     if (sharpness) *sharpness = .4f;
@@ -108,6 +110,26 @@ int main() { @autoreleasepool { try {
         require(live.neuralTileSize == (id == 8 ? 512u : 0u) && live.pixelFix == (id == 6),
                 "live tile/pixel-fix mapping mismatch");
     }
+    selectedNewLook = 1;
+    for (int id : {5, 6, 7, 8}) {
+        selectedProfile = id; fsr412::Frame f; fsr412::Options o;
+        require(options_for(input, f, o, error), "valid new-look preference rejected");
+        require(o.newLook == (id == 7), "new-look leaked into another live mode");
+    }
+    selectedNewLook = 0;
+    {
+        fsr412::Options o; o.profile = fsr412::Profile::Int8LiteLossy; o.newLook = true;
+        require(fsr412::validate_options(o,error), "whole-frame new-look rejected");
+        o.originalLossy = true; require(!fsr412::validate_options(o,error), "new-look changed original route");
+        o.originalLossy = false; o.neuralTileSize = 128;
+        require(!fsr412::validate_options(o,error), "new-look accepted tiled route");
+        o.neuralTileSize = 0; o.colorspace = 1;
+        require(!fsr412::validate_options(o,error), "log-space constants applied to nonlinear colors");
+    }
+    cli({"--profile", "int8-lite-lossy", "--scalar", "--new-look"}, true);
+    for (const char *name : {"int8-lite", "int8-lite-lossy-tiled", "int8-lite-lossy-original"})
+        cli({"--profile", name, "--scalar", "--new-look"}, false);
+    cli({"--profile", "int8-lite-lossy", "--scalar", "--new-look", "--tier", "4320"}, false);
     selectedProfile = 7; setenv("FSR4_LITE_LOSSY_ORIGINAL", "1", 1);
     {
         fsr412::Frame f7; fsr412::Options l7;

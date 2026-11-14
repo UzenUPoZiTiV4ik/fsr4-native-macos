@@ -266,6 +266,7 @@ struct Settings {
     // selected, and the fix strength 0..1 (fsr412::pixel_fix_floor).
     bool pixelFix = false;
     float pixelStrength = 0.5f;
+    bool newLook = false;
     std::string path;
     time_t mtime = 0;
     long mtimeNs = 0;
@@ -330,13 +331,16 @@ static void settings_read_file_locked() {
     FILE *f = fopen(g_set.path.c_str(), "r");
     if (!f) return;
     char line[128];
+    bool newLook = false; // Old writers/files without this opt-in key turn it off.
     while (fgets(line, sizeof line, f)) {
         float v;
+        char trailing;
         int iv;
         char profile[24];
         if (sscanf(line, "sharpness=%f", &v) == 1 && std::isfinite(v)) g_set.sharpness = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
         else if (sscanf(line, "rcas=%d", &iv) == 1) g_set.rcas = iv != 0;
         else if (sscanf(line, "pixelization_fix=%d", &iv) == 1) g_set.pixelFix = iv != 0;
+        else if (sscanf(line, "new_look=%d %c", &iv, &trailing) == 1 && (iv == 0 || iv == 1)) newLook = iv == 1;
         else if (sscanf(line, "pixelization_strength=%f", &v) == 1 && std::isfinite(v))
             g_set.pixelStrength = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
         else if (sscanf(line, "profile=%23s", profile) == 1) {
@@ -346,7 +350,7 @@ static void settings_read_file_locked() {
     }
     const bool ok = !ferror(f);
     fclose(f);
-    if (ok) { g_set.mtime = st.st_mtime; g_set.mtimeNs = st.st_mtimespec.tv_nsec; }
+    if (ok) { g_set.newLook = newLook; g_set.mtime = st.st_mtime; g_set.mtimeNs = st.st_mtimespec.tv_nsec; }
 }
 
 static void settings_refresh_locked() {
@@ -360,9 +364,9 @@ static void settings_write_file_locked() {
     const std::string temporary = g_set.path + ".tmp." + std::to_string(getpid());
     FILE *f = fopen(temporary.c_str(), "w");
     if (!f) { flog("cannot write panel settings"); return; }
-    bool ok = fprintf(f, "sharpness=%.3f\nrcas=%d\nprofile=%s\npixelization_fix=%d\npixelization_strength=%.3f\n",
+    bool ok = fprintf(f, "sharpness=%.3f\nrcas=%d\nprofile=%s\npixelization_fix=%d\npixelization_strength=%.3f\nnew_look=%d\n",
                       g_set.sharpness, g_set.rcas ? 1 : 0, profile_label(g_set.profile),
-                      g_set.pixelFix || g_set.profile == 6 ? 1 : 0, g_set.pixelStrength) > 0;
+                      g_set.pixelFix || g_set.profile == 6 ? 1 : 0, g_set.pixelStrength, g_set.newLook ? 1 : 0) > 0;
     if (fclose(f) != 0) ok = false;
     if (!ok || rename(temporary.c_str(), g_set.path.c_str()) != 0) {
         unlink(temporary.c_str()); flog("cannot save panel settings"); return;
@@ -400,6 +404,12 @@ extern "C" void fsr4_live_get_pixelization_strength(float *strength) {
     std::lock_guard<std::mutex> lk(g_set_mu);
     settings_refresh_locked();
     if (strength) *strength = g_set.pixelStrength;
+}
+
+extern "C" void fsr4_live_get_new_look(int *enabled) {
+    std::lock_guard<std::mutex> lk(g_set_mu);
+    settings_refresh_locked();
+    if (enabled) *enabled = g_set.newLook ? 1 : 0;
 }
 
 extern "C" void fsr4_live_get_profile(int *profile) {

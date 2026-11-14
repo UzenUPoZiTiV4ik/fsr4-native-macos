@@ -122,6 +122,11 @@ int main() { @autoreleasepool { try {
         require(!fsr4_fg::parse_settings(bad).valid,"malformed FG settings accepted");
     require(fsr4_fg::parse_settings("# mode\nschema=fsr4.fg.settings.v1\nmode=metalfx\n").valid,"valid FG file rejected");
     require(!write_frame_generation(static_cast<fsr4_fg::Mode>(99)),"unknown FG mode saved");
+    require(!read_new_look(),"new-look became a default");
+    require(write_settings(.3f,true,7,false,.6f,1) && read_new_look(),"new-look setting not saved");
+    require(write_settings(.4f,false,5,true,.7f) && read_new_look(),"SR settings discarded new-look preference");
+    require(write_frame_generation(fsr4_fg::Mode::MetalFX) && read_new_look(),"FG switch discarded new-look preference");
+    require(write_settings(.4f,false,7,true,.7f,0) && !read_new_look(),"new-look opt-out not saved");
     unlink(dist_path("fg-settings.conf").c_str());
     unlink(dist_path("panel.conf").c_str());
     rmdir((g_root + "/dist/crossover").c_str()); rmdir((g_root + "/dist").c_str());

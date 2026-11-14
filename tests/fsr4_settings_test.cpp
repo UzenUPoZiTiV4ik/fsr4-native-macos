@@ -15,6 +15,7 @@
 
 static void check(bool condition,const char *message) {if(!condition) throw std::runtime_error(message);}
 static int profile() {int value=-1;fsr4_live_get_profile(&value);return value;}
+static int new_look() {int value=-1;fsr4_live_get_new_look(&value);return value;}
 static void sharpness(float expected,int enabled) {
     float value=-1;int rcas=-1;fsr4_live_get_sharpness(&value,&rcas);
     check(std::fabs(value-expected)<.0001f && rcas==enabled,"sharpness/RCAS preference changed unexpectedly");
@@ -30,6 +31,7 @@ int main(int argc,char **argv) {try {
     setenv("FSR4_SETTINGS","none",1);unsetenv("FSR4_PROFILE");unsetenv("FSR4_VERSION");
     if(!std::strcmp(argv[1],"default")) {
         check(profile()==5,"FSR 4.1.2 default is not INT8 Lite");
+        check(new_look()==0,"new-look became a default");
         fsr4_live_set_profile(0);check(profile()==0,"in-memory Exact switch failed");
     } else if(!std::strcmp(argv[1],"environment")) {
         setenv("FSR4_PROFILE","exact",1);check(profile()==0,"environment Exact preference was ignored");
@@ -137,6 +139,15 @@ int main(int argc,char **argv) {try {
             std::memset(text,0,sizeof text);std::fread(text,1,sizeof text-1,saved);std::fclose(saved);
             const std::string setting=std::string("profile=")+name+"\n";
             check(std::strstr(text,setting.c_str())!=nullptr,"Lite Lossy profile was not saved by canonical name");
+        }
+        write(path,"sharpness=0.300\nrcas=1\nprofile=int8-lite-lossy\nnew_look=1\n");poll();
+        check(profile()==7 && new_look()==1,"new-look preference not loaded");
+        fsr4_live_set_sharpness(.6f,0);fsr4_live_set_profile(5);
+        check(profile()==5 && new_look()==1,"unrelated setter discarded new-look preference");
+        write(path,"sharpness=0.300\nrcas=1\nprofile=int8-lite-lossy\n");poll();
+        check(new_look()==0,"legacy settings file kept new-look enabled");
+        for(const char *bad:{"new_look=2\n","new_look=1junk\n","new_look=-1\n"}) {
+            write(path,bad);poll();check(new_look()==0,"malformed new-look preference accepted");
         }
         unlink(path.c_str());rmdir(temporary);
     } else return 2;

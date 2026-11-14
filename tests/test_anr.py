@@ -1,4 +1,5 @@
 import hashlib
+from contextlib import ExitStack
 import importlib.util
 import json
 from pathlib import Path
@@ -109,6 +110,36 @@ class AnrTest(unittest.TestCase):
             installer.main()
         config.assert_not_called()
         build.assert_not_called()
+
+    def test_installer_checks_anr_at_startup_not_only_metalfx(self):
+        with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
+            root=Path(temporary);dist=root/"dist";dist.mkdir()
+            calls=[]
+            def fake_run(command, **kwargs):
+                name=Path(command[2]).name
+                calls.append((name,kwargs["env"]))
+                if name=="smoke":
+                    (dist/"hook.log").write_text("SR native passthrough: original methods retained\n")
+                elif name=="dlopen_test":
+                    (dist/"hook.log").write_text("loaded pid=1\n")
+                return ""
+            stack.enter_context(patch.dict("os.environ",{},clear=True))
+            stack.enter_context(patch("sys.argv",["crossover_fsr4.py","install","--no-bottle",
+                "--frame-generation","anr","--anr-runtime",str(root/"runtime")]))
+            mocks={"ROOT":root,"DIST":dist,"run":fake_run}
+            for name,value in mocks.items():stack.enter_context(patch.object(installer,name,value))
+            returns={"validate_anr_runtime":root/"runtime","find_framework":root/"D3DMetal.framework",
+                "framework_mode":"redirect","build_hook":dist/"hook.dylib","copy_framework":dist/"D3DMetal",
+                "build_smoke":dist/"smoke","build_dlopen":dist/"dlopen_test","build_live":dist/"live_test",
+                "build_reference":dist/"reference.bin","build_panel_app":dist/"Panel.app"}
+            for name,value in returns.items():stack.enter_context(patch.object(installer,name,return_value=value))
+            installer.main()
+            self.assertEqual([name for name,_ in calls],["smoke","dlopen_test","live_test"])
+            for _,env in calls:
+                self.assertEqual(env["FSR4_FG"],"anr")
+                self.assertEqual(env["FSR4_ANR_RUNTIME"],str(root/"runtime"))
+                self.assertEqual(env["FSR4_FG_SETTINGS"],"none")
+                self.assertEqual(env["FSR4_ANR_STATUS_DISABLED"],"1")
 
     def test_fg_switch_has_no_upscaler_profile_change(self):
         with patch("sys.argv", ["crossover_fsr4.py", "frame-generation", "metalfx", "--bottle", "Games"]), \

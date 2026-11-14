@@ -47,7 +47,7 @@ def scene(name, x, y, frame):
     raise ValueError("unknown scene " + name)
 
 
-def generate(output, names):
+def generate(output, names, colorspace="nonlinear"):
     rw, rh = WIDTH//2, HEIGHT//2
     y, x = np.mgrid[:rh, :rw].astype(np.float32)
     gy, gx = np.mgrid[:HEIGHT, :WIDTH].astype(np.float32)
@@ -56,7 +56,7 @@ def generate(output, names):
         folder.mkdir(parents=True, exist_ok=True)
         meta = {"preset": "performance", "render_width": rw, "render_height": rh,
                 "upscale_width": WIDTH, "upscale_height": HEIGHT, "frames": FRAMES,
-                "colorspace": "nonlinear", "auto_exposure": False, "low_res_mv": True,
+                "colorspace": colorspace, "auto_exposure": False, "low_res_mv": True,
                 "depth_inverted": False, "rcas": False, "frame": []}
         for frame in range(FRAMES):
             jx, jy = JITTER[frame % len(JITTER)]
@@ -134,6 +134,7 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     generate_parser = commands.add_parser("generate")
     generate_parser.add_argument("output", type=Path)
+    generate_parser.add_argument("--colorspace", choices=("linear", "nonlinear"), default="nonlinear")
     compare_parser = commands.add_parser("compare")
     for arg in ("inputs", "before", "after"):
         compare_parser.add_argument(arg, type=Path)
@@ -142,7 +143,7 @@ def main():
         command.add_argument("--scenes", choices=SCENES, nargs="+", default=SCENES)
     args = parser.parse_args()
     if args.command == "generate":
-        generate(args.output, args.scenes)
+        generate(args.output, args.scenes, args.colorspace)
     else:
         result = compare(args.inputs, args.before, args.after, args.scenes)
         args.report.parent.mkdir(parents=True, exist_ok=True)

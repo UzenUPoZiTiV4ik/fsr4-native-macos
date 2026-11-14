@@ -133,6 +133,11 @@ a guarantee that each next mode is faster.
   to FSR 4 on thin detail, slower to follow brightness changes.
 - **FSR 4.1.2 Lite Lossy**: retrained compact INT8 network with inference
   reuse; shown only with its pinned weights/receipt after `make lite-lossy-weights`.
+- **Experimental new-look** (Lite Lossy only): optional particle, thin-line
+  and depth-edge history rules. Off by default; some scenes improve and others
+  regress. Requires whole-frame processing, linear input and output up to 4K.
+  Switching resets history and may prepare shaders; other settings are preserved.
+  See [limits and measurements](../../docs/FSR412_NEW_LOOK.md).
 - **FSR 4**: optional older 4.0.2 model, only with its separately installed weights.
 - **Sharpness** and **RCAS** apply immediately.
 

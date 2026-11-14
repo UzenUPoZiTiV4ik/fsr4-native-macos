@@ -205,6 +205,21 @@ python3 tools/crossover/crossover_fsr4.py frame-generation metalfx --bottle "Gam
 The regular `restore` also removes the ANR keys and restores the framework
 route to CrossOver's bundled D3DMetal.
 
+### Startup safety
+
+The initial live-switch implementation could crash during `dlopen` when ANR
+was selected at launch. The hook constructor called the runtime before the
+C++ maps in `anr_live.mm` were initialized; standalone inference tests linked
+those files in the opposite order and missed the failure. Runtime state is
+now constructed lazily and kept for the process lifetime, including owner
+teardown and controller callbacks. No model or device is created at startup.
+
+`make test-anr-startup` deliberately links the constructor before the runtime
+and checks ANR/MetalFX, file/environment overrides, status IO and timer ticks
+in fresh processes without proprietary assets or GPU dispatch. Installation
+smoke/dlopen tests also explicitly select the requested FG engine instead of
+accidentally testing only MetalFX.
+
 ### Live panel switch and native passthrough
 
 The panel offers `MetalFX / ANR` under `Генерация кадров`, with the visible

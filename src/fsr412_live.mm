@@ -72,6 +72,8 @@ bool options_for(const Fsr4LiveFrameV2 &f,fsr412::Frame &frame,fsr412::Options &
         error="FSR4_LITE_LOSSY_ORIGINAL=1 requires the Lite Lossy profile (not tiled/ordinary Lite)";return false;
     }
     o.originalLossy=original!=0;
+    int newLook=0;fsr4_live_get_new_look(&newLook);
+    o.newLook=panelProfile==7 && newLook!=0;
     if(auto tile=env("FSR4_NEURAL_TILE_SIZE")) {
         if(o.profile!=fsr412::Profile::Int8LiteLossy) {
             error="FSR4_NEURAL_TILE_SIZE is supported only by FSR 4.1.2 Lite Lossy";return false;

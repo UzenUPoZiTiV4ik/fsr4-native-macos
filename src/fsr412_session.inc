@@ -2,9 +2,12 @@
 // Model-specific loader within fsr411::Runtime. Resource lifetime, input
 // conversion and Metal 3/4 synchronization use the common runtime.
 Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &o,Kernels kind,std::string &error) {
-    if(o.originalLossy) return ensure_original_session(tier,p,o,kind,error);
     const bool lossy=o.profile==Profile::Int8LiteLossy;
     if(o.temporalQuality) {error="Lite does not support legacy temporal quality";return nullptr;}
+    if(o.newLook && (!lossy || o.originalLossy || o.neuralTileSize || o.colorspace!=0 || tier>2160)) {
+        error="new-look requires whole-frame Lite Lossy with linear input up to 4K";return nullptr;
+    }
+    if(o.originalLossy) return ensure_original_session(tier,p,o,kind,error);
     if(o.profile!=Profile::Int8Lite && !lossy) {error="FSR 4.1.2 requires a Lite profile";return nullptr;}
     const bool portable=kind!=Kernels::Reference;
     if(lossy && !portable) {error="Lite Lossy requires auto, native, scalar or SIMD, not the AMD reference backend";return nullptr;}
@@ -15,7 +18,7 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
         +"_lm"+std::to_string(p.lowResMV)+"_jm"+std::to_string(p.jitteredMV)+"_cs"+std::to_string(o.colorspace)
         +"_ae"+std::to_string(p.autoExposure)+"_o"+std::to_string(o.optimize)
         +"_up"+std::to_string(o.ultraPerformance)+"_pc"+std::to_string(portable)
-        +(lossy?"_lossy2":"")+(o.neuralTileSize?"_nt"+std::to_string(o.neuralTileSize):"")
+        +(lossy?"_lossy2":"")+(o.newLook?"_nl1":"")+(o.neuralTileSize?"_nt"+std::to_string(o.neuralTileSize):"")
         +(o.optimize && portable && o.colorspace==0?"_v3":"")+(o.pixelFix?"_px2":"");
     const std::string cacheKey=key+"_"+kernels_label(kind);
     auto existing=sessions_.find(cacheKey);if(existing!=sessions_.end())return existing->second.get();
@@ -27,7 +30,8 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
         @"--auto-exposure",ns(std::to_string(p.autoExposure)),@"--optimize",ns(std::to_string(o.optimize)),
         @"--ultra-performance",o.ultraPerformance?@"1":@"0",@"--external-post-cnb",portable?@"1":@"0",
         @"--pixelization-fix",o.pixelFix?@"1":@"0",
-        @"--lossy",lossy?@"1":@"0",@"--neural-tile-size",ns(std::to_string(o.neuralTileSize))],error))return nullptr;
+        @"--lossy",lossy?@"1":@"0",@"--new-look",o.newLook?@"1":@"0",
+        @"--neural-tile-size",ns(std::to_string(o.neuralTileSize))],error))return nullptr;
     auto manifest=json(buildDir_+"/"+key+"/bindings.json",error);
     const std::vector<std::string> order={"pre","pad0","pass1","pad1","pad1b","pass2","pad2","pass3","pad3","post"};
     if(!manifest || ![manifest[@"version"] isEqual:@"4.1.2"] || [manifest[@"order"] count]!=order.size()) {
@@ -38,6 +42,10 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
     if([manifest[@"pixelization_fix"] boolValue]!=o.pixelFix) {error="FSR 4.1.2 pixelization-fix variant mismatch";return nullptr;}
     if([manifest[@"lossy"] boolValue]!=lossy || [manifest[@"neural_tile_size"] unsignedIntValue]!=o.neuralTileSize) {
         error="Lite temporal/tiling shader cache mismatch";return nullptr;
+    }
+    if([manifest[@"new_look"] boolValue]!=o.newLook ||
+       (o.newLook && [manifest[@"new_look_revision"] unsignedIntValue]!=1u)) {
+        error="Lite new-look shader revision mismatch; rebuild the shader cache";return nullptr;
     }
     if(lossy && tier<=2160 && !o.ultraPerformance && [manifest[@"post_ct_bias_revision"] unsignedIntValue]!=1u) {
         error="Lite POST revision mismatch; rebuild the shader cache";return nullptr;

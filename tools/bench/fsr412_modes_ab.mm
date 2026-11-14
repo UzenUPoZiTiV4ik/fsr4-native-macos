@@ -43,7 +43,7 @@ NSArray *numbers(const std::vector<double> &values) {auto a=[NSMutableArray arra
 int main(int argc,char **argv) {@autoreleasepool {try {
     require(argc>=2,"usage: fsr412_modes_ab ROOT [--bench N] [--size RW RH UW UH] [--mtl4] [--legacy] [--ultra] [--report FILE]");
     std::string root=argv[1],report="build/lite-lossy-review/modes-ab.json";
-    unsigned rounds=2,rw=128,rh=80,uw=256,uh=160;bool benchmark=false,metal4=false,legacy=false,ultra=false,original=false,autoExposure=false;
+    unsigned rounds=2,rw=128,rh=80,uw=256,uh=160;bool benchmark=false,metal4=false,legacy=false,ultra=false,original=false,autoExposure=false,newLook=false;
     for(int i=2;i<argc;++i) {
         const std::string a=argv[i];
         if(a=="--bench" && i+1<argc) {benchmark=true;rounds=std::stoul(argv[++i]);}
@@ -54,6 +54,7 @@ int main(int argc,char **argv) {@autoreleasepool {try {
         else if(a=="--ultra")ultra=true;
         else if(a=="--original")original=true;
         else if(a=="--auto-exposure")autoExposure=true;
+        else if(a=="--new-look")newLook=true;
         else throw std::runtime_error("unknown option: "+a);
     }
     require(rounds && rounds<=1000 && rw && rh && uw>=4 && uh>=4 && !(uw&3u) && !(uh&3u)
@@ -75,6 +76,7 @@ int main(int argc,char **argv) {@autoreleasepool {try {
     if(benchmark) {
         add("lite",fsr411::Profile::Int8Lite,true);
         add("lite-lossy",fsr411::Profile::Int8LiteLossy,true);
+        if(newLook) {add("new-look",fsr411::Profile::Int8LiteLossy,true);modes.back()->options.newLook=true;}
         add("lite-lossy-tiled",fsr411::Profile::Int8LiteLossy,true,512);
         if(original) {add("lite-lossy-original",fsr411::Profile::Int8LiteLossy,true);modes.back()->options.originalLossy=true;}
         if(legacy) {
@@ -85,6 +87,10 @@ int main(int argc,char **argv) {@autoreleasepool {try {
     } else {
         for(unsigned tile:{0u,128u})for(auto backend:{fsr411::Backend::Auto,fsr411::Backend::Scalar,fsr411::Backend::Simd})
             add(std::string(tile?"tiled-":"whole-")+std::to_string(int(backend)),fsr411::Profile::Int8LiteLossy,true,tile,0,backend);
+        if(newLook)for(auto backend:{fsr411::Backend::Auto,fsr411::Backend::Scalar,fsr411::Backend::Simd}) {
+            add("new-look-"+std::to_string(int(backend)),fsr411::Profile::Int8LiteLossy,true,0,0,backend);
+            modes.back()->options.newLook=true;
+        }
         if(legacy)for(auto backend:{fsr411::Backend::Auto,fsr411::Backend::Scalar})
             add("legacy-quality-"+std::to_string(int(backend)),fsr411::Profile::Lossy2,false,0,2,backend);
     }
@@ -105,6 +111,8 @@ int main(int argc,char **argv) {@autoreleasepool {try {
     for(unsigned round=0;round<rounds+(benchmark?warmups:0);++round)for(unsigned index=0;index<frames;++index) {
         for(size_t order=0;order<modes.size();++order) { @autoreleasepool {
             const size_t position=(round+index)&1u?modes.size()-order-1:order;auto &m=*modes[position];
+            const bool lookMode=m.name.rfind("new-look",0)==0;
+            if(!benchmark && lookMode) {m.options.newLook=index!=5;m.options.allowCompile=true;}
             fsr411::Frame f;f.color=color;f.depth=depth;f.motion=motion;f.output=m.output;
             auto &p=f.input;p.rw=rw;p.rh=rh;p.uw=uw;p.uh=uh;p.preExposure=index<4?1.f:1.4f;
             p.geometry.color=p.geometry.depth=p.geometry.motion={rw,rh,0,0};p.geometry.output={uw,uh,0,0};
@@ -128,7 +136,9 @@ int main(int argc,char **argv) {@autoreleasepool {try {
             }
             m.options.allowCompile=false;
             require(m.view.neuralRuns+m.view.reusedFrames+m.view.partialFrames==m.view.encodes,"frame accounting mismatch");
-            if(index==0 || index==4 || (!benchmark && index==3))require(!m.view.skippedInference && !m.view.partialInference,"reset/exposure did not refresh inference");
+            if(index==0 || index==4 || (!benchmark && (index==3 || (lookMode && (index==5 || index==6)))))
+                require(!m.view.skippedInference && !m.view.partialInference,"reset/exposure/new-look switch did not refresh inference");
+            if(lookMode)require((m.view.variantKey.find("_nl1")!=std::string::npos)==m.options.newLook,"new-look cache identity mismatch");
             if(m.options.modelLite && m.options.profile==fsr411::Profile::Int8LiteLossy)
                 require(m.options.neuralTileSize ? m.view.litePrevious!=m.view.liteCurrent : m.view.litePrevious==m.view.liteCurrent,"raw cache alias contract violated");
             if(benchmark && round>=warmups) {
@@ -136,7 +146,8 @@ int main(int argc,char **argv) {@autoreleasepool {try {
             }
         }}
         if(!benchmark) {
-            for(size_t group=0;group+2<modes.size() && group<6;group+=3) {
+            const size_t groupedModes=newLook?9u:6u;
+            for(size_t group=0;group+2<modes.size() && group<groupedModes;group+=3) {
                 const auto output=bytes(queue,modes[group]->output,8),history=bytes(queue,modes[group]->view.history,8),recurrent=bytes(queue,modes[group]->view.recurrent,4);
                 for(size_t k=1;k<3;++k) {
                     require(output==bytes(queue,modes[group+k]->output,8),"native/scalar/SIMD output mismatch: "+modes[group]->name);
@@ -147,7 +158,7 @@ int main(int argc,char **argv) {@autoreleasepool {try {
                 ++verified;
             }
             if(legacy) {
-                require(bytes(queue,modes[6]->output,8)==bytes(queue,modes[7]->output,8),"legacy quality native/scalar mismatch");
+                require(bytes(queue,modes[groupedModes]->output,8)==bytes(queue,modes[groupedModes+1]->output,8),"legacy quality native/scalar mismatch");
                 ++verified;
             }
         }

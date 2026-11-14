@@ -137,6 +137,9 @@ void fsr4_live_get_profile(int *profile);
 // FSR 4.1.2 Lite pixelization fix strength 0..1 (panel slider, default 0.5);
 // used only with profile 6.
 void fsr4_live_get_pixelization_strength(float *strength);
+// Experimental new-look preference; only the whole-frame Lite Lossy bridge uses it.
+// Saved as new_look=0|1 in panel.conf; default off. Other engines ignore it.
+void fsr4_live_get_new_look(int *enabled);
 void fsr4_live_set_profile(int profile);
 // Model the live bridge encodes: "4.0.2" when FSR4_VERSION=4.0.2 or the
 // profile is 3, "netal" for mode 9, "4.1.2" for INT8 Lite modes 5-8,

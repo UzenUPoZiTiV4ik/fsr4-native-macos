@@ -999,6 +999,11 @@ def cmd_install(args):
     env["FSR4_HOOK_LOG"] = str(log)
     env["FSR4_ROOT"] = str(ROOT)
     env["FSR4_REPLACE"] = "0"
+    # Validate the selected FG engine during dylib initialization, not only
+    # native MetalFX. ANR must be safe before any scaler/frame is created.
+    env[FG_KEY] = fg
+    if fg == "anr":
+        env[ANR_RUNTIME_KEY] = str(anr_runtime)
     env["FSR4_FG_SETTINGS"] = "none"
     env["FSR4_ANR_STATUS_DISABLED"] = "1"
     env[VERSION_KEY] = args.fsr_version

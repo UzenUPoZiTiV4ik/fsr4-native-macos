@@ -118,7 +118,7 @@ The **FSR 4** panel switches processing modes with a discrete
 **Quality -> Performance** slider. It applies the chosen mode after you release
 the thumb, not every intermediate mode you drag across.
 
-![FSR4 Panel](docs/images/panel.png)
+![FSR4 Panel](docs/images/panel-new-look.png)
 
 This is **not a resolution/preset control**: the game's render and output
 resolution stay unchanged. Switching may cause stutters or pauses while
@@ -131,6 +131,11 @@ models appear only when their required data is installed. Pixelization fix
 stays a separate checkbox/strength slider for Lite. **Lossy Tiled is no
 longer offered in the panel**, but its CLI profile remains available. A saved
 unavailable or retired mode is kept until you explicitly choose another one.
+
+**Experimental new-look** is a separate, default-off checkbox for Lite Lossy:
+new particle, thin-line and depth-edge history rules from cyboman's explanation.
+Other models and ANR are unchanged. It can improve some scenes and worsen
+others; [limits, tests and measured regressions](docs/FSR412_NEW_LOOK.md).
 
 Undo the bottle change (on CrossOver 26 this also restores the original
 D3DMetal; if another bottle uses the same patched framework, restore asks you
@@ -206,8 +211,8 @@ make test-fsr411-mpp-fast  # GPU-probed M5 kernels and forced fallback
 make test-fsr-pre-m5      # forced SIMD and exact Winograd
 ```
 
-Build the installer app and DMG: `make installer INSTALLER_VERSION=v3.0`
-(or `python3 tools/installer/build_app.py v3.0 --dmg`).
+Build the installer app and DMG: `make installer INSTALLER_VERSION=v3.2`
+(or `python3 tools/installer/build_app.py v3.2 --dmg`).
 
 ## Documentation
 
@@ -218,6 +223,8 @@ Build the installer app and DMG: `make installer INSTALLER_VERSION=v3.0`
 | FSR 4.1.2 Lossy (formerly Lite 2) | [docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md) |
 | Lite Lossy, tiled inference and new temporal repairs | [docs/FSR412_LOSSY.md](docs/FSR412_LOSSY.md) |
 | Original-shader oracle, geometry and POST CNB | [docs/FSR412_UPSTREAM_ORACLE.md](docs/FSR412_UPSTREAM_ORACLE.md) |
+| v3.2 release notes: hook startup fix and experimental new-look | [docs/releases/v3.2.md](docs/releases/v3.2.md) |
+| Experimental Lite Lossy new-look: limits and measurements | [docs/FSR412_NEW_LOOK.md](docs/FSR412_NEW_LOOK.md) |
 | v3.0 release notes | [docs/releases/v3.0.md](docs/releases/v3.0.md) |
 | Heat-aware 1080p/1440p model measurements | [docs/FSR_V3_BENCHMARKS.md](docs/FSR_V3_BENCHMARKS.md) |
 | M5 INT8 register-chain optimization | [docs/FSR_M5_INT8_OPTIMIZATION.md](docs/FSR_M5_INT8_OPTIMIZATION.md) |
