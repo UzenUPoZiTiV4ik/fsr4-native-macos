@@ -162,7 +162,15 @@ static int fsr4_replace_encode(id scaler,id commandBuffer,Fsr4OwnerLifetime *lif
     f->mvScaleX = s.motionVectorScaleX; f->mvScaleY = s.motionVectorScaleY;
     f->preExposure = s.preExposure;
     f->reset = s.reset ? 1 : 0;
-    f->depthReversed = s.depthReversed ? 1 : 0;
+    // macOS 27's private temporal scaler exposes `depthReversed` and its
+    // setter but not the protocol's `isDepthReversed` getter, so the property
+    // read traps with an unrecognized selector. Probe both spellings instead
+    // of trusting the declared protocol conformance.
+    BOOL reversed = NO;
+    if ([s respondsToSelector:@selector(isDepthReversed)]) reversed = s.depthReversed;
+    else if ([s respondsToSelector:@selector(depthReversed)])
+        reversed = ((BOOL (*)(id, SEL))objc_msgSend)(s, @selector(depthReversed));
+    f->depthReversed = reversed ? 1 : 0;
     f->jitteredMV=lifetime->flags[0];f->outputResMV=lifetime->flags[1];
     f->autoExposure=lifetime->flags[2];v2.inputContentProperties=lifetime->flags[3];
     v2.geometry.maxInputWidth = (uint32_t)s.inputWidth;
