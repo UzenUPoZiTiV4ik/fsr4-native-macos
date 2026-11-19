@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fsr412.optimization import (REVISION, POST_TILE_SIDE, input_color_cache, color_cache_source, pixelization_fix,
                                  ct2d_float_dot, post_color_tile)
 from fsr412.model_data import initializer_for, patch_post_tail, load_lossy_initializer, patch_post_biases_by_tap
+from fsr412.new_look import REVISION as NEW_LOOK_REVISION
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "tools" / "fsr412" / "shader_catalog.json"
@@ -244,7 +245,7 @@ def main():
     prepared=bool(a.optimize and a.external_post_cnb and a.colorspace==0)
     key=f"fsr412_{a.res}_di{a.depth_inverted}_lm{a.low_res_mv}_jm{a.jittered_mv}_cs{a.colorspace}_ae{a.auto_exposure}_o{a.optimize}_up{a.ultra_performance}_pc{a.external_post_cnb}"
     if a.lossy:key+="_lossy2"
-    if a.new_look:key+="_nl1"
+    if a.new_look:key+=f"_nl{NEW_LOOK_REVISION}"
     if a.neural_tile_size:key+=f"_nt{a.neural_tile_size}"
     if prepared: key+=f"_v{REVISION}"
     if a.pixelization_fix: key+="_px2"
@@ -328,7 +329,7 @@ def main():
         "prepared_color":prepared,"post_ct_bias_revision":1 if trained else 0,
         "pixelization_fix":bool(a.pixelization_fix),"lossy":bool(a.lossy),"lossy_active":lossy_active,"trained":trained,
         "neural_tile_size":a.neural_tile_size,"lossy_cache_bytes_per_pixel":cache_bytes,
-        "new_look":bool(a.new_look),"new_look_revision":1 if a.new_look else 0,
+        "new_look":bool(a.new_look),"new_look_revision":NEW_LOOK_REVISION if a.new_look else 0,
         "order":order,"kernels":kernels,"scratch_bytes":scratch,"initializer":str(init.resolve()),
         "initializer_sha256":hashlib.sha256(initializer).hexdigest(),"external_post_cnb":bool(a.external_post_cnb),"post_pixels_per_group":32,"geometry":{"pre":{"kind":"pre","tile":[16,16],"threads":[256,1,1]},"post":{"kind":"post","tile":[16,16],"threads":[256,1,1]}}}
     temporary=out/f".bindings.{os.getpid()}.json"

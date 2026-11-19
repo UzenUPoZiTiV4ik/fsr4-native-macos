@@ -28,6 +28,8 @@
 
 namespace fsr411 {
 
+inline constexpr unsigned kLiteNewLookRevision = 2u;
+
 // Simd: Apple7+ (M1–M4) simdgroup half matrices with exact float accumulation;
 // byte-identical to Scalar. Auto: Native on Apple10, else Simd, else Scalar.
 enum class Backend { Auto, Reference, Native, Scalar, Simd };
