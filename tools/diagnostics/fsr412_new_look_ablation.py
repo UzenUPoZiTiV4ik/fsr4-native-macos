@@ -37,7 +37,9 @@ def ablate(output, depth):
             if name == "no_floor_ceiling":
                 # Only replace the POST library in this disposable cache. Use
                 # --no-compile to replay it with exactly the same other shaders.
-                (post,) = cache.glob("fsr412_*_nl1*/post.metal")
+                (manifest,) = (path for path in cache.glob("fsr412_*/bindings.json")
+                               if json.loads(path.read_text()).get("new_look"))
+                post = manifest.with_name("post.metal")
                 patched = post.with_name("ablation.metal")
                 patched.write_text(without_depth_clamps(post.read_text()))
                 air = patched.with_suffix(".air")
