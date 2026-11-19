@@ -47,7 +47,7 @@ def scene(name, x, y, frame):
     raise ValueError("unknown scene " + name)
 
 
-def generate(output, names, colorspace="nonlinear"):
+def generate(output, names, colorspace="nonlinear", *, moving_object_depth="step"):
     rw, rh = WIDTH//2, HEIGHT//2
     y, x = np.mgrid[:rh, :rw].astype(np.float32)
     gy, gx = np.mgrid[:HEIGHT, :WIDTH].astype(np.float32)
@@ -78,7 +78,8 @@ def generate(output, names, colorspace="nonlinear"):
             if name == "moving_object":
                 foreground = (px-(60+4*frame))**2+(py-108)**2 < 18**2
                 motion[:, :, 0] = np.where(foreground, -2, 0)
-                depth[foreground] = .2
+                if moving_object_depth == "step":
+                    depth[foreground] = .2
             prefix = folder/f"f{frame:02d}"
             color.tofile(str(prefix)+"_color.bin")
             motion.tofile(str(prefix)+"_mv.bin")
@@ -102,6 +103,10 @@ def read(path, shape, dtype):
 
 
 def compare(inputs, before, after, names):
+    return compare_runs(inputs, {"before": before, "after": after}, names)
+
+
+def compare_runs(inputs, runs, names):
     results = {}
     # Ignore the eight-frame warmup and twelve output pixels at each border.
     for name in names:
@@ -110,7 +115,7 @@ def compare(inputs, before, after, names):
         truth = np.stack([read(inputs/name/f"f{i:02d}_truth.bin", (h, w), "<f4")[12:-12, 12:-12]
                           for i in range(8, count)])[:, :, :, None]
         row = {}
-        for label, base in (("before", before), ("after", after)):
+        for label, base in runs.items():
             run = json.loads((base/name/"run.json").read_text())
             if run["diagnostic_gpu_copies"] or run["benchmark_iterations"]:
                 raise ValueError("compare needs ordinary CLI image outputs")
@@ -135,6 +140,7 @@ def main():
     generate_parser = commands.add_parser("generate")
     generate_parser.add_argument("output", type=Path)
     generate_parser.add_argument("--colorspace", choices=("linear", "nonlinear"), default="nonlinear")
+    generate_parser.add_argument("--moving-object-depth", choices=("step", "flat"), default="step")
     compare_parser = commands.add_parser("compare")
     for arg in ("inputs", "before", "after"):
         compare_parser.add_argument(arg, type=Path)
@@ -143,7 +149,7 @@ def main():
         command.add_argument("--scenes", choices=SCENES, nargs="+", default=SCENES)
     args = parser.parse_args()
     if args.command == "generate":
-        generate(args.output, args.scenes, args.colorspace)
+        generate(args.output, args.scenes, args.colorspace, moving_object_depth=args.moving_object_depth)
     else:
         result = compare(args.inputs, args.before, args.after, args.scenes)
         args.report.parent.mkdir(parents=True, exist_ok=True)
