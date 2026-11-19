@@ -7,16 +7,6 @@
 // Proof and limits: docs/FSR412_UPSTREAM_ORACLE.md.
 static constexpr unsigned kOriginalRevision = 3; // tools/fsr412/compile_original.py REVISION
 
-static bool original_lite_skip(int tier,const Fsr4InputPrepared &p) {
-    // Original PRE predicate on b1 jitter/reset/width_lr/width. PRE writes the
-    // same decision as a GPU marker that also gates every neural stage.
-    if(tier==4320 || p.reset) return false;
-    uint32_t x=0,y=0; std::memcpy(&x,&p.jitter[0],4); std::memcpy(&y,&p.jitter[1],4);
-    const bool negativeX=(x>>31) && (x&0x7fffffffu);
-    const bool negativeY=(y>>31) && (y&0x7fffffffu)>1042983597u;
-    return negativeX && (uint32_t(p.rw<<1u)>=p.alignedUW || !negativeY);
-}
-
 static void fill_original_native_dimensions(const Session &s,int pass,const TensorSizes &sizes,PassParams &p) {
     // Input bounds are the class extent (raw halo semantics); stores keep the
     // original rounded P1 rectangles and the active quarter/half rectangles.

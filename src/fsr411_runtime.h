@@ -23,6 +23,7 @@
 #include "fsr411_scratch_layout.h"
 #include "fsr412_neural_tile.h"
 #include "fsr412_original_geometry.h"
+#include "fsr412_original_policy.h"
 #include "fsr412_mpp_policy.h"
 
 namespace fsr411 {
@@ -429,11 +430,12 @@ public:
         // reprojects and replaces its complete parameter cache every frame.
         const bool partial = !session->originalLossy && liteLossy && session->neuralTileSize && reusable
             && p.alignedUW<=3840u && p.alignedUH<=2160u;
-        const bool skip = session->originalLossy ? original_lite_skip(tier,p) :
+        // The original PRE records the same skip decision for its GPU stages.
+        const bool skip = session->originalLossy ? fsr412_original_policy::should_skip(tier,p) :
             lossy && !partial && !session->neuralTileSize && reusable && !view.skippedInference
             && p.jitter[0]<0.f && (liteLossy || (uint64_t(p.rw)*2u>=p.alignedUW && !options.ultraPerformance))
             && (!liteLossy || (p.alignedUW<=3840u && p.alignedUH<=2160u))
-            && (!options.newLook || original_lite_skip(tier,p));
+            && (!options.newLook || fsr412_original_policy::should_skip(tier,p));
         TensorSizes sizes = tensor_sizes(p.alignedUW, p.alignedUH);
         if(options.modelLite) {
             constexpr unsigned shifts[9]={1,0,1,2,2,1,0,0,0};
@@ -1096,6 +1098,9 @@ private:
             np.offset=[entry[@"parameter_offset"] unsignedIntValue];
             if (np.offset+sizeof(PassParams)>params.length || kNative+np.offset+sizeof(PassParams)>8192) { error="native parameter region overflow"; return false; }
             memcpy(&np.parameters,(const uint8_t *)params.bytes+np.offset,sizeof(PassParams));
+            if(s.originalLossy && !fsr412_original_policy::native_rounding_matches_pin(np.parameters)) {
+                error="original Lite Lossy native rounding does not match the pinned shader bundle; regenerate the model";return false;
+            }
             if (winogradDevice && ([entry[@"kind"] isEqual:@"cnb"] || [entry[@"kind"] isEqual:@"fnb"])
                 && (name=="fsr411_simd_cnb" || name=="fsr411_simd_fnb32")
                 && [dispatch[@"tile"][0] unsignedIntValue]==32 && [dispatch[@"tile"][1] unsignedIntValue]==4

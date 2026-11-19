@@ -9,7 +9,7 @@ BINDIR   := tools/bin
 
 all: $(BINDIR)/fsr4mac $(BINDIR)/gen_testcase $(BINDIR)/compare $(BINDIR)/bilin $(BINDIR)/bin2png
 
-test: test-input test-settings test-fsr411-math test-installer test-fsr411-layout test-fsr411-cache test-fsr411-mpp-policy test-fsr412-options test-fsr412-neural-tiles test-fsr4-panel-settings test-netal-input test-anr-input
+test: test-input test-settings test-fsr411-math test-installer test-fsr411-layout test-fsr411-cache test-fsr411-mpp-policy test-fsr412-options test-fsr412-neural-tiles test-fsr412-original-policy test-fsr4-panel-settings test-netal-input test-anr-input
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) tests/backend_policy_test.cpp -o build/tests/backend_policy_test
 	build/tests/backend_policy_test
@@ -328,7 +328,7 @@ build/tests/fsr412_original_runtime_ab: tools/bench/fsr412_original_runtime_ab.m
 	mkdir -p build/tests
 	$(CXX) $(CXXFLAGS) -fobjc-arc -isysroot $(SDKROOT) -I src $< -framework Metal -framework Foundation -o $@
 
-test-fsr412-original: build/tests/fsr412_original_runtime_ab
+test-fsr412-original: build/tests/fsr412_original_runtime_ab test-fsr412-original-policy
 	$< "$(CURDIR)"
 	$< "$(CURDIR)" --simd --size 386 232 644 388
 	$< "$(CURDIR)" --scalar
@@ -337,6 +337,18 @@ test-fsr412-original: build/tests/fsr412_original_runtime_ab
 
 # The shared runtime includes this ABI in all CLI/live build variants.
 build/obj/fsr411_cli.o build/obj/fsr412_cli.o dist/crossover/libfsr4hook.dylib build/tests/fsr412_optimization_test build/tests/fsr411_runtime_test: src/fsr412_neural_tile.h
+
+build/obj/fsr411_cli.o build/obj/fsr412_cli.o dist/crossover/libfsr4hook.dylib \
+build/tests/fsr412_optimization_test build/tests/fsr412_options_test build/tests/fsr412_modes_ab \
+build/tests/fsr412_original_runtime_ab build/tests/fsr411_mpp_ab build/tests/fsr411_simd_ab: src/fsr412_original_policy.h
+
+build/tests/fsr412_original_policy_test: tests/fsr412_original_policy_test.cpp src/fsr412_original_policy.h src/fsr4_input.h src/fsr411_model.h Makefile
+	mkdir -p build/tests
+	$(CXX) $(CXXFLAGS) $< -o $@
+
+.PHONY: test-fsr412-original-policy
+test-fsr412-original-policy: build/tests/fsr412_original_policy_test
+	$<
 
 .PHONY: lite-lossy-weights test-fsr412-options test-fsr412-neural-tiles test-fsr4-panel-settings test-fsr412-lossy bench-fsr412-modes test-fsr412-original
 
