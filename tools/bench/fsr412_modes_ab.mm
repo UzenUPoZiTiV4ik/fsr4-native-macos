@@ -138,7 +138,7 @@ int main(int argc,char **argv) {@autoreleasepool {try {
             require(m.view.neuralRuns+m.view.reusedFrames+m.view.partialFrames==m.view.encodes,"frame accounting mismatch");
             if(index==0 || index==4 || (!benchmark && (index==3 || (lookMode && (index==5 || index==6)))))
                 require(!m.view.skippedInference && !m.view.partialInference,"reset/exposure/new-look switch did not refresh inference");
-            if(lookMode)require((m.view.variantKey.find("_nl1")!=std::string::npos)==m.options.newLook,"new-look cache identity mismatch");
+            if(lookMode)require((m.view.variantKey.find("_nl"+std::to_string(fsr411::kLiteNewLookRevision))!=std::string::npos)==m.options.newLook,"new-look cache identity mismatch");
             if(m.options.modelLite && m.options.profile==fsr411::Profile::Int8LiteLossy)
                 require(m.options.neuralTileSize ? m.view.litePrevious!=m.view.liteCurrent : m.view.litePrevious==m.view.liteCurrent,"raw cache alias contract violated");
             if(benchmark && round>=warmups) {

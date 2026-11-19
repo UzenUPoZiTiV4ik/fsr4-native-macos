@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 
-REVISION = 1
+REVISION = 2
 SOURCE_URL = "https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/issues/20#issuecomment-6839502725"
 
 
@@ -93,10 +93,15 @@ def resolve(current, history, history_share, samples, history_samples, band_samp
         output = [min(o, hi + 0.05) for o, hi in zip(output, high)]
     mean = [sum(s[c] for s in samples) / 9.0 for c in range(3)]
     if not at_rest and depth_edge:
-        output = [max(o, 0.9 * h) if m >= 0.7 * h else o
-                  for o, m, h in zip(output, mean, history)]
-        output = [min(o, 1.5 * h) if m <= 1.7 * h else o
-                  for o, m, h in zip(output, mean, history)]
+        neighbors = samples[:4] + samples[5:]
+        for c, h in enumerate(history):
+            floor, ceiling = 0.9 * h, 1.5 * h
+            if mean[c] >= 0.7 * h and (not other_motion or (
+                    samples[4][c] < floor and all(s[c] >= floor for s in neighbors))):
+                output[c] = max(output[c], floor)
+            if mean[c] <= 1.7 * h and (not other_motion or (
+                    samples[4][c] > ceiling and all(s[c] <= ceiling for s in neighbors))):
+                output[c] = min(output[c], ceiling)
     dark_band = not at_rest and all(h <= max(0.1 * c, 0.0) for h, c in zip(history, current))
     if uncovered or dark_band:
         output = list(current)
@@ -168,8 +173,21 @@ static inline float3 Fsr412LookResolve(float3 current, float3 history, float his
     for (uint i = 0u; i < 9u; ++i) mean += samples[i];
     mean *= 0.111111111f;
     if (!atRest && depthEdge) {
-        result = select(result, max(result, 0.9f * history), mean >= 0.7f * history);
-        result = select(result, min(result, 1.5f * history), mean <= 1.7f * history);
+        float3 floor = 0.9f * history, ceiling = 1.5f * history;
+        bool3 applyFloor = mean >= 0.7f * history, applyCeiling = mean <= 1.7f * history;
+        // At a motion boundary, do not clamp the new surface back to stale history.
+        if (otherMotion) {
+            float3 neighborMin = samples[0], neighborMax = samples[0];
+            for (uint i = 1u; i < 9u; ++i) {
+                if (i == 4u) continue;
+                neighborMin = min(neighborMin, samples[i]);
+                neighborMax = max(neighborMax, samples[i]);
+            }
+            applyFloor = applyFloor && (samples[4] < floor) && (neighborMin >= floor);
+            applyCeiling = applyCeiling && (samples[4] > ceiling) && (neighborMax <= ceiling);
+        }
+        result = select(result, max(result, floor), applyFloor);
+        result = select(result, min(result, ceiling), applyCeiling);
     }
     bool darkBand = !atRest && all(history <= max(0.1f * current, float3(0.0f)));
     return uncovered || darkBand ? current : result;

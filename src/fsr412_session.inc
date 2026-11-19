@@ -18,7 +18,7 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
         +"_lm"+std::to_string(p.lowResMV)+"_jm"+std::to_string(p.jitteredMV)+"_cs"+std::to_string(o.colorspace)
         +"_ae"+std::to_string(p.autoExposure)+"_o"+std::to_string(o.optimize)
         +"_up"+std::to_string(o.ultraPerformance)+"_pc"+std::to_string(portable)
-        +(lossy?"_lossy2":"")+(o.newLook?"_nl1":"")+(o.neuralTileSize?"_nt"+std::to_string(o.neuralTileSize):"")
+        +(lossy?"_lossy2":"")+(o.newLook?"_nl"+std::to_string(kLiteNewLookRevision):"")+(o.neuralTileSize?"_nt"+std::to_string(o.neuralTileSize):"")
         +(o.optimize && portable && o.colorspace==0?"_v3":"")+(o.pixelFix?"_px2":"");
     const std::string cacheKey=key+"_"+kernels_label(kind);
     auto existing=sessions_.find(cacheKey);if(existing!=sessions_.end())return existing->second.get();
@@ -44,7 +44,7 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
         error="Lite temporal/tiling shader cache mismatch";return nullptr;
     }
     if([manifest[@"new_look"] boolValue]!=o.newLook ||
-       (o.newLook && [manifest[@"new_look_revision"] unsignedIntValue]!=1u)) {
+       (o.newLook && [manifest[@"new_look_revision"] unsignedIntValue]!=kLiteNewLookRevision)) {
         error="Lite new-look shader revision mismatch; rebuild the shader cache";return nullptr;
     }
     if(lossy && tier<=2160 && !o.ultraPerformance && [manifest[@"post_ct_bias_revision"] unsignedIntValue]!=1u) {

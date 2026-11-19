@@ -41,6 +41,14 @@ def case(**overrides):
     return result
 
 
+def depth_clamp_case(value, neighbor):
+    samples = [rgb(neighbor)] * 9
+    samples[4] = rgb(value)
+    return case(current=rgb(value), history=rgb(1), history_share=.1,
+                samples=samples, history_samples=[rgb(1)] * 9,
+                at_rest=False, other_motion=True, depth_edge=True, history_valid=False)
+
+
 class RuleTests(unittest.TestCase):
     def test_mid_weight_verdict_is_not_the_old_squared_high_weight_gate(self):
         result = look.resolve(**case())
@@ -100,9 +108,7 @@ class RuleTests(unittest.TestCase):
         self.assertLessEqual(boundary["output"][0], .5)
 
     def test_dark_fleck_floor_needs_depth_edge_and_isolation(self):
-        c = case(current=rgb(.05), history=rgb(1), history_share=.5,
-                 samples=[rgb(.05)] + [rgb(.81)] * 8, history_samples=[rgb(1)] * 9,
-                 at_rest=False, other_motion=True, depth_edge=True, history_valid=False)
+        c = depth_clamp_case(.05, .95)
         edge = look.resolve(**c)
         flat = look.resolve(**{**c, "depth_edge": False})
         self.assertAlmostEqual(edge["output"][0], .9)
@@ -111,13 +117,21 @@ class RuleTests(unittest.TestCase):
         self.assertLess(big_object["output"][0], .7)
 
     def test_white_speck_ceiling_does_not_cap_a_large_arriving_object(self):
-        c = case(current=rgb(8), history=rgb(1), history_share=.5,
-                 samples=[rgb(8)] + [rgb(.8)] * 8, history_samples=[rgb(1)] * 9,
-                 at_rest=False, depth_edge=True, history_valid=False)
+        c = depth_clamp_case(8, .8)
         self.assertAlmostEqual(look.resolve(**c)["output"][0], 1.5)
         self.assertGreater(look.resolve(**{**c, "depth_edge": False})["output"][0], 1.5)
         c["samples"] = [rgb(10)] * 9
         self.assertGreater(look.resolve(**c)["output"][0], 1.5)
+
+    def test_depth_clamps_do_not_restore_stale_history_on_moving_edges(self):
+        for value, neighbor in ((.05, .95), (3.0, .8)):
+            c = depth_clamp_case(value, neighbor)
+            c["samples"][1] = rgb(value)
+            with self.subTest(value=value):
+                self.assertEqual(look.resolve(**c)["output"],
+                                 look.resolve(**{**c, "depth_edge": False})["output"])
+                self.assertNotEqual(look.resolve(**c)["output"],
+                                    look.resolve(**{**c, "other_motion": False})["output"])
 
     def test_uncovered_guard_runs_after_fleck_rules(self):
         c = case(current=rgb(.05), history=rgb(1), history_share=.5,
@@ -242,6 +256,11 @@ class GPUTests(unittest.TestCase):
         rng = random.Random(41220)
         cases = [case(), case(current=rgb(.206), history=rgb(.2), history_share=.9,
                              samples=[rgb(.206)]*9, history_samples=[rgb(.2)]*9, band_samples=[rgb(.2)]*4)]
+        for value, neighbor in ((.05, .95), (3.0, .8)):
+            c = depth_clamp_case(value, neighbor)
+            edge = c["samples"].copy()
+            edge[1] = rgb(value)
+            cases += [c, {**c, "samples": edge}, {**c, "depth_edge": False}]
         for _ in range(1000):
             h = tuple(rng.uniform(.01, 1.5) for _ in range(3))
             c = tuple(rng.uniform(0, 2) for _ in range(3))
