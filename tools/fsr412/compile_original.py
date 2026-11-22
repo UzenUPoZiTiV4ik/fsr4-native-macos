@@ -96,7 +96,7 @@ def build(root, builddir, assets, out, options, converter_argument, cross):
     out = external_output(Path(out))
     require((assets / 'inventory.json').is_file(),
             'original shader inventory is missing; run tools/fsr412/upstream_oracle.py with the pinned DLL and reference provider first')
-    _, trained, _ = load_lossy_initializer(root)
+    _, trained, _ = load_lossy_initializer(root, legacy=True)
     index = classify(assets)
     selected = select(index, options)
     require(selected['source_dll_sha256'] == LOSSY_SHA256, 'original source identity changed')

@@ -987,12 +987,17 @@ private:
     bool load_native(Session &s, bool compile, Kernels kind, std::string &error) {
         const bool useMpp=kind==Kernels::Mpp, useSimd=kind==Kernels::Simd;
         const std::string dir=buildDir_+(s.modelLite?"/fsr412_native_":"/fsr411_native_")+std::to_string(s.tier)+(s.ultraPerformance?"_ultraperformance":"")
-            +(s.profile==Profile::Lossy || s.profile==Profile::Int8LiteLossy?"_lossy":s.profile==Profile::Lossy2?"_lossy2":"");
+            +(s.profile==Profile::Lossy || s.profile==Profile::Int8LiteLossy?"_lossy":s.profile==Profile::Lossy2?"_lossy2":"")
+            +(s.originalLossy?"_original":"");
         // ExactFast differs only in PRE/POST math and shares Exact's network.
-        if (compile && s.modelLite && !run(@[@"python3",ns(root_+"/tools/fsr412/native_model.py"),@"--tier",ns(std::to_string(s.tier)),
+        if (compile && s.modelLite) {
+            NSMutableArray *args=[@[@"python3",ns(root_+"/tools/fsr412/native_model.py"),@"--tier",ns(std::to_string(s.tier)),
             @"--preset",s.ultraPerformance?@"ultraperformance":@"normal",@"--outdir",ns(dir),
             @"--profile",s.profile==Profile::Int8LiteLossy?@"int8-lite-lossy":@"int8-lite",
-            @"--root",ns(root_)],error)) return false;
+            @"--root",ns(root_)] mutableCopy];
+            if(s.originalLossy) [args addObject:@"--original"];
+            if(!run(args,error)) return false;
+        }
         if (compile && !s.modelLite && !run(@[@"python3",ns(root_+"/tools/gen_fsr411_native.py"),@"--tier",ns(std::to_string(s.tier)),
             @"--preset",s.ultraPerformance?@"ultraperformance":@"normal",@"--profile",s.profile==Profile::Lossy?@"lossy":s.profile==Profile::Lossy2?@"lossy2":@"exact",
             @"--outdir",ns(dir)],error)) return false;
@@ -1000,7 +1005,7 @@ private:
         if (!manifest || [manifest[@"abi_version"] unsignedIntValue]!=kAbiVersion
             || [manifest[@"parameter_size"] unsignedIntValue]!=sizeof(PassParams)) { if(error.empty()) error="native 4.1.1 ABI mismatch"; return false; }
         if(s.modelLite && s.profile==Profile::Int8LiteLossy && !s.ultraPerformance && s.tier<=2160 &&
-           [manifest[@"lite_native_revision"] unsignedIntValue]!=2u) {
+           [manifest[@"lite_native_revision"] unsignedIntValue]!=(s.originalLossy?2u:3u)) {
             error="Lite Lossy native border-bias revision mismatch; regenerate the model";return false;
         }
         if(s.modelLite && (![manifest[@"fsr_version"] isEqual:@"4.1.2"] ||

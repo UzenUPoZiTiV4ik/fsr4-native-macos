@@ -30,13 +30,13 @@ def atomic(path,data):
     finally:
         if Path(tmp).exists():Path(tmp).unlink()
 
-def model(tier, preset, initializer, profile="int8-lite"):
+def model(tier, preset, initializer, profile="int8-lite", legacy=False):
     if profile not in ("int8-lite","int8-lite-lossy"):
         raise ValueError("unknown Lite native profile")
     expected=ULTRA_SHA if preset=='ultraperformance' else COMMON_SHA
     if profile=="int8-lite-lossy" and preset=="normal" and tier<=2160:
-        from fsr412.lossy_weights import LOSSY_INITIALIZER_SHA256
-        expected=LOSSY_INITIALIZER_SHA256
+        from fsr412 import lossy_weights, nov22_weights
+        expected = (lossy_weights if legacy else nov22_weights).LOSSY_INITIALIZER_SHA256
     if len(initializer)!=27392 or digest(initializer)!=expected:
         raise ValueError('FSR 4.1.2 Lite initializer identity mismatch')
     ultra=preset=='ultraperformance'
@@ -96,6 +96,16 @@ def model(tier, preset, initializer, profile="int8-lite"):
         base=(ROOT/"build/fsr412_model/initializers-lite.bin").read_bytes()
         if len(base)!=27392 or digest(base)!=COMMON_SHA:
             raise ValueError("missing pinned AMD initializer for conditional POST biases")
+        if not legacy:
+            # The Nov 22 SRV carries the half-unit in stages A/B. The
+            # native half-up epilogue adds it itself. POST and the residual
+            # tails retain their original nearest-even epilogues.
+            for block in (p1, p2, p3):
+                for index in (0, 1):
+                    quantizer = block["q"][index]
+                    quantizer[3] |= 4
+                    half = 1 << (quantizer[2] - 1)
+                    block["bias_values"][index] = [value - half for value in block["bias_values"][index]]
         post["bias_values"].append(list(struct.unpack_from("<16i",base,25344)))
         post["q"][0][3] |= 8
         post["first_tap_bias_policy"]="AMD bias when first 3x3 tap is outside input; trained bias otherwise"
@@ -134,8 +144,8 @@ def winograd(p,conv):
     if worst>=1<<24:return None
     return values,worst
 
-def pack(tier,preset,initializer,out,profile="int8-lite"):
-    passes,post=model(tier,preset,initializer,profile);blob=bytearray();params=bytearray()
+def pack(tier,preset,initializer,out,profile="int8-lite",legacy=False):
+    passes,post=model(tier,preset,initializer,profile,legacy);blob=bytearray();params=bytearray()
     def append(data):
         blob.extend(bytes((-len(blob))%64));off=len(blob);blob.extend(data);return off
     def emit(p):
@@ -164,7 +174,7 @@ def pack(tier,preset,initializer,out,profile="int8-lite"):
         return e
     entries={str(k):emit(v) for k,v in passes.items()};pe=emit(post)
     m={'schema':'fsr411_native_v1','abi_version':1,'parameter_size':212,'parameter_stride':256,
-       'tier':tier,'model':preset,'fsr_version':'4.1.2','profile':profile,'lite_native_revision':2,'passes':entries,'auxiliary_passes':{'post_cnb':pe},
+       'tier':tier,'model':preset,'fsr_version':'4.1.2','profile':profile,'lite_native_revision':2 if legacy else 3,'passes':entries,'auxiliary_passes':{'post_cnb':pe},
        'trained':profile=='int8-lite-lossy' and preset=='normal' and tier<=2160,
        'adaptation':'original conditional POST first-tap biases and trained normal tables' if profile=='int8-lite-lossy' else 'AMD Lite',
        'initializer_sha256':digest(initializer),'initializer_bytes':len(initializer),
@@ -183,12 +193,13 @@ def main():
     ap.add_argument('--initializer',type=Path)
     ap.add_argument('--root',type=Path,default=ROOT)
     ap.add_argument('--profile',choices=('int8-lite','int8-lite-lossy'),default='int8-lite')
+    ap.add_argument('--original', action='store_true')
     a=ap.parse_args()
     if a.initializer:
         data=a.initializer.read_bytes()
     else:
         from fsr412.model_data import initializer_for
-        init,data,trained=initializer_for(a.root,a.tier,a.preset,a.profile)
-    m=pack(a.tier,a.preset,data,a.outdir.resolve(),a.profile)
+        init,data,trained=initializer_for(a.root,a.tier,a.preset,a.profile,legacy=a.original)
+    m=pack(a.tier,a.preset,data,a.outdir.resolve(),a.profile,a.original)
     print(json.dumps({'model':'FSR4.1.2 INT8 Lite','outdir':str(a.outdir),'weights_bytes':m['weights_bytes'],'params_bytes':m['params_bytes']}))
 if __name__=='__main__':main()

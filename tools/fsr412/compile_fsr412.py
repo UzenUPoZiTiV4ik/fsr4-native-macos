@@ -244,7 +244,7 @@ def main():
     lossy_active=bool(a.lossy and a.res<=2160)
     prepared=bool(a.optimize and a.external_post_cnb and a.colorspace==0)
     key=f"fsr412_{a.res}_di{a.depth_inverted}_lm{a.low_res_mv}_jm{a.jittered_mv}_cs{a.colorspace}_ae{a.auto_exposure}_o{a.optimize}_up{a.ultra_performance}_pc{a.external_post_cnb}"
-    if a.lossy:key+="_lossy2"
+    if a.lossy:key+="_lossy3"
     if a.new_look:key+=f"_nl{NEW_LOOK_REVISION}"
     if a.neural_tile_size:key+=f"_nt{a.neural_tile_size}"
     if prepared: key+=f"_v{REVISION}"

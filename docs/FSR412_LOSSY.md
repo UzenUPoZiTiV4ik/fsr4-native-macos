@@ -66,6 +66,7 @@ python3 tools/crossover/crossover_fsr4.py install --panel --fsr-version 4.1.2 --
 Сборка бандла (GPL-данные только в `build/`, DLL не исполняется):
 
 ```sh
+make original-lossy-weights
 python3 tools/fsr412/upstream_oracle.py DLL --reference AMD_4.1.1_DLL   # один раз, статический импорт
 export FSR412_DXIL_SPIRV=/path/to/dxil-spirv                           # существующий конвертер
 tools/bin/fsr4mac testcases/tc_game_balanced out/original --fsr-version 4.1.2 --profile int8-lite-lossy-original
@@ -107,7 +108,11 @@ oracle собирает P2/P3 с `-O0`; классификатор auto-exposure
 POST: так же точно, но примерно вдвое медленнее `int8-lite-lossy` (1080p: 5,4-6,5 мс против
 2,6-2,75 мс). Режим не включён по умолчанию.
 
-### Веса
+### Веса v3.3
+
+`make lite-lossy-weights` проверяет RX 6000 ZIP релиза `dll-2026-11-22`, все пять копий обученного буфера и таблицы POST двух классов разрешения. SHA-256 итогового initializer: `899dc09a238930f67742165d0c8f741150cc3ec83780198588256aaec655d981`. Для original-графа предыдущего релиза выполни `make original-lossy-weights`. Его файлы находятся в `build/fsr412_lossy/original/`. [Подробности v3.3](releases/v3.3.md).
+
+### История импорта от 1 ноября
 
 `tools/fsr412/fetch_lossy_weights.py` скачивает закреплённый RX 7000 архив
 `dll-2026-11-01`, проверяет SHA-256 архива и DLL, статически читает DXIL через

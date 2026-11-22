@@ -13,24 +13,32 @@ import re
 import struct
 from pathlib import Path
 
-DLL_SHA256='d9b0a1f5781c2d633a327272f6f1c8607057df7cafd0233cf38c7395c8f7dbc5'
+if __name__ == '__main__':
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from fsr412 import nov22_weights as current
+from fsr412 import lossy_weights as original
+
+DLL_SHA256 = current.DLL_SHA256
 SCHEMA='fsr412_lite_lossy_import_v1'
 FILE='initializers-lite-lossy.bin'
 BIAS_MATRIX_SHA256='ff0ef7ff06cc065d00d9a3db8371327c202cb46c6f9a78ef4adae0fbfd4ea089'
 
 
-def validate_lossy_data(data,receipt):
-    from fsr412.lossy_weights import LOSSY_INITIALIZER_SHA256
+def validate_lossy_data(data,receipt,legacy=False):
+    pin = original if legacy else current
+    expected = pin.LOSSY_INITIALIZER_SHA256
     if (len(data)!=27392 or not isinstance(receipt,dict) or receipt.get('schema')!=SCHEMA or
-        receipt.get('source_dll_sha256')!=DLL_SHA256 or not isinstance(receipt.get('initializers'),dict) or
-        receipt['initializers'].get(FILE)!=LOSSY_INITIALIZER_SHA256 or sha(data)!=LOSSY_INITIALIZER_SHA256):
+        receipt.get('source_dll_sha256')!=pin.DLL_SHA256 or not isinstance(receipt.get('initializers'),dict) or
+        receipt['initializers'].get(FILE)!=expected or sha(data)!=expected):
         raise ValueError('Lite Lossy initializer/receipt does not match the pinned release')
     matrix=receipt.get('post_ct_biases_by_tap')
     if (not isinstance(matrix,list) or len(matrix)!=4 or
         any(not isinstance(row,list) or len(row)!=8 or
             any(type(value) is not int or not -(1<<31)<=value<(1<<31) for value in row) for row in matrix)):
         raise ValueError('invalid Lite Lossy subpixel bias matrix')
-    if sha(json.dumps(matrix,separators=(',',':')).encode())!=BIAS_MATRIX_SHA256:
+    if sha(json.dumps(matrix,separators=(',',':')).encode())!=(BIAS_MATRIX_SHA256 if legacy else current.BIAS_MATRIX_SHA256):
         raise ValueError('Lite Lossy subpixel biases do not match the pinned release')
     if tuple(matrix[0])!=struct.unpack_from('<8i',data,27264):
         raise ValueError('Lite Lossy CT head order does not match the AMD initializer')
@@ -40,24 +48,26 @@ def validate_lossy_data(data,receipt):
 def sha(data):return hashlib.sha256(data).hexdigest()
 
 
-def load_lossy_initializer(root):
+def load_lossy_initializer(root, legacy=False):
     directory=Path(root)/'build/fsr412_lossy'
+    if legacy:
+        directory = directory / 'original'
     path=directory/FILE
     try:
         data=path.read_bytes()
         receipt=json.loads((directory/'import.json').read_text())
-        validate_lossy_data(data,receipt)
+        validate_lossy_data(data,receipt,legacy)
     except (OSError,ValueError,ImportError,KeyError,TypeError) as error:
         raise ValueError('verified Lite Lossy data is missing or invalid; run make lite-lossy-weights: '+str(error)) from error
     return path,data,receipt
 
 
-def initializer_for(root,tier,preset,profile):
+def initializer_for(root,tier,preset,profile,legacy=False):
     root=Path(root)
     if profile not in ('int8-lite','int8-lite-lossy'):
         raise ValueError('unknown Lite model profile')
     if profile=='int8-lite-lossy':
-        path,data,receipt=load_lossy_initializer(root)
+        path,data,receipt=load_lossy_initializer(root,legacy=legacy)
         if preset=='normal' and tier<=2160:
             return path,data,True
     name='initializers-lite-ultraperformance.bin' if preset=='ultraperformance' else 'initializers-lite.bin'

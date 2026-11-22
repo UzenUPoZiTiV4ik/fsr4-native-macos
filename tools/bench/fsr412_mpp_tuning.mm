@@ -300,7 +300,8 @@ int main(int argc,char **argv) { @autoreleasepool {try {
     need(sha(packed)==[manifest[@"weights_sha256"] UTF8String] && sha(pb)==[manifest[@"params_sha256"] UTF8String],"native blob identity mismatch");
     auto p=params(pb,[manifest[@"passes"][@"4"][@"parameter_offset"] unsignedIntValue]);
     const auto p1=params(pb,[manifest[@"passes"][@"1"][@"parameter_offset"] unsignedIntValue]);
-    fsr412_tuning_cpu::source_epilogues(p1,p,[manifest[@"model"] isEqual:@"ultraperformance"]);
+    const bool trainedHalfUp = [manifest[@"trained"] boolValue] && [manifest[@"lite_native_revision"] unsignedIntValue] == 3;
+    fsr412_tuning_cpu::source_epilogues(p1,p,[manifest[@"model"] isEqual:@"ultraperformance"],trainedHalfUp);
     const size_t cpuCases=fsr412_tuning_cpu::cpu_parity(p,packed,init);
     const size_t fusedCpuCases=scope=="cnb-ds"?fsr412_tuning_cpu::fused_cpu_parity(p1,p,packed,init):0;
     auto report=[NSMutableDictionary dictionaryWithDictionary:@{@"mode":ns(mode),@"initializer_sha256":ns(sha(init)),

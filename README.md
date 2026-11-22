@@ -3,6 +3,13 @@
 AMD FSR 4.1.2 INT8 Lite upscaling running natively on Apple Silicon (Metal).
 Works as a standalone tool and inside games via CrossOver (DLSS → FSR 4).
 
+## Repository map
+
+- Runtime and MetalFX hook. Core FSR 4.1.1 runtime interfaces live in [src/fsr411_runtime.h](src/fsr411_runtime.h), FSR 4.1.2 session management lives in [src/fsr412_session.inc](src/fsr412_session.inc), the MetalFX interception layer is [hook/fsr4_metalfx.m](hook/fsr4_metalfx.m), and CrossOver bottle integration is handled by [tools/crossover/crossover_fsr4.py](tools/crossover/crossover_fsr4.py).
+- Weight importers and pinned graphs. Adjusted `int8-lite-lossy` and `lossy2` profiles pin the `dll-2026-11-22` release through [tools/fsr412/nov22_weights.py](tools/fsr412/nov22_weights.py) and [tools/fsr411/lossy2.py](tools/fsr411/lossy2.py), while the opt-in `int8-lite-lossy-original` route pins the November 1 graph and matching weights via [tools/fsr412/compile_original.py](tools/fsr412/compile_original.py) in separate caches.
+- Build, tests, and release notes. [Makefile](Makefile) defines build and verification targets including `make test` and `make test-fsr412-lossy`, and [docs/releases/v3.3.md](docs/releases/v3.3.md) tracks the current weight pins and macOS 27 hook changes.
+- Generated directories. `build/` stores compiled binaries, shader caches, and imported external weights, whereas `dist/crossover/` contains the live hook, settings and backups for source installs. Release ZIPs and DMGs go under `dist/release/`.
+
 ## M5 performance: 1080p and 1440p (v3.0)
 
 **Fresh 2026-11-02 measurements on a fanless MacBook Air M5, 16 GB.**
@@ -183,7 +190,7 @@ and persistent-change repairs; `2` uses optional fast Wave32 notes.
 Defaults are unchanged. [Implementation, tradeoffs, timings and tests](docs/FSR412_LOSSY.md).
 
 `--profile int8-lite-lossy-original` is a different, opt-in route: it runs the
-release's own PRE/BORDER/POST shaders from a verified external bundle
+November 1 release's own PRE/BORDER/POST shaders (`make original-lossy-weights`) from a verified external bundle
 (`tools/fsr412/compile_original.py`) with exact native INT8 neural stages, and
 matches the original-shader oracle byte for byte. It is slower than the adjusted
 Lite Lossy path and is not a default.
@@ -211,8 +218,8 @@ make test-fsr411-mpp-fast  # GPU-probed M5 kernels and forced fallback
 make test-fsr-pre-m5      # forced SIMD and exact Winograd
 ```
 
-Build the installer app and DMG: `make installer INSTALLER_VERSION=v3.2`
-(or `python3 tools/installer/build_app.py v3.2 --dmg`).
+Build the installer app and DMG: `make installer INSTALLER_VERSION=v3.3`
+(or `python3 tools/installer/build_app.py v3.3 --dmg`).
 
 ## Documentation
 
@@ -223,6 +230,7 @@ Build the installer app and DMG: `make installer INSTALLER_VERSION=v3.2`
 | FSR 4.1.2 Lossy (formerly Lite 2) | [docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md) |
 | Lite Lossy, tiled inference and new temporal repairs | [docs/FSR412_LOSSY.md](docs/FSR412_LOSSY.md) |
 | Original-shader oracle, geometry and POST CNB | [docs/FSR412_UPSTREAM_ORACLE.md](docs/FSR412_UPSTREAM_ORACLE.md) |
+| v3.3 Lossy weights and macOS 27 hook fix | [docs/releases/v3.3.md](docs/releases/v3.3.md) |
 | v3.2 release notes: hook startup fix and experimental new-look | [docs/releases/v3.2.md](docs/releases/v3.2.md) |
 | Experimental Lite Lossy new-look: limits and measurements | [docs/FSR412_NEW_LOOK.md](docs/FSR412_NEW_LOOK.md) |
 | v3.0 release notes | [docs/releases/v3.0.md](docs/releases/v3.0.md) |

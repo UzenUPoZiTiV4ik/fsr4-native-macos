@@ -41,13 +41,12 @@ inline int8_t quantize(int32_t dot, int32_t bias, int32_t residual, fsr411::Epil
     }
     return int8_t(std::max(-128, std::min(127, int(value))));
 }
-inline void source_epilogues(fsr411::PassParams cnb,fsr411::PassParams ds,bool ultra) {
-    // Pinned Lite source quantizers, independent of the imported manifest.
-    // Both normal trained Lite Lossy tiers use the normal nearest-even set.
-    const fsr411::Epilogue cq[4]={{0,0,ultra?8u:7u,0},{0,0,ultra?8u:9u,1},{0,5,6,0},{0,5,6,0}};
+inline void source_epilogues(fsr411::PassParams cnb,fsr411::PassParams ds,bool ultra, bool trainedHalfUp) {
+    const unsigned rounding = trainedHalfUp ? fsr411::kRoundHalfUp : 0u;
+    const fsr411::Epilogue cq[4]={{0,0,ultra?8u:7u,rounding},{0,0,ultra?8u:9u,rounding|1u},{0,5,6,0},{0,5,6,0}};
     const fsr411::Epilogue dq[2]={{0,0,ultra?7u:6u,0},{0,0,ultra?8u:7u,0}};
     if(std::memcmp(cnb.q,cq,sizeof(cq)) || std::memcmp(ds.q+4,dq,sizeof(dq)))
-        throw std::runtime_error("p1/DS quantizers differ from pinned nearest-even Lite source");
+        throw std::runtime_error("p1/DS quantizers differ from pinned Lite source");
 }
 inline size_t tensor_end(fsr411::Tensor t) {
     return t.channels && t.width && t.height
@@ -122,6 +121,16 @@ inline std::vector<uint8_t> fused_input(CnbDsParams p,unsigned pattern) {
     scratch.resize(std::max(scratch.size(),tensor_end(p.ds.output)+512u),0xa7);
     return scratch;
 }
+// The release SRV already includes half a unit in its intermediate bias.
+// Use the listing's arithmetic shift directly for the independent raw oracle.
+inline int8_t intermediate(int32_t dot, int32_t bias, fsr411::Epilogue q, bool raw) {
+    if (raw && (q.flags & fsr411::kRoundHalfUp)) {
+        const int32_t sum = signed32(uint32_t(dot) + uint32_t(bias));
+        const int32_t shifted = sum >> q.rightShift;
+        return int8_t(std::clamp(shifted, (q.flags & 1u) ? 0 : -128, 127));
+    }
+    return quantize(dot, bias, 0, q);
+}
 inline std::vector<uint8_t> cnb(fsr411::PassParams p,const std::vector<uint8_t> &scratch,
     const std::vector<uint8_t> &weights,const std::vector<uint8_t> &initializer,bool original) {
     if(initializer.size()!=27392 || p.input.channels!=16 || p.output.channels!=16 || (p.q[0].flags&8u))
@@ -140,7 +149,7 @@ inline std::vector<uint8_t> cnb(fsr411::PassParams p,const std::vector<uint8_t> 
             }
             const int32_t bias=original?read32(initializer,3456u+oc*4u)
                 :p.biases[0]==fsr411::kNoOffset?0:read32(weights,p.biases[0]+oc*4u);
-            a[oc]=quantize(signed32(uint32_t(sum)),bias,0,p.q[0]);
+            a[oc]=intermediate(signed32(uint32_t(sum)),bias,p.q[0],original);
         }
         for(unsigned oc=0;oc<32;++oc) {
             int64_t sum=0;
@@ -150,7 +159,7 @@ inline std::vector<uint8_t> cnb(fsr411::PassParams p,const std::vector<uint8_t> 
             }
             const int32_t bias=original?read32(initializer,4096u+oc*4u)
                 :p.biases[1]==fsr411::kNoOffset?0:read32(weights,p.biases[1]+oc*4u);
-            b[oc]=quantize(signed32(uint32_t(sum)),bias,0,p.q[1]);
+            b[oc]=intermediate(signed32(uint32_t(sum)),bias,p.q[1],original);
         }
         for(unsigned oc=0;oc<16;++oc) {
             int64_t sum=0;

@@ -11,8 +11,8 @@ struct Native {
     fsr411::Session session;
     fsr411::Kernels kind;
     Native(Replay &r,const std::string &root,fsr411::Kernels backend):runtime(r.device,root,root+"/build"),kind(backend) {
-        session.modelLite=true;session.profile=fsr411::Profile::Int8LiteLossy;session.tier=2160;session.externalPostCnb=false;
-        NSData *init=[NSData dataWithContentsOfFile:ns(root+"/build/fsr412_lossy/initializers-lite-lossy.bin")];
+        session.originalLossy=true;session.modelLite=true;session.profile=fsr411::Profile::Int8LiteLossy;session.tier=2160;session.externalPostCnb=false;
+        NSData *init=[NSData dataWithContentsOfFile:ns(root+"/build/fsr412_lossy/original/initializers-lite-lossy.bin")];
         check(init.length==27392,"missing native trained initializer");
         session.initializer=[r.device newBufferWithBytes:init.bytes length:init.length options:MTLResourceStorageModeShared];
         std::string error;bool prepared=runtime.prepare_integer_operators(session,true,kind,error);check(prepared,error);

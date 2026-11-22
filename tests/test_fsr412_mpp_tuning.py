@@ -87,7 +87,8 @@ class IntegerOracleTests(unittest.TestCase):
                 p = passes[4]
                 ultra = preset == "ultraperformance"
                 self.assertEqual(p["q"][4:], [[0, 0, 7 if ultra else 6, 0], [0, 0, 8 if ultra else 7, 0]])
-                self.assertEqual(passes[1]["q"][:4], [[0, 0, 8 if ultra else 7, 0], [0, 0, 8 if ultra else 9, 1],
+                half_up = 4 if profile == "int8-lite-lossy" and not ultra and tier <= 2160 else 0
+                self.assertEqual(passes[1]["q"][:4], [[0, 0, 8 if ultra else 7, half_up], [0, 0, 8 if ultra else 9, half_up | 1],
                                                        [0, 5, 6, 0], [0, 5, 6, 0]])
                 matrix, = p["matrices"]
                 bias, = p["bias_values"]

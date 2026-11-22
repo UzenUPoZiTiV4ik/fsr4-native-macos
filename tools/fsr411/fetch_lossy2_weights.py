@@ -3,9 +3,8 @@
 """Fetch the FSR 4.1.2 Lossy integer weights into build/fsr411_lossy2/.
 
 The weights belong to the GPL-2.0-or-later upstream project and are not
-distributed with this MIT repository. Upstream release dll-2026-10-29 ships
-them only inside its DLL, so this downloads the pinned RX 7000 archive
-(about 9 MB), unpacks its lossy DLL with bsdtar, decodes the 18 pinned
+distributed with this MIT repository. Upstream release dll-2026-11-22 ships
+them only inside its DLL, so this downloads the pinned RX 6000 archive, unpacks its lossy DLL with bsdtar, decodes the 18 pinned
 trained-pass shaders with the vendored DXC (tools/fsr411/lossy412_weights.py)
 and writes a byte-reproducible .npz. Archive, DLL, every shader container and
 the resulting file are checked against pinned SHA-256 values. The Windows DLL
@@ -43,7 +42,7 @@ def sha256(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", type=Path, default=ROOT / "build/fsr411_lossy2/weights_lossy2.npz")
-    parser.add_argument("--archive", type=Path, help="use an already downloaded release .7z")
+    parser.add_argument("--archive", type=Path, help="use an already downloaded release ZIP")
     parser.add_argument("--dll", type=Path, help="use the release's lossy DLL directly")
     parser.add_argument("--url", help="override the pinned archive URL (for a local mirror)")
     parser.add_argument("--dxc", type=Path, default=ROOT / "tools/bin/dxc")
@@ -60,7 +59,7 @@ def main():
         if dll is None:
             archive = args.archive
             if archive is None:
-                archive = work / "release.7z"
+                archive = work / "release.zip"
                 try:
                     with urllib.request.urlopen(args.url or spec.UPSTREAM_URL, timeout=120) as response, \
                             open(archive, "wb") as stream:
@@ -82,7 +81,7 @@ def main():
             print("Lossy DLL hash mismatch: %s" % dll, file=sys.stderr)
             return 2
         try:
-            arrays, containers = decoder.extract(dll, args.dxc, pinned=spec.UPSTREAM_CONTAINERS)
+            arrays, containers = decoder.extract(dll, args.dxc, pinned=spec.UPSTREAM_CONTAINERS, folded_rounding=True)
         except (OSError, ValueError, subprocess.CalledProcessError) as error:
             print("Could not decode the trained passes:", error, file=sys.stderr)
             return 2

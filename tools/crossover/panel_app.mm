@@ -75,7 +75,7 @@ static const char *profile_label(int profile) {
 // Lossy profiles are offered only with both pinned inputs, never by an
 // environment override or a fallback to the ordinary Lite initializer.
 static bool g_has402 = true, g_has_lossy2 = false, g_has_lite_lossy = false;
-static const char *kLiteLossyInitializerSha256 = "c77c2d1a4d119ed76d94b8c23335490cc38280db3346c72396a1e1acb0523cfc";
+static const char *kLiteLossyInitializerSha256 = "899dc09a238930f67742165d0c8f741150cc3ec83780198588256aaec655d981";
 static bool has_lite_lossy(const char *expectedHash = kLiteLossyInitializerSha256) {
     struct stat st = {};
     for (const char *name : {"initializers-lite-lossy.bin", "import.json"}) {
@@ -88,7 +88,7 @@ static bool has_lite_lossy(const char *expectedHash = kLiteLossyInitializerSha25
     id receipt = [NSJSONSerialization JSONObjectWithData:receiptData options:0 error:nil];
     if (![receipt isKindOfClass:NSDictionary.class]
         || ![receipt[@"schema"] isEqual:@"fsr412_lite_lossy_import_v1"]
-        || ![receipt[@"source_dll_sha256"] isEqual:@"d9b0a1f5781c2d633a327272f6f1c8607057df7cafd0233cf38c7395c8f7dbc5"]) return false;
+        || ![receipt[@"source_dll_sha256"] isEqual:@"5f17b595b5abd9fbe19178f21912a4046bbe560929383ef889a43f7109110a43"]) return false;
     id initializers = receipt[@"initializers"];
     if (![initializers isKindOfClass:NSDictionary.class]) return false;
     id expected = initializers[@"initializers-lite-lossy.bin"];

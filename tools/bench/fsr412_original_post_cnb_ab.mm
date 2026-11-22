@@ -11,9 +11,9 @@ struct NativeCnb {
     fsr411::Session session;
     fsr411::NativePass op;
     NativeCnb(Replay &r,const std::string &root,fsr411::Kernels kind):runtime(r.device,root,root+"/build") {
-        session.modelLite=true;session.profile=fsr411::Profile::Int8LiteLossy;session.tier=2160;session.externalPostCnb=true;
+        session.originalLossy=true;session.modelLite=true;session.profile=fsr411::Profile::Int8LiteLossy;session.tier=2160;session.externalPostCnb=true;
         check(fsr411::post_cnb_scratch_layout(2160,false,session.scratchLayout),"native layout");
-        NSData *init=[NSData dataWithContentsOfFile:ns(root+"/build/fsr412_lossy/initializers-lite-lossy.bin")];
+        NSData *init=[NSData dataWithContentsOfFile:ns(root+"/build/fsr412_lossy/original/initializers-lite-lossy.bin")];
         check(init.length==27392,"missing trained native initializer");
         session.initializer=[r.device newBufferWithBytes:init.bytes length:init.length options:MTLResourceStorageModeShared];
         std::string error;check(runtime.prepare_integer_operators(session,false,kind,error),error);

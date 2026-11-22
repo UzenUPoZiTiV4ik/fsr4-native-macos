@@ -259,6 +259,9 @@ $(BINDIR)/bin2png: src/bin2png.cpp src/pngio.h
 lossy2-weights:
 	python3 tools/fsr411/fetch_lossy2_weights.py
 
+original-lossy-weights:
+	python3 tools/fsr412/fetch_lossy_weights.py --original
+
 lite-lossy-weights:
 	python3 tools/fsr412/fetch_lossy_weights.py
 

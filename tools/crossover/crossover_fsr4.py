@@ -78,8 +78,8 @@ HOOK_NAME = "libfsr4hook.dylib"
 # @loader_path, so the app's own binary has to carry the hook.
 FRAMEWORK_PATH_ENV = b"D3DMETAL_FRAMEWORK_PATH"
 # "fsr4" remains the legacy panel mode for the FSR 4.0.2 comparison model.
-LITE_LOSSY_SOURCE_DLL_SHA256 = "d9b0a1f5781c2d633a327272f6f1c8607057df7cafd0233cf38c7395c8f7dbc5"
-LITE_LOSSY_INITIALIZER_SHA256 = "c77c2d1a4d119ed76d94b8c23335490cc38280db3346c72396a1e1acb0523cfc"
+LITE_LOSSY_SOURCE_DLL_SHA256 = "5f17b595b5abd9fbe19178f21912a4046bbe560929383ef889a43f7109110a43"
+LITE_LOSSY_INITIALIZER_SHA256 = "899dc09a238930f67742165d0c8f741150cc3ec83780198588256aaec655d981"
 LITE_LOSSY_PROFILES = ("int8-lite-lossy", "int8-lite-lossy-tiled")
 LITE_PROFILES = ("int8-lite", "int8-lite-pixfix", "int8-lite-hair", *LITE_LOSSY_PROFILES)
 LEGACY_PROFILES = ("exact", "exact-fast", "lossy", "lossy2", "fsr4")

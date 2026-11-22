@@ -3,7 +3,7 @@
 """Trained weights for six of the twelve neural passes (FSR 4.1.2 Lossy).
 
 The profile keeps its internal name lossy2. Since upstream release
-dll-2026-10-29 its weights are that release's retrained `lossy` (the former
+dll-2026-11-22 its weights are that release's retrained `lossy` (the former
 lossy2 trained further): new integer weights in passes 1, 2, 4, 5, 10 and 12;
 layer arithmetic, folding policy and Ultra Performance stay lossy's. This
 module maps those integer weights onto the AMD-layout literal tables of the
@@ -23,35 +23,35 @@ from pathlib import Path
 import zipfile
 
 DEFAULT_WEIGHTS = Path("build/fsr411_lossy2/weights_lossy2.npz")
-UPSTREAM_RELEASE = "dll-2026-10-29"
+UPSTREAM_RELEASE = "dll-2026-11-22"
 UPSTREAM_URL = ("https://github.com/zgauthier2000/fsr4-shader-performance-overrides/releases/download/"
-                "dll-2026-10-29/fsr4.1.2-cyboman-rx7000-2026-10-29.7z")
-UPSTREAM_ARCHIVE_SHA256 = "140249629eb4867737a60fb400a801aaa9900d24d857bbe5d12b8156c28d2121"
+                "dll-2026-11-22/fsr4.1.2-cyboman-rx6000-2026-11-22.zip")
+UPSTREAM_ARCHIVE_SHA256 = "2d81d93647e5c78c04401cf1437bd706e2c634ac72ed051817571c5c98be7d15"
 UPSTREAM_DLL_MEMBER = "lossy/amd_fidelityfx_upscaler_dx12.dll"
-UPSTREAM_DLL_SHA256 = "00a25500a9ed49f1b4d35f40c5c493453e9171442ed5580bb7d53030fab7a42a"
+UPSTREAM_DLL_SHA256 = "8d462f462efd681aa26b51d6d1217864d907679fa4e6ff4e9381aecdae2ad4fb"
 # The 18 trained-pass DXBC containers of that DLL (six passes x three tiers).
 UPSTREAM_CONTAINERS = frozenset((
-    "383dbaa787fb50d8b10ffc943e702e64f618322c1342028a052198569ba1c042",
-    "393e9780dcf4a646c3f586f89c6f886c5c1700854f5a683163d52b2c077c63ab",
-    "58fa1ee4d1df6de20243e89a4f95f3607dcd6f5027e7283298d99e413a441789",
-    "59b8ae87e91f3f911bdef780f66724119781994bd10a34af7512fead267daf31",
-    "761f15ffb8f10b7e76b2c7651e1165b2c7fdca45d0a74a72fe5d66e1534073be",
-    "85ca7382cca01d1afe5b953c3c6503d5ac73bd71c42991e8096613f4642fa877",
-    "93c2dbb7ae1fcb1ed5dbfbe52638630a485df43a9efc396755f0a39ae9caef93",
-    "a4a96dc87bf45ed90b0456e83c7348936f895927e380cd03e654f440d77c0da1",
-    "ab88a6fbbc7b47aa7c822f5d66742e4fb3ae75133ce951e2b6d263e91386b8e3",
-    "b7a00f9936ecaa8a59db81bbf657d62f58e3b395b4c8882254b87b157b394392",
-    "b99831b6510d0b70ca3fd3d9bc4de6668a268c2a6511693957b94a5db491ad16",
-    "c5d7a09adc8f114bc9a44d721e74af5553bd7e5eabcf2f010c13514be9c4aefc",
-    "cd19fb3cfeb9351f684a0f10e34e8089bd10d0d241caf1c0cc3ce78ed23b3c38",
-    "cd9290238679e37e133299a4ad3e1fd4103546d63b089dcfbc1ea07560c8e715",
-    "d87b32e365e90140034213145b45ace6539203df08dfce0ffa09053fc76e25de",
-    "e0fbaaf1eb94bcb9c7f52a3aa8bab0e95af63e28bd7c5399e0f196a4f89a5381",
-    "e9d3d1b2e41e2df704f5c823246deda3c569b8473cab59aa5c5c190a2875bbb3",
-    "eb3f9572de8a935c6dcbacf28d08e7844b3fe3913743725c0ed66b8cc26a8ad7",
+    "0199674e02137608aa1aad54d48279b89efce1e2d5db69a4a1921fa5a8242903",
+    "0709c8489199be350e8d61df602a3185ae14fb9eded190a5de513b9fd241ae2b",
+    "0ccb18f43a64278cc6f667af1cce508dd54308ddca2dfabcdeb70cce50c1cafa",
+    "1677285597cf551b75833716a48ddd24980f2e7be455d7def3e8fbf2d03c8c5a",
+    "1cf347ccd2ba7b38ddabd2f18d0f0165e9ac83a49faf7e6cc247cebf408ae266",
+    "2cbc3984b62c96dc53e6da59ae21cba93c981734232bff8ba6e83e5b81251e42",
+    "3014dca760b500a9f8a2395f7a171e23db24b2389b41b0b7ab498b855b41b316",
+    "3f464270992928185da82968d41c04b427a82eef7c977438a3afff857c111503",
+    "41d16f4c4067c6e68252583dc223909459c6a21459504a2bc3bc6a64cad2f6ba",
+    "48155b7179d5c3c74542f1ec01cab6aff8493f9ddf17c2aa7ba5d9c23fc9f308",
+    "4da8b8a62ba8ea94def3bb47ef6b36bedebd7c3c9f37e8629d7313544171f0ab",
+    "55cdb4fd73287bab95c6ad854684650c212843a89c0f4916dda841cc36c5e0a2",
+    "9108b15cef0278813629585d133e2506f66dbd5a09e7ed0c246db43d94fd8772",
+    "988554b59509b4a2f35d3784abeba464766c4debeece43b4665fe9320f437b1b",
+    "99965b3b9f8b2ddae345364c27853dcf8a4ae25c390da7132d0bce8235c55960",
+    "a8d2063c14aa6b9f782c15f0afe4e62816931739625052f469fc492d6603b0fc",
+    "ece23f5c6a6ec6aebec90d3b2b6012f0ca17b4dcda13b3687e6160e78055ca80",
+    "ff2be2d590c8552af9f2e78bb024f17e101cf5a17b014e88de099cbadfb19ed9",
 ))
 # SHA-256 of the byte-reproducible .npz written from them.
-UPSTREAM_SHA256 = "1e619693f4a3e191e8128946a133560e317ed425b04724637ebedec8d2deaa35"
+UPSTREAM_SHA256 = "33ef308990fd749af2d7c833dfbb5ad1879220d7cf4002d3abd982c3c9a17143"
 # Previous pin (dll-2026-10-19 lossy2), still accepted through --lossy2-weights.
 PREVIOUS_SHA256 = "9a458f65812848b273dace03edcbd346d66364d5d41a99d0963adaa601a3c93c"
 

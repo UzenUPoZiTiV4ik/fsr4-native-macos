@@ -203,7 +203,7 @@ def _zeros(*shape):
     return [_zeros(*shape[1:]) for _ in range(shape[0])]
 
 
-def decode_pass(text):
+def decode_pass(text, folded_rounding=False):
     """Disassembled trained pass -> (pass, tier, {A, bA, Bw, bB, Cw, bC})."""
     keys, consts, packs, stores = _walk(text)
     kind = {64: "cnb", 112: "fnb"}.get(len(keys))
@@ -214,7 +214,7 @@ def decode_pass(text):
     stage = {}
     for key in keys:
         symbols = {symbol[0] for symbol, _ in key}
-        stage[key] = "A" if symbols == {"L"} and len(key) == 36 else \
+        stage[key] = "A" if symbols == {"L"} and (0 < len(key) <= 36 if folded_rounding else len(key) == 36) else \
             "C" if symbols == {"P"} and len(key) == hidden // 4 else "B"
     a_keys = [k for k in keys if stage[k] == "A"]
     offsets = sorted({symbol[1] for k in a_keys for symbol, _ in k})
@@ -273,6 +273,15 @@ def decode_pass(text):
                         W["Cw"][channel][4 * b_word[symbol[1]] + byte] = _i8(literal, byte)
     if len(seen) != outputs:
         raise ValueError("pass %d: %d of %d output channels stored" % (logical, len(seen), outputs))
+    if folded_rounding:
+        # Nov 22 omits zero dot operands and folds half a unit into each
+        # intermediate bias before the arithmetic shift. Metal adds that
+        # half in its epilogue, so remove it exactly once during import.
+        shifts = [int(s) for s in re.findall(r"= ashr i32 %[^,]+, (\d+)$", text, re.M)]
+        if len(shifts) != c1 + hidden or not all(0 < shift < 31 for shift in shifts):
+            raise ValueError("unexpected baked requantization shifts")
+        for name, stage_shifts in (("bA", shifts[:c1]), ("bB", shifts[c1:])):
+            W[name] = [bias - (1 << (shift - 1)) for bias, shift in zip(W[name], stage_shifts)]
     return logical, tier, W
 
 
@@ -285,7 +294,7 @@ def disassemble(dxc, container):
         return listing.read_text()
 
 
-def extract(dll_path, dxc, pinned=None):
+def extract(dll_path, dxc, pinned=None, folded_rounding=False):
     """Decode the six trained passes; every tier must give the same weights.
 
     The generated passes carry no shader name, unlike AMD's own; without a
@@ -301,7 +310,7 @@ def extract(dll_path, dxc, pinned=None):
     decoded = {}
     for container in containers:
         try:
-            logical, tier, weights = decode_pass(disassemble(dxc, container))
+            logical, tier, weights = decode_pass(disassemble(dxc, container), folded_rounding=folded_rounding)
         except (ValueError, KeyError, StopIteration):
             if pinned is not None:
                 raise

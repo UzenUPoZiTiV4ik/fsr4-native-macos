@@ -144,12 +144,12 @@ Session *ensure_original_session(int tier,const Fsr4InputPrepared &p,const Optio
     }
     // Native integer weights: upstream trained data for normal <=2160, else
     // the unchanged base slice (bytes 0..27391 of the original t18).
-    NSData *native=s->retrainedWeights?[NSData dataWithContentsOfFile:ns(root_+"/build/fsr412_lossy/initializers-lite-lossy.bin")]
+    NSData *native=s->retrainedWeights?[NSData dataWithContentsOfFile:ns(root_+"/build/fsr412_lossy/original/initializers-lite-lossy.bin")]
                                       :[t18 subdataWithRange:NSMakeRange(0,27392)];
     const std::string nativeHash=native.length==27392?sha256_bytes(native.bytes,native.length):"";
     if(nativeHash.empty() || ![manifest[@"native_initializer_sha256"] isEqual:ns(nativeHash)] ||
        (s->retrainedWeights && nativeHash!="c77c2d1a4d119ed76d94b8c23335490cc38280db3346c72396a1e1acb0523cfc")) {
-        error="original Lite Lossy native initializer mismatch; run make lite-lossy-weights";return nullptr;
+        error="original Lite Lossy native initializer mismatch; run make original-lossy-weights";return nullptr;
     }
     s->originalInitializer=[device_ newBufferWithBytes:t18.bytes length:t18.length options:MTLResourceStorageModeShared];
     s->initializer=[device_ newBufferWithBytes:native.bytes length:native.length options:MTLResourceStorageModeShared];

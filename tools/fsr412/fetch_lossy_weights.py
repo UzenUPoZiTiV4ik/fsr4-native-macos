@@ -20,7 +20,9 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools'))
-from fsr412.lossy_weights import recover_primary_training,DLL_SHA256,LOSSY_INITIALIZER_SHA256,COMMON_SHA256
+from fsr412 import lossy_weights as original
+from fsr412 import nov22_weights as current
+from fsr412.lossy_weights import COMMON_SHA256
 from fsr412.model_data import validate_lossy_data
 URL='https://github.com/zgauthier2000/fsr4-shader-performance-overrides/releases/download/dll-2026-11-01/fsr4.1.2-cyboman-rx7000-2026-11-01.7z'
 ARCHIVE_SHA256='743adcd599dee3cbf6035ed08ceeced987b75178f74a22b945a421d030d8d34e'
@@ -47,10 +49,16 @@ def main():
     parser.add_argument('--dll',type=Path)
     parser.add_argument('--archive',type=Path)
     parser.add_argument('--force',action='store_true',help='redecode and refresh the receipt even if already present')
-    parser.add_argument('--url',default=URL)
+    parser.add_argument('--url')
+    parser.add_argument('--original', action='store_true', help='prepare the separate Nov 1 original-graph weights')
     parser.add_argument('--dxc',type=Path,default=ROOT/'tools/bin/dxc')
     args=parser.parse_args()
     out=args.outdir or args.root/'build/fsr412_lossy'
+    if args.original and args.outdir is None:
+        out = out / 'original'
+    pin = original if args.original else current
+    archive_hash = ARCHIVE_SHA256 if args.original else current.ARCHIVE_SHA256
+    url = URL if args.original else current.URL
     out.mkdir(parents=True,exist_ok=True)
     with (out/'.import.lock').open('a+b') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
@@ -58,7 +66,7 @@ def main():
         receipt_path=out/'import.json'
         if not args.force and data_path.is_file() and receipt_path.is_file():
             try:
-                validate_lossy_data(data_path.read_bytes(),json.loads(receipt_path.read_text()))
+                validate_lossy_data(data_path.read_bytes(),json.loads(receipt_path.read_text()),args.original)
             except (OSError,ValueError,KeyError,TypeError):
                 pass
             else:
@@ -74,21 +82,22 @@ def main():
                 archive=args.archive
                 if archive is None:
                     archive=work/'release.7z'
-                    with urllib.request.urlopen(args.url,timeout=120) as response,archive.open('wb') as stream:
+                    with urllib.request.urlopen(args.url or url,timeout=120) as response,archive.open('wb') as stream:
                         shutil.copyfileobj(response,stream)
-                if digest(archive)!=ARCHIVE_SHA256:
+                if digest(archive)!=archive_hash:
                     raise ValueError('Lite Lossy release archive hash mismatch')
                 tar=shutil.which('bsdtar') or shutil.which('tar')
                 if not tar:raise ValueError('bsdtar is required to unpack the pinned archive')
                 subprocess.run([tar,'-xf',str(archive),'-C',str(work),MEMBER],check=True)
                 dll=work/MEMBER
-            if digest(dll)!=DLL_SHA256:
+            if digest(dll)!=pin.DLL_SHA256:
                 raise ValueError('Lite Lossy DLL hash mismatch')
-            data,receipt=recover_primary_training(dll,args.dxc,base)
-            if hashlib.sha256(data).hexdigest()!=LOSSY_INITIALIZER_SHA256:
+            decode = original.recover_primary_training if args.original else current.recover
+            data,receipt=decode(dll,args.dxc,base)
+            if hashlib.sha256(data).hexdigest()!=pin.LOSSY_INITIALIZER_SHA256:
                 raise ValueError('Recovered Lite Lossy initializer hash mismatch')
-            validate_lossy_data(data,receipt)
-            receipt.update(release='dll-2026-11-01',archive_url=URL,archive_sha256=ARCHIVE_SHA256,
+            validate_lossy_data(data,receipt,args.original)
+            receipt.update(release='dll-2026-11-01' if args.original else current.RELEASE,archive_url=url,archive_sha256=archive_hash,
                 license='GPL-2.0-or-later upstream trained data; decoder/adapter MIT',
                 windows_dll_executed=False,upstream_dll_parity=False)
             atomic(data_path,data)

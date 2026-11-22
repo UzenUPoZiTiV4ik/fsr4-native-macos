@@ -16,7 +16,7 @@ static void fixture(const std::string &path, const char *text) {
 }
 
 static std::string receipt_fixture(const std::string &base, const char *schema = "fsr412_lite_lossy_import_v1",
-                            const char *source = "d9b0a1f5781c2d633a327272f6f1c8607057df7cafd0233cf38c7395c8f7dbc5") {
+                            const char *source = "5f17b595b5abd9fbe19178f21912a4046bbe560929383ef889a43f7109110a43") {
     const char *weights = "weights";
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256(weights, (CC_LONG)strlen(weights), digest);

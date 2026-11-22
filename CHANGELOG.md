@@ -1,5 +1,9 @@
 # Releases
 
+## v3.3 (2026-11-22)
+
+Refresh both optional Lossy weight imports to the November 22 upstream release. Fix the macOS 27 depth getter in the CrossOver hook. The original-shader oracle keeps its separate November 1 weights. [Release notes](docs/releases/v3.3.md).
+
 ## v3.2 (2026-11-14)
 
 ANR hook startup fix and an optional new look for Lite Lossy.
