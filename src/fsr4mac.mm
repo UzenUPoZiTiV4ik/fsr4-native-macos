@@ -22,52 +22,14 @@
 #include "pngio.h"
 #include "pass0_weights.h"
 #include "i8mpp_host.h"
+#include "fsr4_provider.h"
 
-// ---------------------------------------------------------------------------
-// constants (ported from ffx_provider_fsr4_dx12.cpp)
-// ---------------------------------------------------------------------------
-struct OptimizedConstants {          // MLSR_Optimized_Constants, 104 bytes
-    float inv_size[2], scale[2], inv_scale[2], jitter[2], mv_scale[2];
-    float tex_size[2], max_renderSize[2], fMotionVectorJitterCancellation[2];
-    uint32_t width, height, reset, width_lr;
-    uint32_t height_lr; float preExposure, previous_preExposure; uint32_t rcas_enabled;
-    float rcas_sharpness, _pad;
-};
-struct AutoExposureSPDConstants {    // 32 bytes
-    uint32_t mips, numWorkGroups, workGroupOffset[2];
-    float invInputSize[2], preExposure, padding;
-};
-struct RcasConstants {               // cbRCAS, 32 bytes
-    uint32_t config[4];
-    float preExposure; uint32_t _pad[3];
-};
-
-static const size_t kScratchSize[3] = {20880256, 83232256, 332352256}; // GetScratchSize
-
-// FsrRcasCon (fsr1/ffx_fsr1.h CPU path)
-static void FsrRcasCon(uint32_t con[4], float sharpness) {
-    sharpness = exp2f(-sharpness);
-    union { uint16_t u; _Float16 f; } cvt; cvt.f = (_Float16)sharpness;
-    uint32_t h = (uint32_t)cvt.u | ((uint32_t)cvt.u << 16); // ffxPackHalf2x16
-    con[0] = __builtin_bit_cast(uint32_t, sharpness);
-    con[1] = h;
-    con[2] = 0; con[3] = 0;
-}
-
-// ffxSpdSetup (spd/ffx_spd.h CPU path)
-static void ffxSpdSetup(uint32_t groups[2], uint32_t wgOffset[2],
-                        uint32_t numWgMips[2], const uint32_t rect[4]) {
-    wgOffset[0] = rect[0] / 64;
-    wgOffset[1] = rect[1] / 64;
-    uint32_t endX = (rect[0] + rect[2] - 1) / 64;
-    uint32_t endY = (rect[1] + rect[3] - 1) / 64;
-    groups[0] = endX + 1 - wgOffset[0];
-    groups[1] = endY + 1 - wgOffset[1];
-    numWgMips[0] = groups[0] * groups[1];
-    uint32_t res = rect[2] > rect[3] ? rect[2] : rect[3];
-    float m = floorf(log2f((float)res));
-    numWgMips[1] = (uint32_t)fminf(m, 12.f);
-}
+using fsr4::AutoExposureSPDConstants;
+using fsr4::FsrRcasCon;
+using fsr4::KernelInfo;
+using fsr4::OptimizedConstants;
+using fsr4::RcasConstants;
+using fsr4::roundUpDiv;
 
 // ---------------------------------------------------------------------------
 // minimal JSON reader (contract-shaped meta.json only)
@@ -177,12 +139,9 @@ static void die(const char* msg, const std::string& s) {
 }
 static bool file_exists(const std::string& p) { struct stat st; return stat(p.c_str(), &st) == 0; }
 static std::vector<uint8_t> read_file(const std::string& p) {
-    FILE* f = fopen(p.c_str(), "rb");
-    if (!f) die("cannot read ", p);
-    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
-    std::vector<uint8_t> v(n);
-    if (fread(v.data(), 1, n, f) != (size_t)n) die("short read ", p);
-    fclose(f); return v;
+    std::vector<uint8_t> v;
+    if (!fsr4::load_file(p, v)) die("cannot read ", p);
+    return v;
 }
 static void write_file(const std::string& p, const void* d, size_t n) {
     FILE* f = fopen(p.c_str(), "wb");
@@ -203,14 +162,6 @@ static std::string exe_dir() {
 // ---------------------------------------------------------------------------
 // Metal host
 // ---------------------------------------------------------------------------
-struct KernelInfo {
-    id<MTLComputePipelineState> pso;
-    MTLSize wg;
-    std::vector<std::pair<NSUInteger, std::string>> buffers;   // idx, name
-    std::vector<std::pair<NSUInteger, std::string>> textures;
-    std::vector<std::pair<NSUInteger, std::string>> samplers;
-};
-
 // mirrors FnbParams in src/fnb_mpp.metal
 struct FnbParams {
     uint32_t inV[4], outV[4], dims[4], w0s[4], w0d[4];
@@ -236,11 +187,10 @@ struct Host {
     std::map<int, FnbParams> mpp;
     std::map<int, CnbParams> cnb;
     I8Mpp i8;              // native int8 tensor-ops passes (--i8mpp)
-    bool useI8 = false;
 
     // persistent upscaler state
     id<MTLTexture> recurrent, history, historyReproj, rcasTemp;
-    id<MTLTexture> autoExposure, defaultExposure, spdAtomicTex, lumaMip5, debugInfo;
+    id<MTLTexture> autoExposure, spdAtomicTex, lumaMip5, debugInfo;
     id<MTLBuffer> spdAtomicBuf;
     id<MTLBuffer> scratch, initializer;
     bool scratchPrivate = false;
@@ -251,18 +201,13 @@ struct Host {
     id<MTLTexture> inColor, inDepth, inMV, inExposure, output;
 
     float prevJitter[2] = {0, 0};
-    bool prevPrevJitterValid = false; // previousJitter semantics below
     float prevPreExposure = 0.f;
     bool firstFrame = true;
 };
 
 static id<MTLTexture> make_tex(id<MTLDevice> dev, MTLPixelFormat fmt,
                                NSUInteger w, NSUInteger h) {
-    MTLTextureDescriptor* d = [MTLTextureDescriptor
-        texture2DDescriptorWithPixelFormat:fmt width:w height:h mipmapped:NO];
-    d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    d.storageMode = MTLStorageModeShared;
-    id<MTLTexture> t = [dev newTextureWithDescriptor:d];
+    id<MTLTexture> t = fsr4::make_tex(dev, fmt, w, h);
     if (!t) die("texture alloc failed");
     return t;
 }
@@ -345,8 +290,6 @@ static void dispatch(Host& h, id<MTLComputeCommandEncoder> enc,
     if (postScope)
         [enc memoryBarrierWithScope:postScope];
 }
-
-static uint32_t roundUpDiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
 // ---------------------------------------------------------------------------
 static bool print_backend_info(const char *name) {
@@ -609,20 +552,32 @@ static void bench_tensorops() {
         id<MTLCommandQueue> q = [dev newCommandQueue];
 
         struct Dim { uint32_t M, N, K; };
-        auto runGemm = ^(id<MTLComputePipelineState> ps, bool mpp,
+        // scalar dispatches a thread per output element; the tiled kernels
+        // dispatch one threadgroup per 32x32 (mpp) or 64x64 tile.
+        auto encodeGemm = ^(id<MTLComputeCommandEncoder> ce,
+                            id<MTLComputePipelineState> ps, bool mpp, bool scalar,
+                            id<MTLBuffer> A, id<MTLBuffer> B, id<MTLBuffer> C,
+                            id<MTLBuffer> pb, uint32_t M, uint32_t N, uint32_t K) {
+            [ce setComputePipelineState:ps];
+            [ce setBuffer:A offset:0 atIndex:0];
+            [ce setBuffer:B offset:0 atIndex:1];
+            [ce setBuffer:C offset:0 atIndex:2];
+            [ce setBuffer:pb offset:0 atIndex:3];
+            if (scalar)
+                [ce dispatchThreads:MTLSizeMake(N, M, 1)
+                    threadsPerThreadgroup:MTLSizeMake(32, 4, 1)];
+            else
+                [ce dispatchThreadgroups:MTLSizeMake(N/(mpp?32:64), M/(mpp?32:64), 1)
+                    threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+        };
+        auto runGemm = ^(id<MTLComputePipelineState> ps, bool mpp, bool scalar,
                          id<MTLBuffer> A, id<MTLBuffer> B, id<MTLBuffer> C,
                          uint32_t M, uint32_t N, uint32_t K, double *gpuMs) {
             Dim d{M,N,K};
             id<MTLBuffer> pb = [dev newBufferWithBytes:&d length:sizeof(d) options:MTLResourceStorageModeShared];
             id<MTLCommandBuffer> cb = [q commandBuffer];
             id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-            [ce setComputePipelineState:ps];
-            [ce setBuffer:A offset:0 atIndex:0];
-            [ce setBuffer:B offset:0 atIndex:1];
-            [ce setBuffer:C offset:0 atIndex:2];
-            [ce setBuffer:pb offset:0 atIndex:3];
-            [ce dispatchThreadgroups:MTLSizeMake(N/(mpp?32:64), M/(mpp?32:64), 1)
-               threadsPerThreadgroup:MTLSizeMake(128,1,1)];
+            encodeGemm(ce, ps, mpp, scalar, A, B, C, pb, M, N, K);
             [ce endEncoding];
             [cb commit]; [cb waitUntilCompleted];
             *gpuMs = ([cb GPUEndTime] - [cb GPUStartTime]) * 1000.0;
@@ -639,23 +594,7 @@ static void bench_tensorops() {
             for (int t = 0; t < 3; t++) {
                 if (!pss[t]) { printf("verify %-17s : skipped (no pipeline)\n", names[t]); continue; }
                 double ms;
-                if (t == 2) {
-                    // scalar: dispatch per-element grid
-                    Dim d{MV,NV,KV};
-                    id<MTLBuffer> pb = [dev newBufferWithBytes:&d length:sizeof(d) options:MTLResourceStorageModeShared];
-                    id<MTLCommandBuffer> cb = [q commandBuffer];
-                    id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-                    [ce setComputePipelineState:psSc];
-                    [ce setBuffer:A offset:0 atIndex:0];
-                    [ce setBuffer:B offset:0 atIndex:1];
-                    [ce setBuffer:C offset:0 atIndex:2];
-                    [ce setBuffer:pb offset:0 atIndex:3];
-                    [ce dispatchThreads:MTLSizeMake(NV, MV, 1)
-                    threadsPerThreadgroup:MTLSizeMake(32,4,1)];
-                    [ce endEncoding]; [cb commit]; [cb waitUntilCompleted];
-                } else {
-                    runGemm(pss[t], t == 0, A, B, C, MV, NV, KV, &ms);
-                }
+                runGemm(pss[t], t == 0, t == 2, A, B, C, MV, NV, KV, &ms);
                 float maxErr = 0;
                 uint16_t *cp = (uint16_t*)C.contents;
                 for (uint32_t i = 0; i < MV*NV; i++)
@@ -684,24 +623,17 @@ static void bench_tensorops() {
             if (!cases[t].ps) { printf("perf %-17s : skipped\n", cases[t].name); continue; }
             // warmup
             double ms;
-            runGemm(cases[t].ps, cases[t].mpp, A, B, C, M, N, K, &ms);
-            double totalMs = 0;
+            runGemm(cases[t].ps, cases[t].mpp, false, A, B, C, M, N, K, &ms);
+            Dim d{M,N,K};
+            id<MTLBuffer> pb = [dev newBufferWithBytes:&d length:sizeof(d) options:MTLResourceStorageModeShared];
             id<MTLCommandBuffer> cb = [q commandBuffer];
             for (int it = 0; it < iters; it++) {
-                Dim d{M,N,K};
-                id<MTLBuffer> pb = [dev newBufferWithBytes:&d length:sizeof(d) options:MTLResourceStorageModeShared];
                 id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-                [ce setComputePipelineState:cases[t].ps];
-                [ce setBuffer:A offset:0 atIndex:0];
-                [ce setBuffer:B offset:0 atIndex:1];
-                [ce setBuffer:C offset:0 atIndex:2];
-                [ce setBuffer:pb offset:0 atIndex:3];
-                [ce dispatchThreadgroups:MTLSizeMake(N/(cases[t].mpp?32:64), M/(cases[t].mpp?32:64), 1)
-                   threadsPerThreadgroup:MTLSizeMake(128,1,1)];
+                encodeGemm(ce, cases[t].ps, cases[t].mpp, false, A, B, C, pb, M, N, K);
                 [ce endEncoding];
             }
             [cb commit]; [cb waitUntilCompleted];
-            totalMs = ([cb GPUEndTime] - [cb GPUStartTime]) * 1000.0 / iters;
+            const double totalMs = ([cb GPUEndTime] - [cb GPUStartTime]) * 1000.0 / iters;
             printf("perf %-17s : %8.3f ms/GEMM  %8.2f GFLOP/s\n", cases[t].name,
                    totalMs, flops / (totalMs * 1e6));
         }
@@ -809,57 +741,28 @@ int main(int argc, char** argv) {
 
         // --- i8mpp: manifest first (the post variant needs the ext-CNB offset) ---
         long postExtOff = -1;
-        std::string i8gdir;
-        auto prepareI8 = [&]() -> bool {
-            i8gdir = builddir + "/gen_i8mpp_" + m.preset + "_" + resStr[resIdx];
-            auto mtime = [](const std::string& f) { struct stat st; return stat(f.c_str(), &st) == 0 ? st.st_mtime : (time_t)0; };
-            if (!file_exists(i8gdir + "/i8mpp_manifest.json")
-                || mtime(i8gdir + "/i8mpp_manifest.json") < mtime(root + "/tools/gen_i8mpp.py")) {
-                char cmd[2048];
-                snprintf(cmd, sizeof cmd,
-                    "python3 '%s/tools/gen_i8mpp.py' --root '%s' --preset %s --res %s --outdir '%s'",
-                    root.c_str(), root.c_str(), m.preset.c_str(), resStr[resIdx], i8gdir.c_str());
-                if (system(cmd) != 0) { h.i8.error = "gen_i8mpp failed"; return false; }
+        if (useI8mpp) {
+            std::string i8gdir;
+            if (!I8Mpp::prepare(root, builddir, m.preset, resStr[resIdx], i8gdir,
+                                postExtOff, h.i8.error)
+                || !h.i8.load(h.dev, i8gdir, root + "/src/i8mpp.metal")) {
+                fprintf(stderr, "native INT8 unavailable (%s), falling back to FP16\n",
+                        h.i8.error.c_str());
+                useI8mpp = false;
+                fp16 = true;
+                postExtOff = -1;
             }
-            std::vector<uint8_t> mjv;
-            if (!I8Mpp::read_all(i8gdir + "/i8mpp_manifest.json", mjv)) {
-                h.i8.error = "cannot read i8mpp manifest"; return false;
-            }
-            std::string mj(mjv.begin(), mjv.end());
-            size_t k = mj.find("\"post_ext_ct2d_off\"");
-            if (k == std::string::npos) { h.i8.error = "manifest lacks post_ext_ct2d_off"; return false; }
-            postExtOff = strtol(mj.c_str() + mj.find(':', k) + 1, nullptr, 10);
-            return h.i8.load(h.dev, i8gdir, root + "/src/i8mpp.metal");
-        };
-        if (useI8mpp && !prepareI8()) {
-            fprintf(stderr, "native INT8 unavailable (%s), falling back to FP16\n", h.i8.error.c_str());
-            useI8mpp = false;
-            fp16 = true;
-            postExtOff = -1;
         }
         // --- compile shader variant (cached) ---
-        {
-            char cmd[4096];
-            char extopt[64] = "";
-            if (postExtOff >= 0) snprintf(extopt, sizeof extopt, " --post-ext-ct2d %ld", postExtOff);
-            snprintf(cmd, sizeof cmd,
-                "python3 '%s/tools/compile_variant.py' --root '%s' --preset %s "
-                "--res %s --res-idx %d --depth-inverted %d --low-res-mv %d "
-                "--jittered-mv %d --colorspace %d --auto-exposure %d "
-                "--debug-view %d --rcas %d --model %s --builddir '%s'%s",
-                root.c_str(), root.c_str(), m.preset.c_str(), resStr[resIdx], resIdx,
-                (int)m.depth_inverted, (int)m.low_res_mv, (int)m.jittered_mv,
-                colorspace, (int)m.auto_exposure, (int)dbg, (int)m.rcas,
-                fp16 ? "f16" : "i8", builddir.c_str(), extopt);
-            int rc = system(cmd);
-            if (rc != 0) die("shader compile failed");
-        }
-        char key[512];
-        snprintf(key, sizeof key, "fsr4_%s_%s_di%d_lm%d_jm%d_cs%d_ae%d_db%d%s%s",
-                 m.preset.c_str(), resStr[resIdx], (int)m.depth_inverted,
-                 (int)m.low_res_mv, (int)m.jittered_mv, colorspace,
-                 (int)m.auto_exposure, (int)dbg, fp16 ? "_f16" : "", postExtOff >= 0 ? "_pt" : "");
-        std::string vdir = builddir + "/" + key;
+        if (!fsr4::compile_variant(root, builddir, m.preset.c_str(), resStr[resIdx],
+                                   resIdx, (int)m.depth_inverted, (int)m.low_res_mv,
+                                   (int)m.jittered_mv, colorspace, (int)m.auto_exposure,
+                                   (int)dbg, (int)m.rcas, fp16 ? "f16" : "i8", postExtOff))
+            die("shader compile failed");
+        const std::string vdir = fsr4::variant_dir(
+            builddir, m.preset.c_str(), resStr[resIdx], (int)m.depth_inverted,
+            (int)m.low_res_mv, (int)m.jittered_mv, colorspace, (int)m.auto_exposure,
+            (int)dbg, fp16 ? "_f16" : (postExtOff >= 0 ? "_pt" : ""));
         if (!file_exists(vdir + "/shaders.metallib"))
             die("metallib missing at ", vdir);
 
@@ -872,32 +775,10 @@ int main(int argc, char** argv) {
         {
             FILE* bf = fopen((vdir + "/bindings.tsv").c_str(), "r");
             if (!bf) die("no bindings.tsv in ", vdir);
-            char line[512];
-            std::map<std::string, MTLSize> wg;
-            std::string cur;
-            while (fgets(line, sizeof line, bf)) {
-                char kn[128]; int x, y, z, idx; char rn[128];
-                if (sscanf(line, "K\t%127s\t%d\t%d\t%d", kn, &x, &y, &z) == 4) {
-                    if (x <= 0 || y <= 0 || z <= 0) die("invalid threadgroup dimensions for ", kn);
-                    cur = kn;
-                    KernelInfo ki;
-                    id<MTLFunction> fn = [lib newFunctionWithName:
-                        [NSString stringWithUTF8String:kn]];
-                    if (!fn) die("no MTLFunction ", kn);
-                    ki.pso = [h.dev newComputePipelineStateWithFunction:fn error:&err];
-                    if (!ki.pso) die("PSO failed ", kn);
-                    ki.wg = MTLSizeMake(x, y, z);
-                    if ((NSUInteger)x * y * z > ki.pso.maxTotalThreadsPerThreadgroup ||
-                        ki.pso.staticThreadgroupMemoryLength > h.dev.maxThreadgroupMemoryLength)
-                        die("GPU threadgroup limits exceeded by ", kn);
-                    h.kernels[cur] = ki;
-                } else if (sscanf(line, "B\t%127s\t%d\t%127s", kn, &idx, rn) == 3)
-                    h.kernels[kn].buffers.push_back({(NSUInteger)idx, rn});
-                else if (sscanf(line, "T\t%127s\t%d\t%127s", kn, &idx, rn) == 3)
-                    h.kernels[kn].textures.push_back({(NSUInteger)idx, rn});
-                else if (sscanf(line, "S\t%127s\t%d\t%127s", kn, &idx, rn) == 3)
-                    h.kernels[kn].samplers.push_back({(NSUInteger)idx, rn});
-            }
+            std::string berr;
+            if (!fsr4::parse_bindings(h.dev, lib, bf, h.kernels, berr,
+                                      "no MTLFunction ", "PSO failed "))
+                die(berr.c_str());
             fclose(bf);
         }
 
@@ -907,12 +788,9 @@ int main(int argc, char** argv) {
         h.recurrent      = make_tex(h.dev, MTLPixelFormatRGBA8Unorm, uwA, uhA);
         h.history        = make_tex(h.dev, MTLPixelFormatRGBA16Float, uwA, uhA);
         h.historyReproj  = make_tex(h.dev, MTLPixelFormatRGBA16Float, uwA, uhA);
-        {
-            std::vector<uint8_t> zeros((size_t)uwA * uhA * 8, 0);
-            tex_write(h.recurrent, zeros.data(), uwA * 4);
-            tex_write(h.history, zeros.data(), uwA * 8);
-            tex_write(h.historyReproj, zeros.data(), uwA * 8);
-        }
+        fsr4::zero_tex(h.recurrent);
+        fsr4::zero_tex(h.history);
+        fsr4::zero_tex(h.historyReproj);
         if (m.rcas)
             h.rcasTemp   = make_tex(h.dev, MTLPixelFormatRGBA16Float, uwA, uhA);
         else             // dummy so bindings never nil
@@ -921,27 +799,15 @@ int main(int argc, char** argv) {
             h.autoExposure = make_tex(h.dev, MTLPixelFormatR32Float, 2, 1);
             // Match the live encoder: SPD can read the previous exposure on
             // its first dispatch, so a fresh texture must have defined state.
-            const float zeroExposure[2] = {0.f, 0.f};
-            tex_write(h.autoExposure, zeroExposure, sizeof(zeroExposure));
+            fsr4::zero_tex(h.autoExposure);
             h.lumaMip5     = make_tex(h.dev, MTLPixelFormatR32Float,
                                       roundUpDiv(m.rw, 16), roundUpDiv(m.rh, 16));
             // spdAtomicCounter: buffer-backed 1x1 R32Uint (globallycoherent atomic)
             h.spdAtomicBuf = [h.dev newBufferWithLength:4096
                                 options:MTLResourceStorageModeShared];
             memset(h.spdAtomicBuf.contents, 0, 4);
-            MTLTextureDescriptor* sd = [MTLTextureDescriptor
-                texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Uint
-                width:1 height:1 mipmapped:NO];
-            sd.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-            sd.storageMode = MTLStorageModeShared;
-            h.spdAtomicTex = [h.spdAtomicBuf newTextureWithDescriptor:sd
-                                offset:0 bytesPerRow:16];
+            h.spdAtomicTex = fsr4::spd_atomic_texture(h.spdAtomicBuf);
             if (!h.spdAtomicTex) die("spd atomic tex failed");
-        }
-        {
-            float de[2] = {1.f, 1.f};
-            h.defaultExposure = make_tex(h.dev, MTLPixelFormatRG32Float, 1, 1);
-            tex_write(h.defaultExposure, de, 8);
         }
         if (dbg) h.debugInfo = make_tex(h.dev, MTLPixelFormatR16Unorm, uwA, uhA);
         else     h.debugInfo = make_tex(h.dev, MTLPixelFormatR16Unorm, 4, 4);
@@ -949,7 +815,7 @@ int main(int argc, char** argv) {
         const char* scratchMode = getenv("FSR4_SCRATCH_PRIVATE");
         h.scratchPrivate = scratchMode && *scratchMode == '1';
         // i8mpp appends the pass-13 model-parameter tensor after the tensors
-        size_t scratchBytes = kScratchSize[resIdx] * (fp16 ? 2 : 1);
+        size_t scratchBytes = fsr4::scratch_size(resIdx) * (fp16 ? 2 : 1);
         if (useI8mpp) scratchBytes = I8Mpp::scratch_bytes(resIdx);
         if (h.scratchPrivate) {
             h.scratch = [h.dev newBufferWithLength:scratchBytes
@@ -1020,7 +886,6 @@ int main(int argc, char** argv) {
                     }
                 }
                 if (h.mppPso[0] && h.mppPso[1] && h.mppPso[2]) {
-                    if (!useMpp && !useCnb) { /* unreachable */ }
                     auto wb = read_file(gdir + "/mpp_weights.bin");
                     h.mppWgt = [h.dev newBufferWithBytes:wb.data()
                                 length:wb.size()
@@ -1097,32 +962,15 @@ int main(int argc, char** argv) {
 
         if (useI8mpp) {
             h.i8.set_region(uwA, uhA);
-            h.useI8 = true;
             fprintf(stderr, "native int8 tensor-ops kernels: %zu passes\n", h.i8.passes.size());
         }
         h.cbMain  = [h.dev newBufferWithLength:256 options:MTLResourceStorageModeShared];
         h.cbSpd   = [h.dev newBufferWithLength:256 options:MTLResourceStorageModeShared];
         h.cbRcas  = [h.dev newBufferWithLength:256 options:MTLResourceStorageModeShared];
-        {
-            const uint32_t* w = kPass0Weights_quality;
-            if (m.preset == "native")      w = kPass0Weights_native;
-            else if (m.preset == "balanced")    w = kPass0Weights_balanced;
-            else if (m.preset == "performance") w = kPass0Weights_performance;
-            else if (m.preset == "ultraperf")   w = kPass0Weights_ultraperf;
-            else if (m.preset == "drs")         w = kPass0Weights_drs;
-            h.cbPass0 = [h.dev newBufferWithBytes:w length:1024
-                            options:MTLResourceStorageModeShared];
-        }
+        h.cbPass0 = [h.dev newBufferWithBytes:fsr4::pass0_weights(m.preset.c_str())
+                        length:1024 options:MTLResourceStorageModeShared];
 
-        MTLSamplerDescriptor* smd = [MTLSamplerDescriptor new];
-        smd.minFilter = MTLSamplerMinMagFilterLinear;
-        smd.magFilter = MTLSamplerMinMagFilterLinear;
-        smd.mipFilter = MTLSamplerMipFilterLinear;
-        smd.sAddressMode = MTLSamplerAddressModeClampToEdge;
-        smd.tAddressMode = MTLSamplerAddressModeClampToEdge;
-        smd.rAddressMode = MTLSamplerAddressModeClampToEdge;
-        smd.maxAnisotropy = 1;
-        h.linearClamp = [h.dev newSamplerStateWithDescriptor:smd];
+        h.linearClamp = fsr4::linear_clamp(h.dev);
 
         // --- per-frame input textures ---
         h.inColor = make_tex(h.dev, MTLPixelFormatRGBA16Float, m.rw, m.rh);
@@ -1132,17 +980,16 @@ int main(int argc, char** argv) {
         h.output  = make_tex(h.dev, MTLPixelFormatRGBA16Float, m.uw, m.uh);
 
         // --- dispatch sizes (INT8 path of provider) ---
+        // fsr4::kModelLevel: 1,2→enc0 3,4,5→enc1 6,7,8,9→enc2
+        // 10,11→enc1 12→enc0; encI = upscale >> (I+1)
         uint32_t e[3][2] = {{uwA >> 1, uhA >> 1}, {uwA >> 2, uhA >> 2}, {uwA >> 3, uhA >> 3}};
         uint32_t passDim[13][2];
-        // INT8 dispatch table: 1,2→enc0 3,4,5→enc1 6,7,8→enc2
-        // 9→enc2(/8) 10,11→enc1 12→enc0; encI = upscale >> (I+1)
-        static const int level[13] = {0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 1, 1, 0};
         for (int pass = 1; pass <= 12; ++pass) {
             char name[64];
-            snprintf(name, sizeof name, "fsr4_model_v07_%s_pass%d", fp16 ? "f16" : "i8", pass);
+            fsr4::model_pass_name(name, sizeof name, fp16, pass);
             const MTLSize wg = h.kernels.at(name).wg;
-            passDim[pass][0] = roundUpDiv(e[level[pass]][0], (uint32_t)wg.width);
-            passDim[pass][1] = roundUpDiv(e[level[pass]][1], (uint32_t)wg.height);
+            passDim[pass][0] = roundUpDiv(e[fsr4::kModelLevel[pass]][0], (uint32_t)wg.width);
+            passDim[pass][1] = roundUpDiv(e[fsr4::kModelLevel[pass]][1], (uint32_t)wg.height);
         }
 
         OptimizedConstants& oc = *(OptimizedConstants*)h.cbMain.contents;
@@ -1150,13 +997,7 @@ int main(int argc, char** argv) {
         RcasConstants& rc = *(RcasConstants*)h.cbRcas.contents;
 
         // static fields
-        oc.inv_size[0] = 1.f / uwA; oc.inv_size[1] = 1.f / uhA;
-        oc.scale[0] = 1.f * uwA / m.rw; oc.scale[1] = 1.f * uhA / m.rh;
-        oc.inv_scale[0] = 1.f / oc.scale[0]; oc.inv_scale[1] = 1.f / oc.scale[1];
-        oc.tex_size[0] = (float)uwA; oc.tex_size[1] = (float)uhA;
-        oc.max_renderSize[0] = (float)m.rw; oc.max_renderSize[1] = (float)m.rh;
-        oc.width = uwA; oc.height = uhA;
-        oc.width_lr = m.rw; oc.height_lr = m.rh;
+        fsr4::fill_geometry(oc, uwA, uhA, m.rw, m.rh, m.rw, m.rh);
         oc.rcas_enabled = m.rcas ? 1 : 0;
         oc.rcas_sharpness = m.sharpness;
         oc.fMotionVectorJitterCancellation[0] = oc.fMotionVectorJitterCancellation[1] = 0;
@@ -1164,13 +1005,8 @@ int main(int argc, char** argv) {
         const uint32_t mvH = m.low_res_mv ? m.rh : m.uh;
 
         if (m.auto_exposure) {
-            uint32_t groups[2], wgo[2], nwm[2];
-            uint32_t rect[4] = {0, 0, m.rw, m.rh};
-            ffxSpdSetup(groups, wgo, nwm, rect);
-            sc.workGroupOffset[0] = wgo[0]; sc.workGroupOffset[1] = wgo[1];
-            sc.numWorkGroups = nwm[0]; sc.mips = nwm[1];
-            sc.invInputSize[0] = 1.f / m.rw; sc.invInputSize[1] = 1.f / m.rh;
-            sc.preExposure = m.pre_exposure;
+            uint32_t groups[2];
+            fsr4::fill_spd(sc, m.rw, m.rh, m.pre_exposure, groups);
             passDim[0][0] = groups[0]; passDim[0][1] = groups[1]; // reuse slot for spd groups
         }
         if (m.rcas) {
@@ -1259,24 +1095,27 @@ int main(int argc, char** argv) {
                 enc = [cb computeCommandEncoder];
             };
             begin();
+            // scratch readback; private storage needs a blit through shared memory
+            auto writeScratch = [&](const char *path) {
+                if (!h.scratchPrivate) {
+                    write_file(path, h.scratch.contents, h.scratch.length);
+                    return;
+                }
+                id<MTLCommandBuffer> db = [h.queue commandBuffer];
+                id<MTLBlitCommandEncoder> be = [db blitCommandEncoder];
+                id<MTLBuffer> stag = [h.dev newBufferWithLength:h.scratch.length options:MTLResourceStorageModeShared];
+                [be copyFromBuffer:h.scratch sourceOffset:0 toBuffer:stag destinationOffset:0 size:h.scratch.length];
+                [be endEncoding]; [db commit]; [db waitUntilCompleted];
+                write_file(path, stag.contents, stag.length);
+            };
             // snapshot scratch after pass pp (00=pre .. 13=post, matching the
             // reference passdumps naming)
             auto dumpScratch = [&](int pp) {
-                flush(); begin();
+                flush();
                 char p[512];
                 snprintf(p, sizeof p, "%s/f%02d_pass%02d_scratch.bin", outdir.c_str(), fi, pp);
-                if (!h.scratchPrivate) {
-                    write_file(p, h.scratch.contents, h.scratch.length);
-                } else {
-                    flush();
-                    id<MTLCommandBuffer> db = [h.queue commandBuffer];
-                    id<MTLBlitCommandEncoder> be = [db blitCommandEncoder];
-                    id<MTLBuffer> stag = [h.dev newBufferWithLength:h.scratch.length options:MTLResourceStorageModeShared];
-                    [be copyFromBuffer:h.scratch sourceOffset:0 toBuffer:stag destinationOffset:0 size:h.scratch.length];
-                    [be endEncoding]; [db commit]; [db waitUntilCompleted];
-                    write_file(p, stag.contents, stag.length);
-                    begin();
-                }
+                writeScratch(p);
+                begin();
             };
             // in bench mode each stage runs in its own command buffer so
             // GPUStartTime/GPUEndTime gives a per-stage timing (serialized,
@@ -1357,11 +1196,10 @@ int main(int argc, char** argv) {
             if (dumpPasses && !bench) dumpScratch(0);
             for (int i = 1; i <= 12; i++) {
                 char pname[96];
-                snprintf(pname, sizeof pname, "fsr4_model_v07_%s_pass%d",
-                         fp16 ? "f16" : "i8", i);
+                fsr4::model_pass_name(pname, sizeof pname, fp16, i);
                 auto mit = h.mpp.find(i);
                 auto cit = h.cnb.find(i);
-                if (h.useI8 && h.i8.has(i)) {
+                if (useI8mpp && h.i8.has(i)) {
                     timed(pname, 0, 0, false, nullptr, nullptr, i);
                 } else if (mit != h.mpp.end()) {
                     // tile width per threadgroup: fnb32=128px, fnb64=64px
@@ -1375,7 +1213,7 @@ int main(int argc, char** argv) {
                     timed(pname, passDim[i][0], passDim[i][1], false);
                 if (dumpPasses && !bench) dumpScratch(i);
             }
-            if (h.useI8 && h.i8.has(13))
+            if (useI8mpp && h.i8.has(13))
                 timed("fsr4_post_cnb_ct2d", 0, 0, true, nullptr, nullptr, 13);
             timed("fsr4_post", roundUpDiv(uwA, 16), roundUpDiv(uhA, 16), true);
             if (dumpPasses && !bench) dumpScratch(13);
@@ -1394,25 +1232,18 @@ int main(int argc, char** argv) {
                 // dumping would need per-dispatch command buffers (slow).
                 char p[512];
                 snprintf(p, sizeof p, "%s/f%02d_scratch.bin", outdir.c_str(), fi);
-                if (!h.scratchPrivate)
-                    write_file(p, h.scratch.contents, h.scratch.length);
-                else {
-                    id<MTLCommandBuffer> db = [h.queue commandBuffer];
-                    id<MTLBlitCommandEncoder> be = [db blitCommandEncoder];
-                    id<MTLBuffer> stag = [h.dev newBufferWithLength:h.scratch.length options:MTLResourceStorageModeShared];
-                    [be copyFromBuffer:h.scratch sourceOffset:0 toBuffer:stag destinationOffset:0 size:h.scratch.length];
-                    [be endEncoding]; [db commit]; [db waitUntilCompleted];
-                    write_file(p, stag.contents, stag.length);
+                writeScratch(p);
+                const struct { id<MTLTexture> tex; size_t bpp; const char *name; } tdumps[] = {
+                    {h.recurrent, 4, "recurrent"},
+                    {h.history, 8, "history"},
+                    {h.historyReproj, 8, "reprojected"},
+                };
+                for (auto &d : tdumps) {
+                    snprintf(p, sizeof p, "%s/f%02d_%s.bin", outdir.c_str(), fi, d.name);
+                    std::vector<uint8_t> t((size_t)uwA * uhA * d.bpp);
+                    tex_read(d.tex, t.data(), uwA * d.bpp);
+                    write_file(p, t.data(), t.size());
                 }
-                snprintf(p, sizeof p, "%s/f%02d_recurrent.bin", outdir.c_str(), fi);
-                { std::vector<uint8_t> t((size_t)uwA * uhA * 4);
-                  tex_read(h.recurrent, t.data(), uwA * 4); write_file(p, t.data(), t.size()); }
-                snprintf(p, sizeof p, "%s/f%02d_history.bin", outdir.c_str(), fi);
-                { std::vector<uint8_t> t((size_t)uwA * uhA * 8);
-                  tex_read(h.history, t.data(), uwA * 8); write_file(p, t.data(), t.size()); }
-                snprintf(p, sizeof p, "%s/f%02d_reprojected.bin", outdir.c_str(), fi);
-                { std::vector<uint8_t> t((size_t)uwA * uhA * 8);
-                  tex_read(h.historyReproj, t.data(), uwA * 8); write_file(p, t.data(), t.size()); }
                 snprintf(p, sizeof p, "%s/f%02d_constants.bin", outdir.c_str(), fi);
                 write_file(p, &oc, sizeof(oc));
             }

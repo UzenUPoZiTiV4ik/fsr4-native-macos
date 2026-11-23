@@ -1,89 +1,25 @@
 // Host for tools/bench/mpp_bench.metal: verify vs CPU, then time.
-#import <Metal/Metal.h>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
+#include "mpp_probe.h"
 #include <cmath>
-#include <vector>
 #include <string>
 
-struct ConvP { uint32_t W, H, C, O, TW, TH; };
-struct GemmP { uint32_t M, N, K; };
-
-static id<MTLDevice> dev;
-static id<MTLCommandQueue> q;
-static id<MTLLibrary> lib;
-
-static id<MTLBuffer> mkbuf(size_t n) {
-    return [dev newBufferWithLength:n options:MTLResourceStorageModeShared];
-}
-
-static double time_dispatch(id<MTLComputePipelineState> pso, MTLSize groups, MTLSize tg,
-                            std::vector<id<MTLBuffer>> bufs, const void *cbytes, size_t clen,
-                            int iters) {
-    double best = 1e9;
-    for (int it = 0; it < iters; it++) {
-        id<MTLCommandBuffer> cb = [q commandBuffer];
-        id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
-        [enc setComputePipelineState:pso];
-        for (size_t i = 0; i < bufs.size(); i++) [enc setBuffer:bufs[i] offset:0 atIndex:i];
-        [enc setBytes:cbytes length:clen atIndex:bufs.size()];
-        for (int r = 0; r < 10; r++) [enc dispatchThreadgroups:groups threadsPerThreadgroup:tg];
-        [enc endEncoding];
-        [cb commit];
-        [cb waitUntilCompleted];
-        if (cb.status != MTLCommandBufferStatusCompleted) {
-            printf("  gpu error: %s\n", cb.error.localizedDescription.UTF8String);
-            return -1;
-        }
-        double ms = (cb.GPUEndTime - cb.GPUStartTime) * 1000.0 / 10.0;
-        if (ms < best) best = ms;
-    }
-    return best;
-}
-
-static id<MTLComputePipelineState> pso_for(const char *name) {
-    id<MTLFunction> fn = [lib newFunctionWithName:[NSString stringWithUTF8String:name]];
-    if (!fn) { printf("%s: missing\n", name); return nil; }
-    NSError *err = nil;
-    id<MTLComputePipelineState> p = [dev newComputePipelineStateWithFunction:fn error:&err];
-    if (!p) printf("%s: pso error %s\n", name, err.localizedDescription.UTF8String);
-    return p;
-}
-
-// conv 3x3 same padding CPU ref, NHWC act (C fastest), HWIO weights (O fastest).
-static void conv_ref_i8(const int8_t *act, const int8_t *w, int32_t *out, int W, int H, int C, int O) {
-    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) for (int o = 0; o < O; o++) {
-        int32_t acc = 0;
-        for (int ky = 0; ky < 3; ky++) for (int kx = 0; kx < 3; kx++) {
-            int yy = y + ky - 1, xx = x + kx - 1;
-            if (yy < 0 || xx < 0 || yy >= H || xx >= W) continue;
-            for (int c = 0; c < C; c++)
-                acc += (int)act[((yy * W + xx) * C) + c] * (int)w[((ky * 3 + kx) * C + c) * O + o];
-        }
-        out[(y * W + x) * O + o] = acc;
-    }
-}
+using namespace mpp_probe;
 
 static void bench_conv_i8(const char *name, int TW, int TH, int C, int O, int W, int H, bool verify) {
-    id<MTLComputePipelineState> pso = pso_for(name);
+    id<MTLComputePipelineState> pso = pipeline(name);
     if (!pso) return;
     size_t na = (size_t)W * H * C, nw = 9 * C * O, no = (size_t)W * H * O;
     id<MTLBuffer> a = mkbuf(na), w = mkbuf(nw), o = mkbuf(no * 4);
-    int8_t *ap = (int8_t *)a.contents, *wp = (int8_t *)w.contents;
-    srand(1);
-    for (size_t i = 0; i < na; i++) ap[i] = (int8_t)(rand() % 256 - 128);
-    for (size_t i = 0; i < nw; i++) wp[i] = (int8_t)(rand() % 256 - 128);
+    fill_i8(a, na, 1); fill_i8(w, nw, 0);
     memset(o.contents, 0, no * 4);
     ConvP p = {(uint32_t)W, (uint32_t)H, (uint32_t)C, (uint32_t)O, (uint32_t)TW, (uint32_t)TH};
     MTLSize groups = MTLSizeMake((W + TW - 1) / TW, (H + TH - 1) / TH, 1);
-    MTLSize tg = MTLSizeMake(128, 1, 1);
-    double ms = time_dispatch(pso, groups, tg, {a, w, o}, &p, sizeof p, verify ? 2 : 6);
+    double ms = time_dispatch(pso, groups, {a, w, o}, &p, sizeof p, verify ? 2 : 6);
     double gflop = 2.0 * W * H * 9.0 * C * O / 1e9;
     printf("%-26s %4dx%-4d C%-3d O%-3d tile %dx%-3d: %.3f ms  %.0f GOP/s", name, W, H, C, O, TW, TH, ms, gflop / ms * 1e3);
     if (verify) {
         std::vector<int32_t> ref(no);
-        conv_ref_i8(ap, wp, ref.data(), W, H, C, O);
+        conv_ref((const int8_t *)a.contents, (const int8_t *)w.contents, ref.data(), W, H, C, O);
         const int32_t *got = (const int32_t *)o.contents;
         size_t bad = 0, interiorBad = 0; long long maxd = 0;
         for (size_t i = 0; i < no; i++) {
@@ -101,7 +37,7 @@ static void bench_conv_i8(const char *name, int TW, int TH, int C, int O, int W,
 }
 
 static void bench_conv_f16(const char *name, int TW, int TH, int C, int O, int W, int H, bool verify) {
-    id<MTLComputePipelineState> pso = pso_for(name);
+    id<MTLComputePipelineState> pso = pipeline(name);
     if (!pso) return;
     size_t na = (size_t)W * H * C, nw = 9 * C * O, no = (size_t)W * H * O;
     id<MTLBuffer> a = mkbuf(na * 2), w = mkbuf(nw * 2), o = mkbuf(no * 4);
@@ -113,12 +49,12 @@ static void bench_conv_f16(const char *name, int TW, int TH, int C, int O, int W
     memset(o.contents, 0, no * 4);
     ConvP p = {(uint32_t)W, (uint32_t)H, (uint32_t)C, (uint32_t)O, (uint32_t)TW, (uint32_t)TH};
     MTLSize groups = MTLSizeMake((W + TW - 1) / TW, (H + TH - 1) / TH, 1);
-    double ms = time_dispatch(pso, groups, MTLSizeMake(128, 1, 1), {a, w, o}, &p, sizeof p, verify ? 2 : 6);
+    double ms = time_dispatch(pso, groups, {a, w, o}, &p, sizeof p, verify ? 2 : 6);
     double gflop = 2.0 * W * H * 9.0 * C * O / 1e9;
     printf("%-26s %4dx%-4d C%-3d O%-3d tile %dx%-3d: %.3f ms  %.0f GFLOP/s", name, W, H, C, O, TW, TH, ms, gflop / ms * 1e3);
     if (verify) {
         std::vector<int32_t> ref(no);
-        conv_ref_i8(ai.data(), wi.data(), ref.data(), W, H, C, O);
+        conv_ref(ai.data(), wi.data(), ref.data(), W, H, C, O);
         const float *got = (const float *)o.contents;
         size_t bad = 0; double maxd = 0;
         for (size_t i = 0; i < no; i++) {
@@ -132,25 +68,17 @@ static void bench_conv_f16(const char *name, int TW, int TH, int C, int O, int W
 }
 
 static void bench_gemm_i8(const char *name, int N, int K, int M, bool verify) {
-    id<MTLComputePipelineState> pso = pso_for(name);
+    id<MTLComputePipelineState> pso = pipeline(name);
     if (!pso) return;
     id<MTLBuffer> a = mkbuf((size_t)M * K), b = mkbuf((size_t)K * N), c = mkbuf((size_t)M * N * 4);
-    int8_t *ap = (int8_t *)a.contents, *bp = (int8_t *)b.contents;
-    srand(3);
-    for (size_t i = 0; i < (size_t)M * K; i++) ap[i] = (int8_t)(rand() % 256 - 128);
-    for (size_t i = 0; i < (size_t)K * N; i++) bp[i] = (int8_t)(rand() % 256 - 128);
-    GemmP p = {(uint32_t)M, (uint32_t)N, (uint32_t)K};
-    double ms = time_dispatch(pso, MTLSizeMake(M / 32, 1, 1), MTLSizeMake(128, 1, 1), {a, b, c}, &p, sizeof p, verify ? 2 : 6);
+    fill_i8(a, (size_t)M * K, 3); fill_i8(b, (size_t)K * N, 0);
+    GemmP p = {(uint32_t)M, (uint32_t)N, (uint32_t)K, 0};
+    double ms = time_dispatch(pso, MTLSizeMake(M / 32, 1, 1), {a, b, c}, &p, sizeof p, verify ? 2 : 6);
     double gop = 2.0 * M * N * K / 1e9;
     printf("%-26s M%-8d N%-4d K%-4d: %.3f ms  %.0f GOP/s", name, M, N, K, ms, gop / ms * 1e3);
     if (verify) {
-        const int32_t *got = (const int32_t *)c.contents;
-        size_t bad = 0;
-        for (int m = 0; m < M; m += 97) for (int n = 0; n < N; n++) {
-            int32_t acc = 0;
-            for (int k = 0; k < K; k++) acc += (int)ap[m * K + k] * (int)bp[k * N + n];
-            if (acc != got[m * N + n]) bad++;
-        }
+        size_t bad = gemm_verify((const int8_t *)a.contents, (const int8_t *)b.contents,
+                                 (const int32_t *)c.contents, M, N, K, 97);
         printf("  verify(sampled): %zu mismatches", bad);
     }
     printf("\n");
@@ -160,18 +88,16 @@ static void bench_gemm_i8(const char *name, int N, int K, int M, bool verify) {
 // Search which interpretation the op implements: activation shift (dx,dy),
 // weight index permutation, presence of implicit zero padding.
 static void diag_conv_i8(const char *name, int TW, int TH, int C, int O, int W, int H) {
-    id<MTLComputePipelineState> pso = pso_for(name);
+    id<MTLComputePipelineState> pso = pipeline(name);
     if (!pso) return;
     size_t na = (size_t)W * H * C, nw = 9 * C * O, no = (size_t)W * H * O;
     id<MTLBuffer> a = mkbuf(na), w = mkbuf(nw), o = mkbuf(no * 4);
-    int8_t *ap = (int8_t *)a.contents, *wp = (int8_t *)w.contents;
-    srand(1);
-    for (size_t i = 0; i < na; i++) ap[i] = (int8_t)(rand() % 256 - 128);
-    for (size_t i = 0; i < nw; i++) wp[i] = (int8_t)(rand() % 256 - 128);
+    fill_i8(a, na, 1); fill_i8(w, nw, 0);
     memset(o.contents, 0x7f, no * 4);
     ConvP p = {(uint32_t)W, (uint32_t)H, (uint32_t)C, (uint32_t)O, (uint32_t)TW, (uint32_t)TH};
-    time_dispatch(pso, MTLSizeMake((W + TW - 1) / TW, (H + TH - 1) / TH, 1), MTLSizeMake(128, 1, 1), {a, w, o}, &p, sizeof p, 1);
+    time_dispatch(pso, MTLSizeMake((W + TW - 1) / TW, (H + TH - 1) / TH, 1), {a, w, o}, &p, sizeof p, 1);
     const int32_t *got = (const int32_t *)o.contents;
+    const int8_t *ap = (const int8_t *)a.contents, *wp = (const int8_t *)w.contents;
     // weight index candidates: (ky,kx,c,o) -> linear
     struct WL { const char *n; int (*f)(int,int,int,int,int,int); };
     WL wls[] = {
@@ -203,12 +129,8 @@ static void diag_conv_i8(const char *name, int TW, int TH, int C, int O, int W, 
 
 int main(int argc, char **argv) {
     @autoreleasepool {
-        dev = MTLCreateSystemDefaultDevice();
-        q = [dev newCommandQueue];
-        NSError *err = nil;
         const char *path = argc > 1 ? argv[1] : "/tmp/mpp_bench.metallib";
-        lib = [dev newLibraryWithURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:path]] error:&err];
-        if (!lib) { printf("lib: %s\n", err.localizedDescription.UTF8String); return 1; }
+        if (!open(path)) return 1;
         printf("device: %s\n", dev.name.UTF8String);
 
         if (argc > 2) { diag_conv_i8("conv_i8_32x4_16_16", 32, 4, 16, 16, 96, 20); return 0; }

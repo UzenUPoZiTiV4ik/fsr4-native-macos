@@ -279,6 +279,13 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     return t;
 }
 
+// The HUD panel has a dark background; checkboxes need an explicit title color.
+static void title_color(NSButton *button, NSColor *color) {
+    button.attributedTitle = [[NSAttributedString alloc] initWithString:button.title
+        attributes:@{NSForegroundColorAttributeName: color,
+                     NSFontAttributeName: [NSFont systemFontOfSize:12]}];
+}
+
 - (void)build {
     const CGFloat W = 660, H = 578;
     NSUInteger style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskUtilityWindow
@@ -377,14 +384,12 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     self.rcas = [NSButton checkboxWithTitle:@"RCAS (FSR sharpening)" target:self action:@selector(changed:)];
     self.rcas.frame = NSMakeRect(12, y, W / 2 - 24, 18);
     self.rcas.state = rc ? NSControlStateValueOn : NSControlStateValueOff;
-    self.rcas.attributedTitle = [[NSAttributedString alloc] initWithString:self.rcas.title
-        attributes:@{NSForegroundColorAttributeName: NSColor.whiteColor, NSFontAttributeName: [NSFont systemFontOfSize:12]}];
+    title_color(self.rcas, NSColor.whiteColor);
     [v addSubview:self.rcas];
     self.pixelFix = [NSButton checkboxWithTitle:@"Pixelization fix" target:self action:@selector(changed:)];
     self.pixelFix.frame = NSMakeRect(W / 2, y, 140, 18);
     self.pixelFix.state = fix ? NSControlStateValueOn : NSControlStateValueOff;
-    self.pixelFix.attributedTitle = [[NSAttributedString alloc] initWithString:self.pixelFix.title
-        attributes:@{NSForegroundColorAttributeName: NSColor.whiteColor, NSFontAttributeName: [NSFont systemFontOfSize:12]}];
+    title_color(self.pixelFix, NSColor.whiteColor);
     self.pixelFix.toolTip = @"FSR 4.1.2 Lite only: a wider current-frame filter where the network rejects history, "
                             @"so moving hair and thin detail are less blocky. Switching resets history.";
     [v addSubview:self.pixelFix];
@@ -401,8 +406,7 @@ static NSTextField *label(NSString *s, CGFloat x, CGFloat y, CGFloat w, BOOL bol
     self.newLook = [NSButton checkboxWithTitle:@"Experimental new-look" target:self action:@selector(changed:)];
     self.newLook.frame = NSMakeRect(12, y, W - 24, 20);
     self.newLook.state = read_new_look() ? NSControlStateValueOn : NSControlStateValueOff;
-    self.newLook.attributedTitle = [[NSAttributedString alloc] initWithString:self.newLook.title
-        attributes:@{NSForegroundColorAttributeName: NSColor.systemOrangeColor, NSFontAttributeName: [NSFont systemFontOfSize:12]}];
+    title_color(self.newLook, NSColor.systemOrangeColor);
     self.newLook.accessibilityLabel = @"Experimental new-look";
     self.newLook.toolTip = @"Lite Lossy only: experimental particle, thin-line and depth-edge history rules. "
                            @"May change softness, flicker and GPU cost. Switching resets history and may compile shaders. "

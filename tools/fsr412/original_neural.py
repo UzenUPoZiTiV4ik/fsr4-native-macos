@@ -10,6 +10,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import re
+try:
+    from upstream_oracle import balanced_end
+except ImportError:
+    from fsr412.upstream_oracle import balanced_end
 
 BEGIN = '// fsr412-original-neural-gate-v1-begin\n'
 END = '// fsr412-original-neural-gate-v1-end\n'
@@ -28,15 +32,6 @@ inline bool fsr412OriginalSkipped(device const uchar *scratch) {
 '''
 
 
-def closing_parenthesis(source, start):
-    depth = 0
-    for index in range(start, len(source)):
-        depth += (source[index] == '(') - (source[index] == ')')
-        if depth == 0:
-            return index
-    raise ValueError('unterminated original integer kernel signature')
-
-
 def apply_original_gate(source):
     if BEGIN in source:
         if source.count(BEGIN) != 1 or source.count(END) != 1:
@@ -52,7 +47,8 @@ def apply_original_gate(source):
     for match in re.finditer(r'\bkernel\s+void\s+(\w+)\s*\(', source):
         if match[1] in ('fsr411_mpp_chain_probe', 'fsr411_simd_probe'):
             continue
-        end = closing_parenthesis(source, match.end() - 1)
+        end = balanced_end(source, match.end() - 1,
+                           message='unterminated original integer kernel signature')
         arguments = source[match.end():end]
         if '[[buffer(2)]]' not in arguments and 'FSR411_SIMD_ARGS' not in arguments:
             raise ValueError('unknown original integer kernel: ' + match[1])

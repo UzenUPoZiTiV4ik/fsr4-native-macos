@@ -1,32 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Real GPU parity/cadence tests and interleaved mode timing. No game/DLL execution.
 #include "../../src/fsr412_runtime.h"
+#include "bench_gpu.h"
 #include <numeric>
 #include <stdexcept>
 
 namespace {
-void require(bool value,const std::string &reason) {if(!value)throw std::runtime_error(reason);}
-id<MTLTexture> texture(id<MTLDevice> device,MTLPixelFormat format,unsigned w,unsigned h) {
-    auto d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:w height:h mipmapped:NO];
-    d.storageMode=MTLStorageModeShared;d.usage=MTLTextureUsageShaderRead|MTLTextureUsageShaderWrite;
-    auto t=[device newTextureWithDescriptor:d];require(t!=nil,"texture allocation failed");return t;
-}
-std::vector<uint8_t> bytes(id<MTLCommandQueue> queue,id<MTLTexture> t,unsigned bpp) {
-    const NSUInteger pitch=(t.width*bpp+255u)&~NSUInteger(255);
-    auto buffer=[t.device newBufferWithLength:pitch*t.height options:MTLResourceStorageModeShared];
-    auto cb=[queue commandBuffer];auto enc=[cb blitCommandEncoder];
-    [enc copyFromTexture:t sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
-        sourceSize:MTLSizeMake(t.width,t.height,1) toBuffer:buffer destinationOffset:0
-        destinationBytesPerRow:pitch destinationBytesPerImage:pitch*t.height];
-    [enc endEncoding];[cb commit];[cb waitUntilCompleted];
-    require(cb.status==MTLCommandBufferStatusCompleted,fsr411::metal_error(cb.error));
-    std::vector<uint8_t> result(t.width*t.height*bpp);
-    for(NSUInteger y=0;y<t.height;++y)std::memcpy(result.data()+y*t.width*bpp,(const uint8_t *)buffer.contents+y*pitch,t.width*bpp);
-    if(bpp==8)for(size_t i=0;i<result.size();i+=2) {
-        _Float16 v;std::memcpy(&v,result.data()+i,2);require(std::isfinite(float(v)),"nonfinite output/history");
-    }
-    return result;
-}
+using namespace bench;
 struct Mode {
     std::string name;
     fsr411::Options options;
@@ -34,11 +14,6 @@ struct Mode {
     id<MTLTexture> output=nil;
     std::vector<double> times,full,reused,partial;
 };
-double percentile(std::vector<double> values,double p) {
-    if(values.empty())return 0;
-    std::sort(values.begin(),values.end());return values[size_t((values.size()-1)*p)];
-}
-NSArray *numbers(const std::vector<double> &values) {auto a=[NSMutableArray array];for(double value:values)[a addObject:@(value)];return a;}
 }
 int main(int argc,char **argv) {@autoreleasepool {try {
     require(argc>=2,"usage: fsr412_modes_ab ROOT [--bench N] [--size RW RH UW UH] [--mtl4] [--legacy] [--ultra] [--report FILE]");
@@ -60,12 +35,9 @@ int main(int argc,char **argv) {@autoreleasepool {try {
     require(rounds && rounds<=1000 && rw && rh && uw>=4 && uh>=4 && !(uw&3u) && !(uh&3u)
         && rw<=3840 && rh<=2160 && uw<=3840 && uh<=2160,"invalid rounds or dimensions");
     require(!metal4 || !benchmark,"Metal 4 checks have no classic command-buffer GPU timestamps");
-    auto device=MTLCreateSystemDefaultDevice();auto queue=[device newCommandQueue];
-    require(device && queue,"no Metal device");
+    id<MTLDevice> device;auto queue=device_queue(device,MTLGPUFamily(0),"no Metal device");
     fsr411::Runtime runtime(device,root,root+"/build");
-    id<MTL4CommandQueue> queue4=nil;id<MTLSharedEvent> event=nil;uint64_t eventValue=0;
-    if(metal4) {if(@available(macOS 26.0,*)){queue4=[device newMTL4CommandQueue];event=[device newSharedEvent];}
-        require(queue4 && event,"Metal 4 unavailable");}
+    Mtl4 m4;if(metal4)mtl4_open(m4,device);
     std::vector<std::unique_ptr<Mode>> modes;
     auto add=[&](const std::string &name,fsr411::Profile profile,bool lite,unsigned tile=0,int quality=0,fsr411::Backend backend=fsr411::Backend::Auto) {
         auto m=std::make_unique<Mode>();m->name=name;m->options.profile=profile;m->options.modelLite=lite;
@@ -118,21 +90,14 @@ int main(int argc,char **argv) {@autoreleasepool {try {
             p.geometry.color=p.geometry.depth=p.geometry.motion={rw,rh,0,0};p.geometry.output={uw,uh,0,0};
             p.reset=index==0 || (!benchmark && index==3);p.depthReversed=1;p.mvScaleX=p.mvScaleY=1;
             p.autoExposure=autoExposure?1:0;
-            p.jitterX=index&1u?-.25f:.125f;p.jitterY=index%3?1.f/6.f:-1.f/6.f;
+            jitter(index,p.jitterX,p.jitterY);
             std::string error;double milliseconds=0;
             if(metal4) {
-                if(@available(macOS 26.0,*)) {
-                    auto allocator=[device newCommandAllocator];auto cb=[device newCommandBuffer];[cb beginCommandBufferWithAllocator:allocator];
-                    bool encoded=runtime.encode(cb,m.view,f,m.options,error);
-                    require(encoded,m.name+": "+error);[cb endCommandBuffer];
-                    id<MTL4CommandBuffer> list[]={cb};[queue4 commit:list count:1];[queue4 signalEvent:event value:++eventValue];
-                    require([event waitUntilSignaledValue:eventValue timeoutMS:20000],"Metal 4 completion timeout");
-                }
+                require(mtl4_encode(m4,device,[&](id<MTL4CommandBuffer> cb){return runtime.encode(cb,m.view,f,m.options,error);}),m.name+": "+error);
             } else {
-                auto cb=[queue commandBuffer];bool encoded=runtime.encode(cb,m.view,f,m.options,error);
-                require(encoded,m.name+": "+error);
-                [cb commit];[cb waitUntilCompleted];require(cb.status==MTLCommandBufferStatusCompleted,fsr411::metal_error(cb.error));
-                milliseconds=(cb.GPUEndTime-cb.GPUStartTime)*1000.;
+                auto cb=[queue commandBuffer];
+                require(runtime.encode(cb,m.view,f,m.options,error),m.name+": "+error);
+                milliseconds=commit_timed(cb);
             }
             m.options.allowCompile=false;
             require(m.view.neuralRuns+m.view.reusedFrames+m.view.partialFrames==m.view.encodes,"frame accounting mismatch");
@@ -148,17 +113,17 @@ int main(int argc,char **argv) {@autoreleasepool {try {
         if(!benchmark) {
             const size_t groupedModes=newLook?9u:6u;
             for(size_t group=0;group+2<modes.size() && group<groupedModes;group+=3) {
-                const auto output=bytes(queue,modes[group]->output,8),history=bytes(queue,modes[group]->view.history,8),recurrent=bytes(queue,modes[group]->view.recurrent,4);
+                const auto output=readback(queue,modes[group]->output,8,true),history=readback(queue,modes[group]->view.history,8,true),recurrent=readback(queue,modes[group]->view.recurrent,4,true);
                 for(size_t k=1;k<3;++k) {
-                    require(output==bytes(queue,modes[group+k]->output,8),"native/scalar/SIMD output mismatch: "+modes[group]->name);
-                    require(history==bytes(queue,modes[group+k]->view.history,8),"native/scalar/SIMD history mismatch");
-                    require(recurrent==bytes(queue,modes[group+k]->view.recurrent,4),"native/scalar/SIMD recurrent mismatch");
+                    require(output==readback(queue,modes[group+k]->output,8,true),"native/scalar/SIMD output mismatch: "+modes[group]->name);
+                    require(history==readback(queue,modes[group+k]->view.history,8,true),"native/scalar/SIMD history mismatch");
+                    require(recurrent==readback(queue,modes[group+k]->view.recurrent,4,true),"native/scalar/SIMD recurrent mismatch");
                     require(modes[group]->view.skippedInference==modes[group+k]->view.skippedInference && modes[group]->view.partialInference==modes[group+k]->view.partialInference,"backend cadence mismatch");
                 }
                 ++verified;
             }
             if(legacy) {
-                require(bytes(queue,modes[groupedModes]->output,8)==bytes(queue,modes[groupedModes+1]->output,8),"legacy quality native/scalar mismatch");
+                require(readback(queue,modes[groupedModes]->output,8,true)==readback(queue,modes[groupedModes+1]->output,8,true),"legacy quality native/scalar mismatch");
                 ++verified;
             }
         }

@@ -30,6 +30,8 @@ inline NSDictionary *json(const std::string &path) {
     return value;
 }
 inline unsigned ceil_div(unsigned n,unsigned d) { return (n+d-1)/d; }
+// The shared eight-frame-cycle jitter used by the temporal A/B tools.
+inline void jitter(unsigned frame,float &jx,float &jy) { jx=frame&1u?-.25f:.125f; jy=frame%3u?1.f/6.f:-1.f/6.f; }
 struct FrameConstants {
     float invSize[2], scale[2], invScale[2], jitter[2], mvScale[2], texSize[2], maxRenderSize[2], mvJitterCancellation[2];
     uint32_t width,height,reset,widthLR,heightLR; float preExposure,previousPreExposure;
@@ -170,4 +172,18 @@ public:
         for(unsigned y=0;y<h;++y) std::memcpy(dst+row*y,src+stride*y,row);return data;
     }
 };
+// Gradient/foreground fixture shared by the runtime and native A/B tools.
+// Distinct from the replay recorder's own stripe fixture and the post-CNB
+// tool's signed-motion stress variant.
+inline void gradient_input(Replay &r,unsigned frame,bool uploadExposure) {
+    std::vector<float> c(r.renderWidth*r.renderHeight*4),d(r.renderWidth*r.renderHeight),m(r.renderWidth*r.renderHeight*2);
+    for(unsigned y=0;y<r.renderHeight;++y)for(unsigned x=0;x<r.renderWidth;++x){size_t i=size_t(y)*r.renderWidth+x;
+        const float a=.05f+.5f*float(x)/r.renderWidth+.1f*float(y)/r.renderHeight;
+        c[i*4]=a;c[i*4+1]=a*.7f;c[i*4+2]=a*.4f;c[i*4+3]=1;
+        if((x+frame)%29==0)c[i*4]=c[i*4+1]=c[i*4+2]=.9f;
+        const bool foreground=x>r.renderWidth/2;d[i]=foreground?.8f:.2f;m[i*2]=foreground?1.f/r.width:0;m[i*2+1]=0;
+    }
+    r.upload(r.textures["input"],c.data());r.upload(r.textures["depth"],d.data());r.upload(r.textures["velocity"],m.data());
+    if(uploadExposure){float exposure[2]={1,1};r.upload(r.textures["exposure"],exposure);}
+}
 } // namespace fsr412_original

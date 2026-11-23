@@ -27,16 +27,6 @@ void same(const std::vector<uint8_t> &a,const std::vector<uint8_t> &b,const std:
     size_t i=0;while(i<a.size() && i<b.size() && a[i]==b[i])++i;
     throw std::runtime_error(what+" differs at frame "+std::to_string(frame)+", byte "+std::to_string(i));
 }
-void fill(Replay &r,unsigned frame) {
-    std::vector<float> c(r.renderWidth*r.renderHeight*4),d(r.renderWidth*r.renderHeight),m(r.renderWidth*r.renderHeight*2);
-    for(unsigned y=0;y<r.renderHeight;++y)for(unsigned x=0;x<r.renderWidth;++x){size_t i=size_t(y)*r.renderWidth+x;
-        const float a=.05f+.5f*float(x)/r.renderWidth+.1f*float(y)/r.renderHeight;
-        c[i*4]=a;c[i*4+1]=a*.7f;c[i*4+2]=a*.4f;c[i*4+3]=1;
-        if((x+frame)%29==0)c[i*4]=c[i*4+1]=c[i*4+2]=.9f;
-        const bool foreground=x>r.renderWidth/2;d[i]=foreground?.8f:.2f;m[i*2]=foreground?1.f/r.width:0;m[i*2+1]=0;
-    }
-    r.upload(r.textures["input"],c.data());r.upload(r.textures["depth"],d.data());r.upload(r.textures["velocity"],m.data());
-}
 }
 int main(int argc,char **argv) {@autoreleasepool {try {
     check(argc>=2,"usage: fsr412_original_runtime_ab ROOT [--simd|--scalar] [--frames N] [--size RW RH UW UH]");
@@ -54,8 +44,8 @@ int main(int argc,char **argv) {@autoreleasepool {try {
     fsr411::Options o;o.modelLite=true;o.profile=fsr411::Profile::Int8LiteLossy;o.originalLossy=true;o.tier=2160;o.backend=backend;
     auto output=oracle.texture(MTLPixelFormatRGBA16Float,uw,uh);unsigned skipped=0;
     for(unsigned f=0;f<frames;++f) { @autoreleasepool {
-        fill(oracle,f);
-        const float jx=f&1u?-.25f:.125f,jy=f%3?1.f/6.f:-1.f/6.f;
+        gradient_input(oracle,f,false);
+        float jx,jy;jitter(f,jx,jy);
         fsr411::Frame frame;frame.color=oracle.textures["input"];frame.depth=oracle.textures["depth"];frame.motion=oracle.textures["velocity"];frame.output=output;
         auto &p=frame.input;p.rw=rw;p.rh=rh;p.uw=uw;p.uh=uh;p.preExposure=1;p.reset=f==0;p.depthReversed=1;
         p.geometry.color=p.geometry.depth=p.geometry.motion={rw,rh,0,0};p.geometry.output={uw,uh,0,0};

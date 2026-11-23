@@ -44,6 +44,23 @@ def body(source, name):
     raise AssertionError("unclosed shader body")
 
 
+TEST_BINDINGS = """
+cbuffer TestFrame : register(b1) {
+    uint width; uint height; uint reset; uint width_lr;
+    uint height_lr; float2 inv_scale; float2 jitter;
+};
+Texture2D<float3> r_input_color : register(t3);
+Texture2D<float3> r_reprojected_color : register(t9);
+"""
+MULAW_STUB = "float3 ApplyMuLaw411(float3 color, float exposure) { return color * exposure; }\n"
+
+
+def apply_settings(source):
+    for key, value in quality.DEFAULT_SETTINGS.__dict__.items():
+        source = source.replace("@" + key + "@", repr(float(value)))
+    return source
+
+
 class ThresholdTests(unittest.TestCase):
     def test_default_noise_and_sign_encoding(self):
         history = (0.5, 0.5, 0.5)
@@ -123,30 +140,32 @@ class ThresholdTests(unittest.TestCase):
             replace(quality.DEFAULT_SETTINGS, spark_floor=.2, spark_cap=.1)
 
 
+@unittest.skipUnless((ROOT / "tools/bin/dxc").is_file() and
+                     (ROOT / "tools/bin/spirv-cross").is_file(), "native shader tools not installed")
 class HlslCompileTests(unittest.TestCase):
-    @unittest.skipUnless((ROOT / "tools/bin/dxc").is_file() and
-                         (ROOT / "tools/bin/spirv-cross").is_file(), "native shader tools not installed")
+    def compile_msl(self, hlsl):
+        spv = hlsl.with_suffix(".spv")
+        built = subprocess.run([str(ROOT / "tools/bin/dxc"), "-spirv", "-T", "cs_6_6",
+            "-E", "main", "-HV", "2021", "-O3", "-fspv-target-env=vulkan1.3",
+            "-fvk-t-shift", "32", "0", "-fvk-u-shift", "64", "0", "-Fo", str(spv), str(hlsl)],
+            capture_output=True, text=True)
+        self.assertEqual(built.returncode, 0, built.stderr)
+        msl = subprocess.run([str(ROOT / "tools/bin/spirv-cross"), str(spv),
+                              "--msl", "--msl-version", "20300"], capture_output=True, text=True)
+        self.assertEqual(msl.returncode, 0, msl.stderr)
+        return msl.stdout
+
     def test_standalone_helpers_compile_and_msl_keeps_scalar_sign_store(self):
         # CPU-only shader validation, no Metal compiler/library or GPU dispatch.
-        common = """
-cbuffer TestFrame : register(b1) {
-    uint width; uint height; uint reset; uint width_lr;
-    uint height_lr; float2 inv_scale; float2 jitter;
-};
-Texture2D<float3> r_input_color : register(t3);
-Texture2D<float3> r_reprojected_color : register(t9);
-RWStructuredBuffer<float3> TestResult : register(u0);
-float3 ApplyMuLaw411(float3 color, float exposure) { return color * exposure; }
-""" + lossy._declarations(1080)
+        common = TEST_BINDINGS + "RWStructuredBuffer<float3> TestResult : register(u0);\n" + \
+            MULAW_STUB + lossy._declarations(1080)
         pre = common + quality.DECLARATIONS + quality.PRE_HELPERS + """
 [numthreads(1,1,1)]
 void main(uint3 id : SV_DispatchThreadID) {
     Fsr411QualityRecordMotion(id.xy, r_input_color[id.xy].xy, false);
 }
 """
-        post = common + lossy.POST_HELPERS + quality.DECLARATIONS + quality.POST_HELPERS
-        for key, value in quality.DEFAULT_SETTINGS.__dict__.items():
-            post = post.replace("@"+key+"@", repr(float(value)))
+        post = apply_settings(common + lossy.POST_HELPERS + quality.DECLARATIONS + quality.POST_HELPERS)
         post += """
 [numthreads(1,1,1)]
 void main(uint3 id : SV_DispatchThreadID) {
@@ -164,44 +183,25 @@ void main(uint3 id : SV_DispatchThreadID) {
             path = Path(directory)
             for stage, source in (("pre",pre), ("post",post)):
                 hlsl = path / (stage + ".hlsl")
-                spv = path / (stage + ".spv")
                 hlsl.write_text(source)
-                built = subprocess.run([str(ROOT / "tools/bin/dxc"), "-spirv", "-T", "cs_6_6",
-                    "-E", "main", "-HV", "2021", "-O3", "-fspv-target-env=vulkan1.3",
-                    "-fvk-t-shift", "32", "0", "-fvk-u-shift", "64", "0", "-Fo",str(spv),str(hlsl)],
-                    capture_output=True, text=True)
-                self.assertEqual(built.returncode,0,built.stderr)
-                msl = subprocess.run([str(ROOT / "tools/bin/spirv-cross"),str(spv),
-                                      "--msl","--msl-version","20300"], capture_output=True,text=True)
-                self.assertEqual(msl.returncode,0,msl.stderr)
+                msl = self.compile_msl(hlsl)
                 if stage == "post":
                     # Prevent a backend vector read/modify/write race with xy/w readers.
-                    writes = [line.strip() for line in msl.stdout.splitlines()
+                    writes = [line.strip() for line in msl.splitlines()
                               if "Fsr411QualityCurrent." in line and re.search(r"\]\s*=(?!=)",line)]
                     self.assertEqual(len(writes),1,writes)
                     # DXC lowers uint4's scalar z into a component pointer;
                     # SPIRV-Cross emits (&record[index])[2], not a uint4 RMW.
                     self.assertRegex(writes[0],r"\]\)\[2\]\s*=")
-                    previous_writes = [line for line in msl.stdout.splitlines()
+                    previous_writes = [line for line in msl.splitlines()
                                        if "Fsr411QualityPrevious." in line and re.search(r"\]\s*=(?!=)",line)]
                     self.assertEqual(previous_writes,[])
 
 
-    @unittest.skipUnless((ROOT / "tools/bin/dxc").is_file() and
-                         (ROOT / "tools/bin/spirv-cross").is_file(), "native shader tools not installed")
     def test_fast_notes_wave_gather_compiles_to_msl_without_group_barrier(self):
         # Shader compilation only: no library loading, pipeline or GPU dispatch.
-        source="""
-cbuffer TestFrame : register(b1) {
-    uint width; uint height; uint reset; uint width_lr;
-    uint height_lr; float2 inv_scale; float2 jitter;
-};
-Texture2D<float3> r_input_color : register(t3);
-Texture2D<float3> r_reprojected_color : register(t9);
-float3 ApplyMuLaw411(float3 color, float exposure) { return color * exposure; }
-"""+lossy._declarations(1080)+lossy.POST_HELPERS+quality.DECLARATIONS+quality.POST_HELPERS+quality.FAST_NOTE_HELPERS
-        for key,value in quality.DEFAULT_SETTINGS.__dict__.items():source=source.replace("@"+key+"@",repr(float(value)))
-        source+="""
+        source=TEST_BINDINGS+MULAW_STUB+lossy._declarations(1080)+lossy.POST_HELPERS+quality.DECLARATIONS+quality.POST_HELPERS+quality.FAST_NOTE_HELPERS
+        source=apply_settings(source)+"""
 [numthreads(256,1,1)]
 void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID) {
     uint2 pixel=group.xy*16u+uint2(local.x&15u,local.x>>4u);
@@ -211,15 +211,8 @@ void main(uint3 group : SV_GroupID, uint3 local : SV_GroupThreadID) {
 }
 """
         with tempfile.TemporaryDirectory(prefix="fsr411-fast-notes-") as directory:
-            path=Path(directory);hlsl=path/"fast.hlsl";spv=path/"fast.spv";hlsl.write_text(source)
-            built=subprocess.run([str(ROOT/"tools/bin/dxc"),"-spirv","-T","cs_6_6","-E","main",
-                "-HV","2021","-O3","-fspv-target-env=vulkan1.3","-fvk-t-shift","32","0",
-                "-fvk-u-shift","64","0","-Fo",str(spv),str(hlsl)],capture_output=True,text=True)
-            self.assertEqual(built.returncode,0,built.stderr)
-            converted=subprocess.run([str(ROOT/"tools/bin/spirv-cross"),str(spv),"--msl","--msl-version","20300"],
-                                     capture_output=True,text=True)
-            self.assertEqual(converted.returncode,0,converted.stderr)
-            msl=converted.stdout
+            path=Path(directory);hlsl=path/"fast.hlsl";hlsl.write_text(source)
+            msl=self.compile_msl(hlsl)
             # SPIRV-Cross wraps simd_shuffle in overloaded helpers. Count the
             # four actual kernel calls, not those template definitions.
             calls=list(re.finditer(r"uint _\d+ = spvSubgroupShuffle\([^;]+\);",msl))

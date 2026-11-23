@@ -22,6 +22,17 @@
 #include "fsr4_live.h"
 #include "pass0_weights.h"
 #include "i8mpp_host.h"
+#include "fsr4_provider.h"
+
+using fsr4::AutoExposureSPDConstants;
+using fsr4::FsrRcasCon;
+using fsr4::KernelInfo;
+using fsr4::load_file;
+using fsr4::make_tex;
+using fsr4::OptimizedConstants;
+using fsr4::RcasConstants;
+using fsr4::roundUpDiv;
+using fsr4::zero_tex;
 
 #include <Metal/Metal.h>
 #include <mach/mach_time.h>
@@ -37,55 +48,21 @@
 #include <unistd.h>
 #include <vector>
 
-struct OptCB {
-    float inv_size[2], scale[2], inv_scale[2], jitter[2], mv_scale[2];
-    float tex_size[2], max_renderSize[2], fMotionVectorJitterCancellation[2];
-    uint32_t width, height, reset, width_lr;
-    uint32_t height_lr;
-    float preExposure, previous_preExposure;
-    uint32_t rcas_enabled;
-    float rcas_sharpness, pad;
-};
-
-struct SpdCB {                 // AutoExposureSPDConstants, 32 bytes
-    uint32_t mips, numWorkGroups, workGroupOffset[2];
-    float invInputSize[2], preExposure, padding;
-};
-
-struct RcasCB {                // cbRCAS, 32 bytes
-    uint32_t config[4];
-    float preExposure;
-    uint32_t pad[3];
-};
-
-static const uint32_t kCbSlot = 256;      // OptCB at +0, SpdCB at +128, probe at +192, RcasCB at +224
+static const uint32_t kCbSlot = 256;      // main CB at +0, SPD at +128, probe at +192, RCAS at +224
 static const uint32_t kSpdOff = 128;
+static const uint32_t kProbeOff = kSpdOff + 64;
 static const uint32_t kRcasOff = 224;
 static const uint32_t kCbRing = 32;
 static const uint32_t kProbeSlots = 8;
 static const uint32_t kProbeBytes = 16;
 
-struct Kernel {
-    id<MTLComputePipelineState> pso;
-    MTLSize wg;
-    std::vector<std::pair<NSUInteger, std::string>> buffers;
-    std::vector<std::pair<NSUInteger, std::string>> textures;
-    std::vector<std::pair<NSUInteger, std::string>> samplers;
-};
-
 // Compiled shader variant + its weights. Cached per key so two scalers with
 // different flags do not thrash.
 struct Session {
-    id<MTLDevice> dev;
     std::string key;
-    std::string preset;
-    int resIdx = 0;
-    bool jittered = false;
-    bool lowResMv = true;
-    bool autoExposure = false;
     id<MTLBuffer> weights, initBuf;
     NSMutableDictionary *argTables;
-    std::map<std::string, Kernel> kernels;
+    std::map<std::string, KernelInfo> kernels;
     uint64_t lastUse = 0;
     // int8 model on the Metal 4 tensor ops (M5 neural accelerators); the
     // variant's pre/post are the int8 ones, post loads its ConvNextBlock from
@@ -97,14 +74,12 @@ struct Session {
 // Temporal state of one MetalFX scaler object.
 struct View {
     int index = 0;
-    void *owner = nullptr;
     uint32_t uw = 0, uh = 0;
     id<MTLTexture> recurrent, history, reproj;
     bool zeroTargets = false;
     Fsr4InputHistory inputHistory = {};
     bool first = true;
     std::string sessionKey;      // shader variant the last encode ran; a change re-creates the model
-    uint64_t encodes = 0;
     uint64_t lastUse = 0;
     id<MTLTexture> lastOut;      // last texture this view produced
 };
@@ -178,8 +153,6 @@ static void flogf(const char *fmt, ...) {
     flog(buf);
 }
 
-static uint32_t divup(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
-
 static const char *root_dir() {
     const char *e = getenv("FSR4_ROOT");
     if (e && e[0]) return e;
@@ -190,35 +163,6 @@ static int env_int(const char *name, int dflt) {
     const char *e = getenv(name);
     if (!e || !e[0]) return dflt;
     return atoi(e);
-}
-
-static id<MTLTexture> make_tex(id<MTLDevice> dev, MTLPixelFormat fmt, uint32_t w, uint32_t h) {
-    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:fmt
-                                                                                 width:w height:h mipmapped:NO];
-    d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    d.storageMode = MTLStorageModeShared;
-    return [dev newTextureWithDescriptor:d];
-}
-
-static void zero_tex(id<MTLTexture> t) {
-    size_t bpp = 4;
-    if (t.pixelFormat == MTLPixelFormatRGBA16Float) bpp = 8;
-    std::vector<uint8_t> z((size_t)t.width * t.height * bpp);
-    [t replaceRegion:MTLRegionMake2D(0, 0, t.width, t.height)
-         mipmapLevel:0 withBytes:z.data() bytesPerRow:t.width * bpp];
-}
-
-static bool load_file(const std::string &path, std::vector<uint8_t> &out) {
-    FILE *f = fopen(path.c_str(), "rb");
-    if (!f) return false;
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (n <= 0) { fclose(f); return false; }
-    out.resize((size_t)n);
-    bool ok = fread(out.data(), 1, out.size(), f) == out.size();
-    fclose(f);
-    return ok;
 }
 
 // Same thresholds as ffx_provider_fsr4_dx12.cpp (ratio on the X axis).
@@ -232,24 +176,6 @@ static const char *preset_for(uint32_t rw, uint32_t uw) {
     if (s >= 1.99f) p = "performance";
     if (s >= 2.99f) p = "ultraperf";
     return p;
-}
-
-static const uint32_t *weights_for(const char *preset) {
-    if (!strcmp(preset, "native")) return kPass0Weights_native;
-    if (!strcmp(preset, "balanced")) return kPass0Weights_balanced;
-    if (!strcmp(preset, "performance")) return kPass0Weights_performance;
-    if (!strcmp(preset, "ultraperf")) return kPass0Weights_ultraperf;
-    if (!strcmp(preset, "drs")) return kPass0Weights_drs;
-    return kPass0Weights_quality;
-}
-
-// FsrRcasCon (fsr1/ffx_fsr1.h CPU path); the provider passes -2*sharpness + 2
-static void rcas_con(uint32_t con[4], float sharpness) {
-    sharpness = exp2f(-sharpness);
-    union { uint16_t u; _Float16 f; } cvt; cvt.f = (_Float16)sharpness;
-    con[0] = __builtin_bit_cast(uint32_t, sharpness);
-    con[1] = (uint32_t)cvt.u | ((uint32_t)cvt.u << 16);
-    con[2] = 0; con[3] = 0;
 }
 
 // FSR sharpness 0..1 (the DLSS/MetalFX path has no sharpness knob, so the
@@ -292,13 +218,6 @@ static int profile_from_name(const char *name) {
     if (!strcmp(name, "netal") || !strcmp(name, "dlss") || !strcmp(name, "9")) return 9;
     return -1;
 }
-static const char *profile_label(int profile) {
-    return profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
-         : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : profile == 6 ? "int8-lite-pixfix"
-         : profile == 7 ? "int8-lite-lossy" : profile == 8 ? "int8-lite-lossy-tiled"
-         : profile == 9 ? "netal" : "exact";
-}
-
 static void settings_load_locked() {
     if (g_set.loaded) return;
     g_set.loaded = true;
@@ -365,7 +284,7 @@ static void settings_write_file_locked() {
     FILE *f = fopen(temporary.c_str(), "w");
     if (!f) { flog("cannot write panel settings"); return; }
     bool ok = fprintf(f, "sharpness=%.3f\nrcas=%d\nprofile=%s\npixelization_fix=%d\npixelization_strength=%.3f\nnew_look=%d\n",
-                      g_set.sharpness, g_set.rcas ? 1 : 0, profile_label(g_set.profile),
+                      g_set.sharpness, g_set.rcas ? 1 : 0, fsr4_live_profile_name(g_set.profile),
                       g_set.pixelFix || g_set.profile == 6 ? 1 : 0, g_set.pixelStrength, g_set.newLook ? 1 : 0) > 0;
     if (fclose(f) != 0) ok = false;
     if (!ok || rename(temporary.c_str(), g_set.path.c_str()) != 0) {
@@ -473,21 +392,6 @@ static int fail_reason(const char *reason) {
     return 0;
 }
 
-// ffxSpdSetup (spd/ffx_spd.h CPU path)
-static void spd_setup(uint32_t groups[2], uint32_t wgOffset[2],
-                      uint32_t numWgMips[2], const uint32_t rect[4]) {
-    wgOffset[0] = rect[0] / 64;
-    wgOffset[1] = rect[1] / 64;
-    uint32_t endX = (rect[0] + rect[2] - 1) / 64;
-    uint32_t endY = (rect[1] + rect[3] - 1) / 64;
-    groups[0] = endX + 1 - wgOffset[0];
-    groups[1] = endY + 1 - wgOffset[1];
-    numWgMips[0] = groups[0] * groups[1];
-    uint32_t res = rect[2] > rect[3] ? rect[2] : rect[3];
-    float m = floorf(log2f((float)res));
-    numWgMips[1] = (uint32_t)fminf(m, 12.f);
-}
-
 static const char *kHelperSrc =
     "#include <metal_stdlib>\nusing namespace metal;\n"
     "kernel void depth_to_r32(depth2d<float, access::read> src [[texture(0)]],"
@@ -533,12 +437,7 @@ static Shared *ensure_shared(id<MTLDevice> dev) {
     Shared *sh = new Shared();
     sh->dev = dev;
     sh->caps = fsr4::device_caps(dev);
-    MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
-    sd.minFilter = MTLSamplerMinMagFilterLinear;
-    sd.magFilter = MTLSamplerMinMagFilterLinear;
-    sd.sAddressMode = MTLSamplerAddressModeClampToEdge;
-    sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
-    sh->samp = [dev newSamplerStateWithDescriptor:sd];
+    sh->samp = fsr4::linear_clamp(dev);
     sh->argTables = [NSMutableDictionary new];
     for (uint32_t i = 0; i < kCbRing; i++)
         sh->cbRing[i] = [dev newBufferWithLength:kCbSlot options:MTLResourceStorageModeShared];
@@ -563,11 +462,7 @@ static Shared *ensure_shared(id<MTLDevice> dev) {
     // SPD atomic counter: buffer-backed 1x1 R32Uint (the shader takes it both ways)
     sh->spdAtomicBuf = [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared];
     memset(sh->spdAtomicBuf.contents, 0, 4096);
-    MTLTextureDescriptor *ad = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Uint
-                                                                                  width:1 height:1 mipmapped:NO];
-    ad.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    ad.storageMode = MTLStorageModeShared;
-    sh->spdAtomicTex = [sh->spdAtomicBuf newTextureWithDescriptor:ad offset:0 bytesPerRow:16];
+    sh->spdAtomicTex = fsr4::spd_atomic_texture(sh->spdAtomicBuf);
     sh->autoExp = make_tex(dev, MTLPixelFormatR32Float, 2, 1);
     zero_tex(sh->autoExp);
     delete g_sh;
@@ -578,17 +473,27 @@ static Shared *ensure_shared(id<MTLDevice> dev) {
 }
 
 static bool ensure_scratch(Shared &sh, int resIdx) {
-    static const size_t kScratch[3] = {20880256, 83232256, 332352256};
     if (sh.scratch && sh.scratchTier >= resIdx) return true;
     // fp16 path: 2x the int8 scratch; i8mpp: tensors + the pass-13 parameter
     // tensor (I8Mpp::scratch_bytes, always below 2x). Allocate the larger.
-    size_t bytes = kScratch[resIdx] * 2;
+    size_t bytes = fsr4::scratch_size(resIdx) * 2;
     if (I8Mpp::scratch_bytes(resIdx) > bytes) bytes = I8Mpp::scratch_bytes(resIdx);
     sh.scratch = [sh.dev newBufferWithLength:bytes options:MTLResourceStorageModeShared];
     if (!sh.scratch) return false;
     sh.scratchTier = resIdx;
     sh.zeroScratch = true;
     return true;
+}
+
+// Drop the least recently used entry of a <key, T*> map whose values carry a
+// lastUse tick (sessions and views are capped the same way).
+template <typename Map>
+static void evict_lru(Map &m) {
+    auto victim = m.begin();
+    for (auto i = m.begin(); i != m.end(); ++i)
+        if (i->second->lastUse < victim->second->lastUse) victim = i;
+    delete victim->second;
+    m.erase(victim);
 }
 
 static Session *load_session(id<MTLDevice> dev, const char *preset, int resIdx,
@@ -605,36 +510,27 @@ static Session *load_session(id<MTLDevice> dev, const char *preset, int resIdx,
     auto it = g_sessions.find(key);
     if (it != g_sessions.end()) { it->second->lastUse = ++g_sh->encodes; return it->second; }
 
+    const std::string builddir = std::string(root) + "/build";
     // i8mpp: manifest + weights for the tensor-ops passes (also gives the
     // post ext-CNB scratch offset the post variant is compiled with)
     long postExtOff = -1;
-    char gdir[1024] = "";
+    std::string gdir;
     if (i8) {
-        snprintf(gdir, sizeof gdir, "%s/build/gen_i8mpp_%s_%s", root, preset, resStr);
-        std::string mf = std::string(gdir) + "/i8mpp_manifest.json";
-        struct stat sm, sg;
-        bool fresh = stat(mf.c_str(), &sm) == 0
-                  && (stat((std::string(root) + "/tools/gen_i8mpp.py").c_str(), &sg) != 0 || sm.st_mtime >= sg.st_mtime);
-        if (!fresh) {
-            char cmd[2048];
-            snprintf(cmd, sizeof cmd, "python3 '%s/tools/gen_i8mpp.py' --root '%s' --preset %s --res %s --outdir '%s'",
-                     root, root, preset, resStr, gdir);
-            flogf("generating %s", gdir);
-            if (system(cmd) != 0) { flog("gen_i8mpp failed"); return nullptr; }
+        bool generated = false;
+        std::string err;
+        if (!I8Mpp::prepare(root, builddir, preset, resStr, gdir, postExtOff,
+                            err, &generated, "no i8mpp manifest",
+                            "manifest lacks post_ext_ct2d_off (stale build/gen_i8mpp_*)")) {
+            flog(err.c_str());
+            return nullptr;
         }
-        std::vector<uint8_t> mj;
-        if (!load_file(mf, mj)) { flog("no i8mpp manifest"); return nullptr; }
-        std::string mjs(mj.begin(), mj.end());
-        size_t k = mjs.find("\"post_ext_ct2d_off\"");
-        if (k == std::string::npos) { flog("manifest lacks post_ext_ct2d_off (stale build/gen_i8mpp_*)"); return nullptr; }
-        postExtOff = strtol(mjs.c_str() + mjs.find(':', k) + 1, nullptr, 10);
+        if (generated) flogf("generating %s", gdir.c_str());
     }
 
-    char vdir[1024];
-    snprintf(vdir, sizeof vdir, "%s/build/fsr4_%s_%s_di%d_lm%d_jm%d_cs%d_ae%d_db0%s",
-             root, preset, resStr, depthInv, lowRes, jittered, cs, ae, i8 ? "_pt" : "_f16");
-    std::string metallib = std::string(vdir) + "/shaders.metallib";
-    std::string tsv = std::string(vdir) + "/bindings.tsv";
+    const std::string vdir = fsr4::variant_dir(builddir, preset, resStr,
+        depthInv, lowRes, jittered, cs, ae, 0, i8 ? "_pt" : "_f16");
+    std::string metallib = vdir + "/shaders.metallib";
+    std::string tsv = vdir + "/bindings.tsv";
     char idir[1024];
     if (i8)
         snprintf(idir, sizeof idir, "%s/third_party/fsr4/internal/shaders/fsr4_model_v07_i8_%s/initializers.bin", root, preset);
@@ -643,17 +539,11 @@ static Session *load_session(id<MTLDevice> dev, const char *preset, int resIdx,
     // Validate the content hash once per uncached session, including after
     // updates. File existence alone could retain old FP16 boundary bugs.
     {
-        char cmd[2048], extopt[64] = "";
-        if (i8) snprintf(extopt, sizeof extopt, " --post-ext-ct2d %ld", postExtOff);
-        snprintf(cmd, sizeof cmd,
-                 "python3 '%s/tools/compile_variant.py' --root '%s' --preset %s "
-                 "--res %s --res-idx %d --depth-inverted %d --low-res-mv %d "
-                 "--jittered-mv %d --colorspace %d --auto-exposure %d "
-                 "--debug-view 0 --rcas 0 --model %s --builddir '%s/build'%s",
-                 root, root, preset, resStr, resIdx, depthInv, lowRes, jittered, cs, ae,
-                 i8 ? "i8" : "f16", root, extopt);
         flogf("checking shaders %s", key);
-        if (system(cmd) != 0 || access(metallib.c_str(), R_OK) != 0) {
+        if (!fsr4::compile_variant(root, builddir, preset, resStr, resIdx,
+                                   depthInv, lowRes, jittered, cs, ae, 0, 0,
+                                   i8 ? "i8" : "f16", i8 ? postExtOff : -1)
+            || access(metallib.c_str(), R_OK) != 0) {
             flog("shader compile failed");
             return nullptr;
         }
@@ -670,41 +560,12 @@ static Session *load_session(id<MTLDevice> dev, const char *preset, int resIdx,
     if (!bf) { flog("no bindings.tsv"); return nullptr; }
 
     Session *ns = new Session();
-    ns->dev = dev;
     ns->key = key;
-    ns->preset = preset;
-    ns->resIdx = resIdx;
     ns->i8 = i8;
-    ns->jittered = jittered;
-    ns->lowResMv = lowRes;
-    ns->autoExposure = ae;
-    char line[512];
-    std::string cur;
-    while (fgets(line, sizeof line, bf)) {
-        char kn[128], rn[128];
-        int x, y, z, idx;
-        if (sscanf(line, "K\t%127s\t%d\t%d\t%d", kn, &x, &y, &z) == 4) {
-            if (x <= 0 || y <= 0 || z <= 0) {
-                fclose(bf); delete ns; flogf("invalid threadgroup dimensions for %s", kn); return nullptr;
-            }
-            cur = kn;
-            id<MTLFunction> fn = [lib newFunctionWithName:[NSString stringWithUTF8String:kn]];
-            if (!fn) { fclose(bf); delete ns; flogf("missing kernel %s", kn); return nullptr; }
-            Kernel k;
-            k.pso = [dev newComputePipelineStateWithFunction:fn error:&err];
-            if (!k.pso) { fclose(bf); delete ns; flogf("pso %s", kn); return nullptr; }
-            k.wg = MTLSizeMake(x, y, z);
-            if ((NSUInteger)x * y * z > k.pso.maxTotalThreadsPerThreadgroup ||
-                k.pso.staticThreadgroupMemoryLength > dev.maxThreadgroupMemoryLength) {
-                fclose(bf); delete ns; flogf("GPU threadgroup limits exceeded by %s", kn); return nullptr;
-            }
-            ns->kernels[cur] = k;
-        } else if (sscanf(line, "B\t%127s\t%d\t%127s", kn, &idx, rn) == 3)
-            ns->kernels[kn].buffers.push_back({(NSUInteger)idx, rn});
-        else if (sscanf(line, "T\t%127s\t%d\t%127s", kn, &idx, rn) == 3)
-            ns->kernels[kn].textures.push_back({(NSUInteger)idx, rn});
-        else if (sscanf(line, "S\t%127s\t%d\t%127s", kn, &idx, rn) == 3)
-            ns->kernels[kn].samplers.push_back({(NSUInteger)idx, rn});
+    std::string berr;
+    if (!fsr4::parse_bindings(dev, lib, bf, ns->kernels, berr,
+                              "missing kernel ", "pso ")) {
+        fclose(bf); delete ns; flog(berr.c_str()); return nullptr;
     }
     fclose(bf);
 
@@ -718,17 +579,11 @@ static Session *load_session(id<MTLDevice> dev, const char *preset, int resIdx,
             return nullptr;
         }
     }
-    ns->weights = [dev newBufferWithBytes:weights_for(preset) length:1024 options:MTLResourceStorageModeShared];
+    ns->weights = [dev newBufferWithBytes:fsr4::pass0_weights(preset) length:1024 options:MTLResourceStorageModeShared];
     ns->argTables = [NSMutableDictionary new];
 
     // keep at most 3 variants resident
-    while (g_sessions.size() >= 3) {
-        auto victim = g_sessions.begin();
-        for (auto i = g_sessions.begin(); i != g_sessions.end(); ++i)
-            if (i->second->lastUse < victim->second->lastUse) victim = i;
-        delete victim->second;
-        g_sessions.erase(victim);
-    }
+    while (g_sessions.size() >= 3) evict_lru(g_sessions);
     ns->lastUse = ++g_sh->encodes;
     g_sessions[key] = ns;
     flogf("ready %s", key);
@@ -771,20 +626,21 @@ static Session *ensure_session(id<MTLDevice> dev, const char *preset, int resIdx
 static View *ensure_view(Shared &sh, void *owner) {
     auto it = sh.views.find(owner);
     if (it != sh.views.end()) { it->second->lastUse = sh.encodes; return it->second; }
-    while (sh.views.size() >= 4) {
-        auto victim = sh.views.begin();
-        for (auto i = sh.views.begin(); i != sh.views.end(); ++i)
-            if (i->second->lastUse < victim->second->lastUse) victim = i;
-        delete victim->second;
-        sh.views.erase(victim);
-    }
+    while (sh.views.size() >= 4) evict_lru(sh.views);
     View *v = new View();
-    v->owner = owner;
     v->index = sh.nextViewIndex++;
     v->lastUse = sh.encodes;
     sh.views[owner] = v;
     flogf("view %d for scaler %p", v->index, owner);
     return v;
+}
+
+// A view's temporal inputs are no longer trustworthy: the network must reset
+// and a stale output must not be reused as a placeholder copy source.
+static void reset_view_input(Shared &sh, View &v) {
+    fsr4_input_invalidate(&v.inputHistory);
+    v.first = true;
+    if (v.lastOut && sh.lastRealOut == v.lastOut) sh.lastRealOut = nil;
 }
 
 static bool fit_targets(Shared &sh, View &v, uint32_t uw, uint32_t uh) {
@@ -867,7 +723,7 @@ static bool dispatch_m4(Shared &sh, Session &s, id enc, const char *name,
                         uint32_t gx, uint32_t gy, MTLGPUAddress cbAddr, const Bind &b) {
     auto it = s.kernels.find(name);
     if (it == s.kernels.end()) return false;
-    Kernel &k = it->second;
+    KernelInfo &k = it->second;
     id table = arg_table(sh, s.argTables, name);
     if (!table) return false;
     for (auto &bb : k.buffers) {
@@ -897,11 +753,12 @@ static bool dispatch_m4(Shared &sh, Session &s, id enc, const char *name,
 }
 
 static bool dispatch_k(Shared &sh, Session &s, id<MTLComputeCommandEncoder> enc, const char *name,
-                       uint32_t gx, uint32_t gy, const OptCB &oc, const SpdCB &sc, const RcasCB &rc,
+                       uint32_t gx, uint32_t gy, const OptimizedConstants &oc,
+                       const AutoExposureSPDConstants &sc, const RcasConstants &rc,
                        const Bind &b) {
     auto it = s.kernels.find(name);
     if (it == s.kernels.end()) return false;
-    Kernel &k = it->second;
+    KernelInfo &k = it->second;
     [enc setComputePipelineState:k.pso];
     for (auto &bb : k.buffers) {
         if (bb.second == "ScratchBuffer")
@@ -1071,17 +928,12 @@ static int encode_legacy_frame(const Fsr4LiveFrame *f, const Fsr4InputGeometry &
     sh.encodes++;
     const uint64_t n = sh.encodes;
     View &v = *ensure_view(sh, f->owner);
-    v.encodes++;
     struct InputHistoryGuard {
         View &view;
         Shared &shared;
         bool committed = false;
         ~InputHistoryGuard() {
-            if (!committed) {
-                fsr4_input_invalidate(&view.inputHistory);
-                view.first = true;
-                if (view.lastOut && shared.lastRealOut == view.lastOut) shared.lastRealOut = nil;
-            }
+            if (!committed) reset_view_input(shared, view);
         }
     } inputHistoryGuard{v, sh};
 
@@ -1207,10 +1059,9 @@ static int encode_legacy_frame(const Fsr4LiveFrame *f, const Fsr4InputGeometry &
         sh.rcasW = uw; sh.rcasH = uh;
         if (!sh.rcasTemp) { [enc endEncoding]; return fail_reason("RCAS texture allocation failed"); }
     }
-    for (int i = 1; i <= 13 && !s.i8; i++) {
-        if (i == 13) break;
+    for (int i = 1; i <= 12 && !s.i8; i++) {
         char kn[64];
-        snprintf(kn, sizeof kn, "fsr4_model_v07_f16_pass%d", i);
+        fsr4::model_pass_name(kn, sizeof kn, true, i);
         if (!s.kernels.count(kn)) { [enc endEncoding]; return fail_reason("missing fp16 model pass"); }
     }
     if (s.i8) {
@@ -1230,14 +1081,9 @@ static int encode_legacy_frame(const Fsr4LiveFrame *f, const Fsr4InputGeometry &
     const float pe = prepared.preExposure;
     id<MTLTexture> expTex = prepared.exposureMode == FSR4_INPUT_EXPOSURE_TEXTURE ? exp : sh.exposureOne;
 
-    OptCB oc = {};
-    oc.inv_size[0] = 1.f / uw; oc.inv_size[1] = 1.f / uh;
-    oc.scale[0] = (float)uw / rw; oc.scale[1] = (float)uh / rh;
-    oc.inv_scale[0] = 1.f / oc.scale[0]; oc.inv_scale[1] = 1.f / oc.scale[1];
-    oc.tex_size[0] = (float)uw; oc.tex_size[1] = (float)uh;
-    oc.max_renderSize[0] = (float)prepared.maxInputWidth; oc.max_renderSize[1] = (float)prepared.maxInputHeight;
-    oc.width = uw; oc.height = uh;
-    oc.width_lr = rw; oc.height_lr = rh;
+    OptimizedConstants oc = {};
+    fsr4::fill_geometry(oc, uw, uh, rw, rh,
+                        prepared.maxInputWidth, prepared.maxInputHeight);
     oc.jitter[0] = prepared.jitter[0]; oc.jitter[1] = prepared.jitter[1];
     oc.mv_scale[0] = prepared.mvScale[0]; oc.mv_scale[1] = prepared.mvScale[1];
     oc.fMotionVectorJitterCancellation[0] = prepared.jitterCancellation[0];
@@ -1248,27 +1094,21 @@ static int encode_legacy_frame(const Fsr4LiveFrame *f, const Fsr4InputGeometry &
     oc.previous_preExposure = prepared.previousPreExposure;
     oc.preExposure = pe;
 
-    SpdCB sc = {};
+    AutoExposureSPDConstants sc = {};
     uint32_t spdGroups[2] = {0, 0};
     if (ae) {
-        uint32_t wgo[2], nwm[2];
-        uint32_t rect[4] = {0, 0, rw, rh};
-        spd_setup(spdGroups, wgo, nwm, rect);
-        sc.workGroupOffset[0] = wgo[0]; sc.workGroupOffset[1] = wgo[1];
-        sc.numWorkGroups = nwm[0]; sc.mips = nwm[1];
-        sc.invInputSize[0] = 1.f / rw; sc.invInputSize[1] = 1.f / rh;
-        sc.preExposure = pe;
-        uint32_t lw = divup(rw, 16), lh = divup(rh, 16);
+        fsr4::fill_spd(sc, rw, rh, pe, spdGroups);
+        uint32_t lw = roundUpDiv(rw, 16), lh = roundUpDiv(rh, 16);
         if (!sh.lumaMip5 || sh.lumaW != lw || sh.lumaH != lh) {
             sh.lumaMip5 = make_tex(dev, MTLPixelFormatR32Float, lw, lh);
             sh.lumaW = lw; sh.lumaH = lh;
         }
     }
 
-    RcasCB rc = {};
+    RcasConstants rc = {};
     if (rcas) {
         rc.preExposure = pe;
-        rcas_con(rc.config, -2.0f * sharpness + 2.0f);
+        FsrRcasCon(rc.config, -2.0f * sharpness + 2.0f);
     }
 
     MTLGPUAddress cbAddr = 0;
@@ -1329,34 +1169,25 @@ static int encode_legacy_frame(const Fsr4LiveFrame *f, const Fsr4InputGeometry &
     encode_initial_clear(sh, v, enc, mtl4, uw, uh);
 
     Bind b = {col, dep, mv, out, expTex, &v, rcas ? sh.rcasTemp : nil};
-    uint32_t e0 = uw >> 1, e1 = uh >> 1;
-    uint32_t f0 = uw >> 2, f1 = uh >> 2;
-    uint32_t g0 = uw >> 3, g1 = uh >> 3;
-    struct Pass { const char *n; uint32_t x, y; int i8pass; };
+    struct Pass { std::string n; uint32_t x, y; int i8pass; };
     std::vector<Pass> passes;
     if (ae) passes.push_back({"fsr4_spd", spdGroups[0], spdGroups[1], 0});
-    passes.push_back({"fsr4_pre", divup(uw, 16), divup(uh, 16), 0});
+    passes.push_back({"fsr4_pre", roundUpDiv(uw, 16), roundUpDiv(uh, 16), 0});
     if (s.i8) {
         for (int i = 1; i <= 13; i++) passes.push_back({"i8mpp", 0, 0, i});
     } else {
-        const Pass model[12] = {
-            {"fsr4_model_v07_f16_pass1", divup(e0, s.kernels.at("fsr4_model_v07_f16_pass1").wg.width), e1, 0},
-            {"fsr4_model_v07_f16_pass2", divup(e0, s.kernels.at("fsr4_model_v07_f16_pass2").wg.width), e1, 0},
-            {"fsr4_model_v07_f16_pass3", divup(f0, s.kernels.at("fsr4_model_v07_f16_pass3").wg.width), f1, 0},
-            {"fsr4_model_v07_f16_pass4", divup(f0, s.kernels.at("fsr4_model_v07_f16_pass4").wg.width), f1, 0},
-            {"fsr4_model_v07_f16_pass5", divup(f0, s.kernels.at("fsr4_model_v07_f16_pass5").wg.width), f1, 0},
-            {"fsr4_model_v07_f16_pass6", divup(g0, s.kernels.at("fsr4_model_v07_f16_pass6").wg.width), g1, 0},
-            {"fsr4_model_v07_f16_pass7", divup(g0, s.kernels.at("fsr4_model_v07_f16_pass7").wg.width), g1, 0},
-            {"fsr4_model_v07_f16_pass8", divup(g0, s.kernels.at("fsr4_model_v07_f16_pass8").wg.width), g1, 0},
-            {"fsr4_model_v07_f16_pass9", divup(g0, 8), divup(g1, 8), 0},
-            {"fsr4_model_v07_f16_pass10", divup(f0, s.kernels.at("fsr4_model_v07_f16_pass10").wg.width), f1, 0},
-            {"fsr4_model_v07_f16_pass11", divup(f0, s.kernels.at("fsr4_model_v07_f16_pass11").wg.width), f1, 0},
-            {"fsr4_model_v07_f16_pass12", divup(e0, s.kernels.at("fsr4_model_v07_f16_pass12").wg.width), e1, 0},
-        };
-        for (auto &p : model) passes.push_back(p);
+        // fsr4::kModelLevel picks the upscale>>(level+1) encoder canvas per pass
+        const uint32_t enc3[3][2] = {{uw >> 1, uh >> 1}, {uw >> 2, uh >> 2}, {uw >> 3, uh >> 3}};
+        for (int i = 1; i <= 12; i++) {
+            char kn[64];
+            fsr4::model_pass_name(kn, sizeof kn, true, i);
+            const MTLSize wg = s.kernels.at(kn).wg;
+            passes.push_back({kn, roundUpDiv(enc3[fsr4::kModelLevel[i]][0], (uint32_t)wg.width),
+                                  roundUpDiv(enc3[fsr4::kModelLevel[i]][1], (uint32_t)wg.height), 0});
+        }
     }
-    passes.push_back({"fsr4_post", divup(uw, 16), divup(uh, 16), 0});
-    if (rcas) passes.push_back({"fsr4_rcas", divup(uw, 16), divup(uh, 16), 0});
+    passes.push_back({"fsr4_post", roundUpDiv(uw, 16), roundUpDiv(uh, 16), 0});
+    if (rcas) passes.push_back({"fsr4_rcas", roundUpDiv(uw, 16), roundUpDiv(uh, 16), 0});
     for (auto &p : passes) {
         bool ok;
         if (p.i8pass) {
@@ -1373,12 +1204,12 @@ static int encode_legacy_frame(const Fsr4LiveFrame *f, const Fsr4InputGeometry &
                 ok = true;
             }
         } else {
-            ok = mtl4 ? dispatch_m4(sh, s, enc, p.n, p.x, p.y, cbAddr, b)
-                      : dispatch_k(sh, s, enc, p.n, p.x, p.y, oc, sc, rc, b);
+            ok = mtl4 ? dispatch_m4(sh, s, enc, p.n.c_str(), p.x, p.y, cbAddr, b)
+                      : dispatch_k(sh, s, enc, p.n.c_str(), p.x, p.y, oc, sc, rc, b);
         }
         if (!ok) {
             [enc endEncoding];
-            flogf("dispatch failed: %s", p.n);
+            flogf("dispatch failed: %s", p.n.c_str());
             return fail_reason("dispatch failed");
         }
     }
@@ -1396,8 +1227,7 @@ static int encode_legacy_frame(const Fsr4LiveFrame *f, const Fsr4InputGeometry &
         }
         memset(pslot, 0, kProbeBytes);
         uint32_t content[2] = {rw, rh};
-        id<MTLBuffer> cbuf = slot;   // reuse the cb slot tail for the probe constants
-        memcpy((uint8_t *)slot.contents + kSpdOff + 64, content, sizeof content);
+        memcpy((uint8_t *)slot.contents + kProbeOff, content, sizeof content);   // reuse the cb slot tail
         id<MTLTexture> probeExp = ae ? sh.autoExp : expTex;
         if (mtl4) {
             id table = arg_table(sh, sh.argTables, "fsr4_probe");
@@ -1406,7 +1236,7 @@ static int encode_legacy_frame(const Fsr4LiveFrame *f, const Fsr4InputGeometry &
                 [(id<MTL4ArgumentTable>)table setTexture:mv.gpuResourceID atIndex:1];
                 [(id<MTL4ArgumentTable>)table setTexture:dep.gpuResourceID atIndex:2];
                 [(id<MTL4ArgumentTable>)table setAddress:sh.probeBuf.gpuAddress + ps * kProbeBytes atIndex:0];
-                [(id<MTL4ArgumentTable>)table setAddress:cbuf.gpuAddress + kSpdOff + 64 atIndex:1];
+                [(id<MTL4ArgumentTable>)table setAddress:slot.gpuAddress + kProbeOff atIndex:1];
                 [enc setArgumentTable:table];
                 [enc setComputePipelineState:sh.probePso];
                 [enc dispatchThreads:MTLSizeMake(256, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
@@ -1487,10 +1317,7 @@ static void invalidate_legacy_input(const Fsr4LiveFrame *frame) {
     if (!g_sh || (__bridge void *)g_sh->dev != frame->device) return;
     const auto it = g_sh->views.find(frame->owner);
     if (it == g_sh->views.end()) return;
-    View &view = *it->second;
-    fsr4_input_invalidate(&view.inputHistory);
-    view.first = true;
-    if (view.lastOut && g_sh->lastRealOut == view.lastOut) g_sh->lastRealOut = nil;
+    reset_view_input(*g_sh, *it->second);
 }
 
 void fsr4_invalidate_live_owner(void *device, void *owner) {
@@ -1548,6 +1375,17 @@ int fsr4_encode_live_frame_with_fence_v2(const Fsr4LiveFrameV2 *v2, void *fence)
         return fail_input_frame(f, "input geometry/device disagrees with actual textures");
     if (f->exposure && [(__bridge id<MTLTexture>)f->exposure device] != dev)
         return fail_input_frame(f, "exposure texture belongs to a different device");
+    // Run a routed bridge encode: 1 = consumed, 0 = the bridge published its
+    // own failure status (preserve its reason, do not count the encode
+    // twice), -1 = rejected without a status of its own.
+    auto runBridge = [&](int (*encode)(const Fsr4LiveFrameV2 *)) -> int {
+        Fsr4LiveStatus before = {};
+        fsr4_live_get_status(&before);
+        if (encode(v2)) return 1;
+        Fsr4LiveStatus after = {};
+        fsr4_live_get_status(&after);
+        return !after.active && after.reason[0] && after.encodes != before.encodes ? 0 : -1;
+    };
     const char *version = fsr4_live_model_version();
     if (!strcmp(version, "netal")) {
         invalidate_legacy_input(f);
@@ -1563,27 +1401,16 @@ int fsr4_encode_live_frame_with_fence_v2(const Fsr4LiveFrameV2 *v2, void *fence)
         invalidate_legacy_input(f);
         if (fsr411_invalidate_owner) fsr411_invalidate_owner(f->device, f->owner);
         if (!fsr412_encode_live_frame) return fail_reason("FSR 4.1.2 encoder is not linked");
-        Fsr4LiveStatus before = {};
-        fsr4_live_get_status(&before);
-        if (fsr412_encode_live_frame(v2)) return 1;
-        Fsr4LiveStatus after = {};
-        fsr4_live_get_status(&after);
-        if (!after.active && after.reason[0] && after.encodes != before.encodes) return 0;
+        const int result = runBridge(fsr412_encode_live_frame);
+        if (result >= 0) return result;
         return fail_reason("FSR 4.1.2 rejected frame (see hook.log)");
     }
     if (!strcmp(version, "4.1.1")) {
         invalidate_legacy_input(f);
         if (fsr412_invalidate_owner) fsr412_invalidate_owner(f->device, f->owner);
         if (!fsr411_encode_live_frame) return fail_reason("FSR 4.1.1 encoder is not linked");
-        Fsr4LiveStatus before = {};
-        fsr4_live_get_status(&before);
-        if (fsr411_encode_live_frame(v2)) return 1;
-        Fsr4LiveStatus after = {};
-        fsr4_live_get_status(&after);
-        // Preserve the new bridge's precise reason and avoid counting the
-        // same rejected encode twice. Still fail explicitly if it published
-        // no failure status of its own.
-        if (!after.active && after.reason[0] && after.encodes != before.encodes) return 0;
+        const int result = runBridge(fsr411_encode_live_frame);
+        if (result >= 0) return result;
         return fail_reason("FSR 4.1.1 rejected frame (see hook.log)");
     }
     if (strcmp(version, "4.0.2")) return fail_input_frame(f, "FSR4_VERSION must be 4.0.2, 4.1.1 or 4.1.2");

@@ -6,6 +6,7 @@
 // Also checks that A and B produce byte-identical output, history and state.
 // usage: fsr411_simd_ab ROOT [--rounds N] [--size RW RH UW UH] [--models lite,exact,lossy2]
 #include "../../src/fsr412_runtime.h"
+#include "bench_gpu.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -14,37 +15,7 @@
 #include <vector>
 
 namespace {
-void require(bool ok, const std::string &message) { if (!ok) throw std::runtime_error(message); }
-id<MTLTexture> texture(id<MTLDevice> dev, MTLPixelFormat format, unsigned w, unsigned h) {
-    auto d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:w height:h mipmapped:NO];
-    d.storageMode = MTLStorageModeShared; d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    auto t = [dev newTextureWithDescriptor:d]; require(t != nil, "texture allocation failed"); return t;
-}
-struct Inputs { id<MTLTexture> color, depth, motion, exposure; };
-Inputs make_inputs(id<MTLDevice> dev, unsigned rw, unsigned rh) {
-    Inputs in{texture(dev,MTLPixelFormatRGBA16Float,rw,rh),texture(dev,MTLPixelFormatR32Float,rw,rh),
-              texture(dev,MTLPixelFormatRG16Float,rw,rh),texture(dev,MTLPixelFormatR32Float,1,1)};
-    std::vector<_Float16> c(size_t(rw)*rh*4), m(size_t(rw)*rh*2);
-    std::vector<float> d(size_t(rw)*rh);
-    uint32_t r = 0x41a8u;
-    for (unsigned y = 0; y < rh; ++y) for (unsigned x = 0; x < rw; ++x) {
-        const size_t i = size_t(y)*rw + x;
-        r = r*1664525u + 1013904223u;
-        // Smooth gradients plus texture-like noise: non-trivial activations.
-        c[i*4] = (_Float16)(.05f + .8f*float(x)/rw + float(r >> 28)/64.f);
-        c[i*4+1] = (_Float16)(.03f + .6f*float(y)/rh + float((r >> 24) & 15)/80.f);
-        c[i*4+2] = (_Float16)(float(((x*7 + y*3) % 23) + 1)/30.f);
-        c[i*4+3] = (_Float16)1.f;
-        d[i] = .2f + .6f*float((x/8 + y/8) % 11)/11.f;
-        m[i*2] = (_Float16)(float(int(x % 9) - 4)*.0625f); m[i*2+1] = (_Float16)(float(int(y % 5) - 2)*.0625f);
-    }
-    [in.color replaceRegion:MTLRegionMake2D(0,0,rw,rh) mipmapLevel:0 withBytes:c.data() bytesPerRow:rw*8];
-    [in.depth replaceRegion:MTLRegionMake2D(0,0,rw,rh) mipmapLevel:0 withBytes:d.data() bytesPerRow:rw*4];
-    [in.motion replaceRegion:MTLRegionMake2D(0,0,rw,rh) mipmapLevel:0 withBytes:m.data() bytesPerRow:rw*4];
-    const float one = 1.f;
-    [in.exposure replaceRegion:MTLRegionMake2D(0,0,1,1) mipmapLevel:0 withBytes:&one bytesPerRow:4];
-    return in;
-}
+using namespace bench;
 fsr411::Frame frame(const Inputs &in, id<MTLTexture> output, unsigned rw, unsigned rh, unsigned uw, unsigned uh, unsigned index) {
     fsr411::Frame f; f.color = in.color; f.depth = in.depth; f.motion = in.motion; f.exposure = in.exposure; f.output = output;
     auto &d = f.input;
@@ -58,19 +29,6 @@ fsr411::Frame frame(const Inputs &in, id<MTLTexture> output, unsigned rw, unsign
     d.mvScaleX = d.mvScaleY = 1; d.depthReversed = 1; d.preExposure = 1; d.hasExposureTexture = 1;
     return f;
 }
-std::vector<uint8_t> read_texture(id<MTLCommandQueue> queue, id<MTLTexture> t, unsigned bytes) {
-    const NSUInteger pitch = (t.width*bytes + 255u) & ~NSUInteger(255);
-    auto buffer = [t.device newBufferWithLength:pitch*t.height options:MTLResourceStorageModeShared];
-    auto cb = [queue commandBuffer]; auto blit = [cb blitCommandEncoder];
-    [blit copyFromTexture:t sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(t.width,t.height,1)
-          toBuffer:buffer destinationOffset:0 destinationBytesPerRow:pitch destinationBytesPerImage:pitch*t.height];
-    [blit endEncoding]; [cb commit]; [cb waitUntilCompleted];
-    std::vector<uint8_t> result(t.width*bytes*t.height);
-    for (NSUInteger y = 0; y < t.height; ++y) memcpy(result.data() + y*t.width*bytes, (uint8_t *)buffer.contents + y*pitch, t.width*bytes);
-    return result;
-}
-double median(std::vector<double> v) { std::sort(v.begin(), v.end()); const size_t n = v.size(); return n ? (n%2 ? v[n/2] : (v[n/2-1]+v[n/2])/2) : 0; }
-NSArray *array(const std::vector<double> &v) { NSMutableArray *a = [NSMutableArray new]; for (double x : v) [a addObject:@(x)]; return a; }
 }
 
 int main(int argc, char **argv) { @autoreleasepool { try {
@@ -85,9 +43,8 @@ int main(int argc, char **argv) { @autoreleasepool { try {
         else throw std::runtime_error("unknown option " + a);
     }
     require(rounds >= 2 && rounds <= 10000, "rounds must be 2..10000");
-    auto dev = MTLCreateSystemDefaultDevice(); auto queue = [dev newCommandQueue];
-    require(dev && queue && [dev supportsFamily:MTLGPUFamilyApple7], "Apple7+ GPU required");
-    const auto inputs = make_inputs(dev, rw, rh);
+    id<MTLDevice> dev; auto queue = device_queue(dev, MTLGPUFamilyApple7, "Apple7+ GPU required");
+    const auto inputs = bench::inputs(dev, rw, rh, 0x41a8u, true);
     // Variant A must load its sessions while Winograd is disabled; the runtime
     // caches its device decision on the first SIMD library load.
     setenv("FSR4_SIMD_WINOGRAD", "0", 1);
@@ -104,9 +61,7 @@ int main(int argc, char **argv) { @autoreleasepool { try {
     auto encode = [&](fsr411::Runtime &rt, State &s, unsigned v, unsigned index) {
         auto cb = [queue commandBuffer]; std::string error;
         require(rt.encode(cb, s.view[v], frame(inputs, s.output[v], rw, rh, uw, uh, index), s.options, error), error);
-        [cb commit]; [cb waitUntilCompleted];
-        require(cb.status == MTLCommandBufferStatusCompleted, fsr411::metal_error(cb.error));
-        return std::make_pair((cb.GPUEndTime - cb.GPUStartTime)*1000., s.view[v].skippedInference);
+        return std::make_pair(commit_timed(cb), s.view[v].skippedInference);
     };
     for (size_t i = 0; i < list.size(); ++i) {
         auto &s = states[i];
@@ -137,15 +92,15 @@ int main(int argc, char **argv) { @autoreleasepool { try {
     bool identical = true;
     for (size_t i = 0; i < list.size(); ++i) {
         auto &s = states[i];
-        const bool same = read_texture(queue,s.output[0],8) == read_texture(queue,s.output[1],8)
-            && read_texture(queue,s.view[0].history,8) == read_texture(queue,s.view[1].history,8)
-            && read_texture(queue,s.view[0].recurrent,4) == read_texture(queue,s.view[1].recurrent,4);
+        const bool same = readback(queue,s.output[0],8) == readback(queue,s.output[1],8)
+            && readback(queue,s.view[0].history,8) == readback(queue,s.view[1].history,8)
+            && readback(queue,s.view[0].recurrent,4) == readback(queue,s.view[1].recurrent,4);
         identical &= same;
         const double a = median(s.neural[0]), b = median(s.neural[1]);
         std::printf("%-6s neural frame median: direct %.3f ms, winograd %.3f ms, paired %+.1f%% (%zu pairs); reused %zu; output/history/recurrent %s\n",
                     list[i].name.c_str(), a, b, (median(s.ratio)-1)*100, s.ratio.size(), s.reused[0].size(), same ? "IDENTICAL" : "DIFFER");
-        [rows addObject:@{@"model":fsr411::ns(list[i].name),@"neural_direct_ms":array(s.neural[0]),@"neural_winograd_ms":array(s.neural[1]),
-            @"reused_direct_ms":array(s.reused[0]),@"reused_winograd_ms":array(s.reused[1]),
+        [rows addObject:@{@"model":fsr411::ns(list[i].name),@"neural_direct_ms":numbers(s.neural[0]),@"neural_winograd_ms":numbers(s.neural[1]),
+            @"reused_direct_ms":numbers(s.reused[0]),@"reused_winograd_ms":numbers(s.reused[1]),
             @"neural_direct_median_ms":@(a),@"neural_winograd_median_ms":@(b),
             @"paired_change_percent":@((median(s.ratio)-1)*100),@"byte_identical":@(same)}];
     }

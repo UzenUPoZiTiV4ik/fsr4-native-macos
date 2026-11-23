@@ -1,57 +1,13 @@
-#import <Metal/Metal.h>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
+// Specialized-per-geometry int8/fp16 conv variants and threadgroup-resident
+// GEMM probes for mpp_bench2.metal (kernel names embed W x H).
+#include "mpp_probe.h"
 #include <cmath>
-#include <vector>
 
-struct ConvP { uint32_t W, H, C, O, TW, TH; };
-struct GemmP { uint32_t M, N, K, rep; };
-static id<MTLDevice> dev; static id<MTLCommandQueue> q; static id<MTLLibrary> lib;
-static id<MTLBuffer> mkbuf(size_t n) { return [dev newBufferWithLength:n options:MTLResourceStorageModeShared]; }
-
-static double time_dispatch(id<MTLComputePipelineState> pso, MTLSize groups, std::vector<id<MTLBuffer>> bufs,
-                            const void *cbytes, size_t clen, int iters, int reps = 10) {
-    double best = 1e9;
-    for (int it = 0; it < iters; it++) {
-        id<MTLCommandBuffer> cb = [q commandBuffer];
-        id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
-        [enc setComputePipelineState:pso];
-        for (size_t i = 0; i < bufs.size(); i++) [enc setBuffer:bufs[i] offset:0 atIndex:i];
-        [enc setBytes:cbytes length:clen atIndex:bufs.size()];
-        for (int r = 0; r < reps; r++) [enc dispatchThreadgroups:groups threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-        [enc endEncoding];
-        [cb commit];
-        [cb waitUntilCompleted];
-        if (cb.status != MTLCommandBufferStatusCompleted) { printf("  gpu error: %s\n", cb.error.localizedDescription.UTF8String); return -1; }
-        double ms = (cb.GPUEndTime - cb.GPUStartTime) * 1000.0 / reps;
-        if (ms < best) best = ms;
-    }
-    return best;
-}
-static id<MTLComputePipelineState> pso_for(const char *name) {
-    id<MTLFunction> fn = [lib newFunctionWithName:[NSString stringWithUTF8String:name]];
-    if (!fn) { printf("%s: missing\n", name); return nil; }
-    NSError *err = nil;
-    id<MTLComputePipelineState> p = [dev newComputePipelineStateWithFunction:fn error:&err];
-    if (!p) printf("%s: pso error %s\n", name, err.localizedDescription.UTF8String);
-    return p;
-}
-static void conv_ref(const int8_t *act, const int8_t *w, int32_t *out, int W, int H, int C, int O) {
-    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) for (int o = 0; o < O; o++) {
-        int32_t acc = 0;
-        for (int ky = 0; ky < 3; ky++) for (int kx = 0; kx < 3; kx++) {
-            int yy = y + ky - 1, xx = x + kx - 1;
-            if (yy < 0 || xx < 0 || yy >= H || xx >= W) continue;
-            for (int c = 0; c < C; c++) acc += (int)act[((yy * W + xx) * C) + c] * (int)w[((ky * 3 + kx) * C + c) * O + o];
-        }
-        out[(y * W + x) * O + o] = acc;
-    }
-}
+using namespace mpp_probe;
 
 // mode: 0 = device dest, 1 = tg dest (tile-major layout), 2 = fp16 device dest
 static void bench(const char *name, int mode, int TW, int TH, int C, int O, int W, int H, bool verify) {
-    id<MTLComputePipelineState> pso = pso_for(name);
+    id<MTLComputePipelineState> pso = pipeline(name);
     if (!pso) return;
     size_t na = (size_t)W * H * C, nw = 9 * C * O;
     int gx = (W + TW - 1) / TW, gy = (H + TH - 1) / TH;
@@ -59,9 +15,7 @@ static void bench(const char *name, int mode, int TW, int TH, int C, int O, int 
     int es = mode == 2 ? 2 : 1;
     id<MTLBuffer> a = mkbuf(na * es), w = mkbuf(nw * es), o = mkbuf(no * 4);
     std::vector<int8_t> ai(na), wi(nw);
-    srand(1);
-    for (size_t i = 0; i < na; i++) ai[i] = (int8_t)(rand() % 256 - 128);
-    for (size_t i = 0; i < nw; i++) wi[i] = (int8_t)(rand() % 256 - 128);
+    fill_i8(ai.data(), na, 1); fill_i8(wi.data(), nw, 0);
     if (mode == 2) {
         __fp16 *ap = (__fp16 *)a.contents, *wp = (__fp16 *)w.contents;
         for (size_t i = 0; i < na; i++) ap[i] = (__fp16)ai[i];
@@ -93,13 +47,11 @@ static void bench(const char *name, int mode, int TW, int TH, int C, int O, int 
 }
 
 static void bench_gemm(const char *name, int N, int K, int M, int rep, bool verify) {
-    id<MTLComputePipelineState> pso = pso_for(name);
+    id<MTLComputePipelineState> pso = pipeline(name);
     if (!pso) return;
     id<MTLBuffer> a = mkbuf((size_t)M * K), b = mkbuf((size_t)K * N), c = mkbuf((size_t)M * N * 4);
     int8_t *ap = (int8_t *)a.contents, *bp = (int8_t *)b.contents;
-    srand(3);
-    for (size_t i = 0; i < (size_t)M * K; i++) ap[i] = (int8_t)(rand() % 256 - 128);
-    for (size_t i = 0; i < (size_t)K * N; i++) bp[i] = (int8_t)(rand() % 256 - 128);
+    fill_i8(ap, (size_t)M * K, 3); fill_i8(bp, (size_t)K * N, 0);
     GemmP p = {(uint32_t)M, (uint32_t)N, (uint32_t)K, (uint32_t)rep};
     double ms = time_dispatch(pso, MTLSizeMake(M / 32, 1, 1), {a, b, c}, &p, sizeof p, verify ? 2 : 5);
     double gop = 2.0 * M * N * K * rep / 1e9;
@@ -127,16 +79,14 @@ static void check_extra() {
     }
     {   // (b) stride 2
         printf("--- (b) 2x2 stride 2, C16->O32 ---\n");
-        id<MTLComputePipelineState> pso = pso_for("conv_s2_32x4_16_32_96x20");
+        id<MTLComputePipelineState> pso = pipeline("conv_s2_32x4_16_32_96x20");
         if (!pso) return;
         const int C = 16, O = 32, OW = W / 2, OH = H / 2, TW = 32, TH = 4;
         int gx = (OW + TW - 1) / TW, gy = (OH + TH - 1) / TH;
         size_t na = (size_t)W * H * C, nw = 4 * C * O, no = (size_t)gx * gy * TW * TH * O;
         id<MTLBuffer> a = mkbuf(na), w = mkbuf(nw), o = mkbuf(no * 4);
         int8_t *ap = (int8_t *)a.contents, *wp = (int8_t *)w.contents;
-        srand(5);
-        for (size_t i = 0; i < na; i++) ap[i] = (int8_t)(rand() % 256 - 128);
-        for (size_t i = 0; i < nw; i++) wp[i] = (int8_t)(rand() % 256 - 128);
+        fill_i8(ap, na, 5); fill_i8(wp, nw, 0);
         for (int mul = 1; mul <= 2; mul++) {
         ConvP p = {(uint32_t)W, (uint32_t)H, (uint32_t)mul, O, TW, TH};
         time_dispatch(pso, MTLSizeMake(gx, gy, 1), {a, w, o}, &p, sizeof p, 1, 1);
@@ -167,7 +117,7 @@ static void check_extra() {
             if (b2 * 4 < t2) printf("  stride2 interior matches with source shift (%d,%d): %zu/%zu bad\n", sx, sy, b2, t2);
         }
         }
-        id<MTLComputePipelineState> pso2 = pso_for("conv_s2_32x4_16_32_960x540");
+        id<MTLComputePipelineState> pso2 = pipeline("conv_s2_32x4_16_32_960x540");
         id<MTLBuffer> a2 = mkbuf((size_t)960 * 540 * 16), o2 = mkbuf((size_t)480 * 272 * 32 * 4);
         ConvP p2 = {960, 540, 16, 32, 32, 4};
         double ms = time_dispatch(pso2, MTLSizeMake(15, 68, 1), {a2, w, o2}, &p2, sizeof p2, 5);
@@ -175,16 +125,14 @@ static void check_extra() {
     }
     {   // (c) grouped
         printf("--- (c) grouped conv via strided channel view (CT=32, group 1) ---\n");
-        id<MTLComputePipelineState> pso = pso_for("conv_grp_32x4_16of32_16_96x20");
+        id<MTLComputePipelineState> pso = pipeline("conv_grp_32x4_16of32_16_96x20");
         if (!pso) return;
         const int C = 16, CT = 32, O = 16, TW = 32, TH = 4;
         int gx = (W + TW - 1) / TW, gy = (H + TH - 1) / TH;
         size_t na = (size_t)W * H * CT, nw = 9 * C * O, no = (size_t)gx * gy * TW * TH * O;
         id<MTLBuffer> a = mkbuf(na), w = mkbuf(nw), o = mkbuf(no * 4);
         int8_t *ap = (int8_t *)a.contents, *wp = (int8_t *)w.contents;
-        srand(6);
-        for (size_t i = 0; i < na; i++) ap[i] = (int8_t)(rand() % 256 - 128);
-        for (size_t i = 0; i < nw; i++) wp[i] = (int8_t)(rand() % 256 - 128);
+        fill_i8(ap, na, 6); fill_i8(wp, nw, 0);
         for (int g = 0; g < 2; g++) {
             ConvP p = {(uint32_t)W, (uint32_t)H, C, O, TW, (uint32_t)g};
             time_dispatch(pso, MTLSizeMake(gx, gy, 1), {a, w, o}, &p, sizeof p, 1, 1);
@@ -207,10 +155,7 @@ static void check_extra() {
 
 int main(int argc, char **argv) {
     @autoreleasepool {
-        dev = MTLCreateSystemDefaultDevice(); q = [dev newCommandQueue];
-        NSError *err = nil;
-        lib = [dev newLibraryWithURL:[NSURL fileURLWithPath:@"/tmp/mpp_bench2.metallib"] error:&err];
-        if (!lib) { printf("lib: %s\n", err.localizedDescription.UTF8String); return 1; }
+        if (!open("/tmp/mpp_bench2.metallib")) return 1;
         if (argc > 1) { check_extra(); return 0; }
         printf("--- correctness incl. borders (96x20) ---\n");
         bench("conv_dv_32x4_16_16_96x20", 0, 32, 4, 16, 16, 96, 20, true);

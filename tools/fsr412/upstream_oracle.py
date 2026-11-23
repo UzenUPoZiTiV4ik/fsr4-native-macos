@@ -36,6 +36,35 @@ def require(ok, message):
         raise ValueError("upstream oracle: " + message)
 
 
+def balanced_end(text: str, start: int, opening: str = "(", closing: str = ")",
+                 message: str = "unbalanced expression") -> int:
+    """Index of the `closing` delimiter matching `opening` at text[start]."""
+    require(text[start:start + 1] == opening, "opening boundary")
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == opening:
+            depth += 1
+        elif text[index] == closing:
+            depth -= 1
+            if depth == 0:
+                return index
+    raise ValueError(message)
+
+
+def argument_list(text: str) -> list[str]:
+    """Comma-split call arguments at bracket depth zero; each part stripped."""
+    depth, begin, parts = 0, 0, []
+    for index, char in enumerate(text):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(text[begin:index].strip())
+            begin = index + 1
+    return parts + [text[begin:].strip()]
+
+
 @dataclass(frozen=True)
 class Section:
     name: str
@@ -212,6 +241,26 @@ def external_output(path: Path) -> Path:
     temporary = Path(tempfile.gettempdir()).resolve()
     require(path.is_relative_to(build) or path.is_relative_to(temporary), "assets must remain in build/fsr412_upstream or system temp")
     return path
+
+
+def verified_translation(output: Path, identity: str, mismatch: str) -> tuple[dict, str]:
+    """A stage's translation receipt and literal Metal source, hash-verified."""
+    receipt = json.loads((output / (identity + ".translation.json")).read_text())
+    source = (output / (identity + ".metal")).read_text()
+    require(sha256(source.encode()) == receipt["metal_sha256"], mismatch)
+    return receipt, source
+
+
+def build_metallib(output: Path, stem: str, optimization: str | None = None) -> tuple[list, str]:
+    """Compile stem.metal to stem.metallib; return (command, library sha256)."""
+    msl, air, library = (output / (stem + suffix) for suffix in (".metal", ".air", ".metallib"))
+    command = ["xcrun", "-sdk", "macosx", "metal", "-std=metal3.1", "-fno-fast-math"]
+    if optimization:
+        command.append(optimization)
+    command += ["-c", str(msl), "-o", str(air)]
+    subprocess.run(command, check=True)
+    subprocess.run(["xcrun", "-sdk", "macosx", "metallib", str(air), "-o", str(library)], check=True)
+    return command, sha256(library.read_bytes())
 
 
 def extract(reference_path: Path, dll_path: Path, output: Path, dxc: Path, exact_path: Path | None = None, workers: int = 4) -> dict:

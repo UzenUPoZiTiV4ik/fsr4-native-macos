@@ -7,19 +7,16 @@ failures from DXIL/SPIR-V translation failures. The baseline is preserved.
 import argparse
 import json
 from pathlib import Path
-import subprocess
-from upstream_oracle import ACTIVE_2160, external_output, require, sha256
+from upstream_oracle import ACTIVE_2160, build_metallib, external_output, require, verified_translation
 
 
 def build(stage='pass2',output=Path('build/fsr412_upstream')):
     output=external_output(output);require(stage in ACTIVE_2160,'unknown original stage');identity=ACTIVE_2160[stage]
-    receipt=json.loads((output/(identity+'.translation.json')).read_text());source=(output/(identity+'.metal')).read_bytes()
-    require(sha256(source)==receipt['metal_sha256'],'original translated source changed')
-    stem=identity+'.o0';msl=output/(stem+'.metal');air=output/(stem+'.air');library=output/(stem+'.metallib');msl.write_bytes(source)
-    command=['xcrun','-sdk','macosx','metal','-std=metal3.1','-fno-fast-math','-O0','-c',str(msl),'-o',str(air)]
-    subprocess.run(command,check=True);subprocess.run(['xcrun','-sdk','macosx','metallib',str(air),'-o',str(library)],check=True)
+    receipt,text=verified_translation(output,identity,'original translated source changed')
+    stem=identity+'.o0';msl=output/(stem+'.metal');msl.write_text(text)
     record=dict(receipt);record['schema']='fsr412_original_correctness_compile_v1';record['stage']=stage
-    record['optimization_profile']='-O0';record['compile_command']=command;record['library']=library.name;record['library_sha256']=sha256(library.read_bytes());record['source_unchanged']=True
+    record['optimization_profile']='-O0';record['compile_command'],record['library_sha256']=build_metallib(output,stem,'-O0')
+    record['library']=stem+'.metallib';record['source_unchanged']=True
     record['equivalence']='requires original integer DXIL CPU SSA/GPU validation, not implied by compiler success'
     (output/(stem+'.translation.json')).write_text(json.dumps(record,indent=2)+'\n');return record
 

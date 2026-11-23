@@ -8,6 +8,14 @@ enum FSRProfile: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
     var version: String { self == .lite ? "4.1.2" : "4.1.1" }
+    /// One-line mode summary shown under the Starting mode picker.
+    var summary: String {
+        switch self {
+        case .lite: String(localized: "AMD's compact INT8 model. Runs the network every frame.")
+        case .lossy: String(localized: "Six retrained layers, network on every other frame. Fewer specks in foliage.")
+        case .full: String(localized: "Full network every frame, best quality.")
+        }
+    }
 }
 
 struct Banner: Equatable {
@@ -127,11 +135,6 @@ final class InstallerModel {
                 self.reportFailure(cancelled: cancelled, String(localized: "Removal failed"))
             }
         }
-    }
-
-    func fix(_ requirement: Requirement) {
-        guard let fix = requirement.fix else { return }
-        self.fix(fix, for: requirement)
     }
 
     func fix(_ fix: Requirement.Fix, for requirement: Requirement) {

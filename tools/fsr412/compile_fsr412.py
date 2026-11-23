@@ -17,6 +17,7 @@ from fsr412.optimization import (REVISION, POST_TILE_SIDE, input_color_cache, co
                                  ct2d_float_dot, post_color_tile)
 from fsr412.model_data import initializer_for, patch_post_tail, load_lossy_initializer, patch_post_biases_by_tap
 from fsr412.new_look import REVISION as NEW_LOOK_REVISION
+from fsr412.upstream_oracle import balanced_end, argument_list
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "tools" / "fsr412" / "shader_catalog.json"
@@ -110,28 +111,8 @@ def external_post_cnb(text: str, tier: int) -> str:
 
 def _call_span(text: str, open_paren: int) -> tuple[int, str]:
     """Return the argument list of the call whose '(' is at open_paren."""
-    depth = 0
-    for index in range(open_paren, len(text)):
-        if text[index] == "(":
-            depth += 1
-        elif text[index] == ")":
-            depth -= 1
-            if depth == 0:
-                return index + 1, text[open_paren + 1:index]
-    raise ValueError("unbalanced SPIR-V pow call")
-
-
-def _split_arguments(arguments: str) -> list[str]:
-    parts, depth, start = [], 0, 0
-    for index, character in enumerate(arguments):
-        if character in "([":
-            depth += 1
-        elif character in ")]":
-            depth -= 1
-        elif character == "," and depth == 0:
-            parts.append(arguments[start:index]); start = index + 1
-    parts.append(arguments[start:])
-    return parts
+    end = balanced_end(text, open_paren, message="unbalanced SPIR-V pow call")
+    return end + 1, text[open_paren + 1:end]
 
 
 def signed_square(text: str) -> str:
@@ -151,7 +132,7 @@ def signed_square(text: str) -> str:
         if found < 0:
             result.append(text[cursor:]); break
         end, arguments = _call_span(text, found + len("powr"))
-        parts = _split_arguments(arguments)
+        parts = argument_list(arguments)
         if len(parts) != 2:
             raise ValueError("unrecognized SPIR-V pow call")
         base, exponent = parts[0].strip(), parts[1].strip()
@@ -210,7 +191,6 @@ def reflect_bindings(src: str, entry: str):
         if z[2]=="buffer": bufs.append(item)
         elif z[2]=="texture": tex.append(item)
         else: sam.append(item)
-    m2 = re.search(r"kernel\s+void\s+" + re.escape(entry) + r".*?thread_position_in_threadgroup", src, re.S)
     # SPIR-V inventory carries the authoritative workgroup dimensions.
     return bufs, tex, sam
 

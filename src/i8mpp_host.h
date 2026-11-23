@@ -9,8 +9,10 @@
 #include <cstring>
 #include <map>
 #include <string>
+#include <sys/stat.h>
 #include <vector>
 #include "fsr4_device.h"
+#include "fsr4_provider.h"
 
 struct I8P {
     uint32_t inOff, inSX, inSY, inW, inH;
@@ -40,8 +42,6 @@ struct I8Pass {
 };
 
 struct I8Mpp {
-    id<MTLDevice> dev = nil;
-    id<MTLLibrary> lib = nil;
     id<MTLBuffer> weights = nil;
     id<MTLBuffer> params = nil;     // I8P per pass at (pass * 256) for Metal 4 argument tables
     uint32_t enc0W = 0, enc0H = 0;  // tier canvas (manifest) at encoder level 0
@@ -50,21 +50,47 @@ struct I8Mpp {
     std::string error;
 
     static bool read_all(const std::string &path, std::vector<uint8_t> &out) {
-        FILE *f = fopen(path.c_str(), "rb");
-        if (!f) return false;
-        fseek(f, 0, SEEK_END);
-        long n = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        if (n <= 0) { fclose(f); return false; }
-        out.resize((size_t)n);
-        bool ok = fread(out.data(), 1, out.size(), f) == out.size();
-        fclose(f);
-        return ok;
+        return fsr4::load_file(path, out);
+    }
+
+    // Ensures <builddir>/gen_i8mpp_<preset>_<res> exists (regenerating it via
+    // tools/gen_i8mpp.py when the manifest is missing or older than the
+    // tool), then returns the manifest's post ext-CT2D scratch offset.
+    // `generated`, when given, reports whether the tool actually ran.
+    static bool prepare(const std::string &root, const std::string &builddir,
+                        const std::string &preset, const char *res,
+                        std::string &gendir, long &postExtOff,
+                        std::string &err, bool *generated = nullptr,
+                        const char *readError = "cannot read i8mpp manifest",
+                        const char *offsetError = "manifest lacks post_ext_ct2d_off") {
+        gendir = builddir + "/gen_i8mpp_" + preset + "_" + res;
+        const std::string manifest = gendir + "/i8mpp_manifest.json";
+        const std::string tool = root + "/tools/gen_i8mpp.py";
+        struct stat sm, sg;
+        const bool fresh = stat(manifest.c_str(), &sm) == 0
+            && (stat(tool.c_str(), &sg) != 0 || sm.st_mtime >= sg.st_mtime);
+        if (generated) *generated = !fresh;
+        if (!fresh) {
+            char cmd[2048];
+            snprintf(cmd, sizeof cmd,
+                     "python3 '%s' --root '%s' --preset %s --res %s --outdir '%s'",
+                     tool.c_str(), root.c_str(), preset.c_str(), res, gendir.c_str());
+            if (system(cmd) != 0) { err = "gen_i8mpp failed"; return false; }
+        }
+        std::vector<uint8_t> mjv;
+        if (!read_all(manifest, mjv)) { err = readError; return false; }
+        std::string mj(mjv.begin(), mjv.end());
+        const size_t k = mj.find("\"post_ext_ct2d_off\"");
+        if (k == std::string::npos) {
+            err = offsetError;
+            return false;
+        }
+        postExtOff = strtol(mj.c_str() + mj.find(':', k) + 1, nullptr, 10);
+        return true;
     }
 
     // gendir: build/gen_i8mpp_<preset>_<res>; metalSrc: src/i8mpp.metal
-    bool load(id<MTLDevice> d, const std::string &gendir, const std::string &metalSrc) {
-        dev = d;
+    bool load(id<MTLDevice> dev, const std::string &gendir, const std::string &metalSrc) {
         passes.clear();
         error.clear();
         const auto choice = fsr4::choose_backend(fsr4::device_caps(dev), fsr4::Backend::I8Mpp);
@@ -152,7 +178,7 @@ struct I8Mpp {
                      macros, metalSrc.c_str(), base, base, mlib.c_str());
             if (system(cmd) != 0) { error = "i8mpp: xcrun metal compile failed"; return false; }
         }
-        lib = [dev newLibraryWithURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:mlib.c_str()]] error:&err];
+        id<MTLLibrary> lib = [dev newLibraryWithURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:mlib.c_str()]] error:&err];
         if (!lib) { error = std::string("i8mpp metallib: ") + err.localizedDescription.UTF8String; return false; }
         for (auto &kv : passes) {
             id<MTLFunction> fn = [lib newFunctionWithName:[NSString stringWithUTF8String:kv.second.kernel.c_str()]];

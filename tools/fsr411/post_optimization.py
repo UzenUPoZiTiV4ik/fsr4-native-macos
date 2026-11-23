@@ -14,7 +14,6 @@ and include this module in the build cache identity when enabling it.
 """
 
 POST_PIXELS_PER_GROUP = 16
-POST_THREADS_PER_GROUP = 256
 POST_CACHE_SIDE = 20
 MARKER = ("// fsr411-generated-post-color-cache: output-tile=16 cache-side=20 active-load=1 exact-float-ct2d=1"
           " shared-ct2d=half\n")

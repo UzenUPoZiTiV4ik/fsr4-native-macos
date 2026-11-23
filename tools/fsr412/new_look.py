@@ -14,7 +14,6 @@ from __future__ import annotations
 import math
 
 REVISION = 2
-SOURCE_URL = "https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/issues/20#issuecomment-6839502725"
 
 
 def _clamp(value, low=0.0, high=1.0):

@@ -56,11 +56,15 @@ import hashlib
 import math
 import re
 
+try:
+    from upstream_oracle import balanced_end, argument_list
+except ImportError:
+    from fsr412.upstream_oracle import balanced_end, argument_list
+
 REVISION = 1
 CACHE_BYTES_PER_PIXEL = 32
 MOTION_BYTES_PER_CELL = 16
 CONSTANT_BYTES = 16
-PARTIAL_TILE_SIZE = 512
 PARTIAL_TILE_SIZES = (128, 256, 512, 1024, 2048)
 TIERS = (1080, 2160, 4320)
 _NAME = r"_\d+"
@@ -79,28 +83,7 @@ def _one(pattern, text, description):
 
 def _close(text, start, left="(", right=")"):
     _require(text[start] == left, "opening boundary")
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == left:
-            depth += 1
-        elif text[i] == right:
-            depth -= 1
-            if depth == 0:
-                return i
-    raise ValueError("Lite lossy: unbalanced expression")
-
-
-def _args(text):
-    depth, begin, parts = 0, 0, []
-    for i, c in enumerate(text):
-        if c in "([":
-            depth += 1
-        elif c in ")]":
-            depth -= 1
-        elif c == "," and depth == 0:
-            parts.append(text[begin:i].strip()); begin = i + 1
-    parts.append(text[begin:].strip())
-    return parts
+    return balanced_end(text, start, left, right, "Lite lossy: unbalanced expression")
 
 
 def _factor(text, end):
@@ -374,7 +357,7 @@ def apply_lossy_pre(text, tier, low_res_mv=True, depth_inverted=False, reuse_onl
                  "depth inversion variant mismatch")
         sample = _one(r"r_velocity\.read\(",text,"velocity load")
         closing = _close(text,sample.end()-1)
-        args = _args(text[sample.end():closing])
+        args = argument_list(text[sample.end():closing])
         _require(len(args) == 2 and args[1] == "0u", "velocity sample mip")
         depth = ("r_depth.read(uint2(clamp(int2("+args[0]+"), int2(0), "
                  "int2(MLSR_Optimized_Constants.width_lr, MLSR_Optimized_Constants.height_lr)-int2(1))),0u).x")

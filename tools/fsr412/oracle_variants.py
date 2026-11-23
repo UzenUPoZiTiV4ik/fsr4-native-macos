@@ -10,11 +10,10 @@ import argparse
 import json
 from pathlib import Path
 import re
-import subprocess
-from upstream_oracle import ACTIVE_2160, external_output, require, sha256, scratch_geometry
+from upstream_oracle import (ACTIVE_2160, build_metallib, external_output, require, sha256,
+                             scratch_geometry, verified_translation)
 
 POST=ACTIVE_2160['post']
-OLD_BASE=49941264
 LOGICAL_BYTES=99820992
 PLANE_BYTES=33273664
 NEW_BASE=(LOGICAL_BYTES+255)&~255
@@ -54,8 +53,7 @@ def isolated(source,geometry=None):
 
 
 def build_selected(output,identity,geometry,compile_metal=True):
-    output=external_output(Path(output));receipt=json.loads((output/(identity+'.translation.json')).read_text());literal=(output/(identity+'.metal')).read_text()
-    require(sha256(literal.encode())==receipt['metal_sha256'],'literal POST source identity mismatch')
+    output=external_output(Path(output));receipt,literal=verified_translation(output,identity,'literal POST source identity mismatch')
     require(receipt['reflection']['entryPoints'][0]['workgroup_size']==[256,1,1],'unknown original POST thread geometry')
     if geometry['saved_cnb_byte_offset'] is None:return {}
     offset_slot=max(b['metal_slot'] for b in receipt['bindings'] if b['metal_kind']=='buffer')+1
@@ -73,9 +71,7 @@ def build_selected(output,identity,geometry,compile_metal=True):
             record['io_guard']=dict(receipt['io_guard']);record['io_guard']['buffer_word_limits']={name:(physical//4 if name.startswith('oracle_u11_') else count) for name,count in receipt['io_guard']['buffer_word_limits'].items()}
         record['adaptation_limit']='controlled original-instruction oracle adaptation; not literal dispatch ordering/alias behavior and not Windows runtime parity'
         if compile_metal:
-            air=output/(stem+'.air');library=output/(stem+'.metallib');command=['xcrun','-sdk','macosx','metal','-std=metal3.1','-fno-fast-math','-c',str(msl),'-o',str(air)]
-            subprocess.run(command,check=True);subprocess.run(['xcrun','-sdk','macosx','metallib',str(air),'-o',str(library)],check=True)
-            record['compile_command']=command;record['library_sha256']=sha256(library.read_bytes())
+            record['compile_command'],record['library_sha256']=build_metallib(output,stem)
         (output/(stem+'.translation.json')).write_text(json.dumps(record,indent=2)+'\n');results[mode]=record
     return results
 

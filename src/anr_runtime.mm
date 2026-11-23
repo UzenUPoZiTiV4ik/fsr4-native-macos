@@ -13,11 +13,10 @@ namespace {
 std::string utf8(NSString *s) { return s ? std::string(s.UTF8String) : ""; }
 NSString *ns(const std::string &s) { return [NSString stringWithUTF8String:s.c_str()]; }
 NSData *load(NSString *root,NSString *relative) { return [NSData dataWithContentsOfFile:[root stringByAppendingPathComponent:relative]]; }
+// Every hashed asset is capped at 32MB by the manifest check, so one
+// CC_LONG-bounded SHA256 call covers all callers.
 std::string hash(NSData *data) {
-    CC_SHA256_CTX context;CC_SHA256_Init(&context);
-    const auto *ptr=(const unsigned char*)data.bytes;size_t left=data.length;
-    while(left){const auto n=(CC_LONG)std::min(left,size_t(1<<30));CC_SHA256_Update(&context,ptr,n);ptr+=n;left-=n;}
-    unsigned char bytes[32];CC_SHA256_Final(bytes,&context);
+    unsigned char bytes[32];CC_SHA256(data.bytes,(CC_LONG)data.length,bytes);
     static const char hex[]="0123456789abcdef";std::string result;
     for(unsigned char byte:bytes){result+=hex[byte>>4];result+=hex[byte&15];}return result;
 }
@@ -32,7 +31,7 @@ std::map<std::pair<uintptr_t,std::string>,id<MTLComputePipelineState>> pipelineC
 struct Binding {std::string name;unsigned index=0;bool uniform=false,sampler=false;};
 struct Kernel {id<MTLComputePipelineState> pipeline=nil;bool native=false;unsigned resources=0,samplers=0;std::vector<Binding> bindings;};
 struct Stage {
-    std::string kernel,label;MTLSize groups={},threads={};id<MTLBuffer> constants=nil,resources=nil,samplers=nil,root=nil;
+    std::string kernel;MTLSize groups={},threads={};id<MTLBuffer> constants=nil,resources=nil,samplers=nil,root=nil;
     id<MTL4ArgumentTable> arguments=nil;
     uint64_t bufferRevision=0;
     std::map<std::string,unsigned> buffers;
@@ -158,7 +157,7 @@ bool Runtime::initialize(std::string &error,bool twoXOnly) { @autoreleasepool {
     auto &r=*impl;if(r.initialized)return true;
     NSData *md=load(r.directory,@"manifest.json");
     if(!md||md.length>32u*1024u*1024u)return r.fail(error,"ANR missing/oversized manifest");
-    r.manifest=md ? [NSJSONSerialization JSONObjectWithData:md options:0 error:nil] : nil;
+    r.manifest=[NSJSONSerialization JSONObjectWithData:md options:0 error:nil];
     if(![r.manifest isKindOfClass:NSDictionary.class] || ![r.manifest[@"schema"] isEqual:@"fsr4_anr_runtime_v1"]
        || ![r.manifest[@"checkpoint_id"] isEqual:@"e09deb7012c96c172e49e72eb0b747b4611a8b6e3f14e5f5563189c580772ac1"])
         return r.fail(error,"ANR runtime manifest/checkpoint mismatch");
@@ -212,8 +211,11 @@ bool Runtime::initialize(std::string &error,bool twoXOnly) { @autoreleasepool {
     NSDictionary *kernelRecords=r.manifest[@"kernels"];
     NSMutableSet *neededKernels=[NSMutableSet set];
     NSDictionary *stageRecords=r.manifest[@"stages"];
+    auto requiredStage=[twoXOnly](NSString *key){
+        return !twoXOnly||[key isEqual:@"pair"]||[key isEqual:@"phase:0.5:image"];
+    };
     for(NSString *key in stageRecords){
-        if(twoXOnly&&![key isEqual:@"pair"]&&![key isEqual:@"phase:0.5:image"])continue;
+        if(!requiredStage(key))continue;
         for(NSDictionary *stage in stageRecords[key])[neededKernels addObject:stage[@"kernel"]];
     }
     for(NSString *key in kernelRecords) {
@@ -248,10 +250,10 @@ bool Runtime::initialize(std::string &error,bool twoXOnly) { @autoreleasepool {
         r.kernels.emplace(utf8(key),std::move(kernel));
     }
     for(unsigned slot=0;slot<4;++slot)for(NSString *key in stageRecords) {
-        if(twoXOnly&&![key isEqual:@"pair"]&&![key isEqual:@"phase:0.5:image"])continue;
+        if(!requiredStage(key))continue;
         auto &stages=r.stages[slot][utf8(key)];
         for(NSDictionary *record in stageRecords[key]) {
-            Stage stage;stage.kernel=utf8(record[@"kernel"]);stage.label=utf8(record[@"label"]);
+            Stage stage;stage.kernel=utf8(record[@"kernel"]);
             stage.groups=extent(record[@"groups"]);stage.threads=extent(record[@"threads"]);
             auto it=r.kernels.find(stage.kernel);if(it==r.kernels.end())return r.fail(error,"ANR unknown stage kernel");
             Kernel &kernel=it->second;

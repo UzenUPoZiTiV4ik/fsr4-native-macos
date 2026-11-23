@@ -18,15 +18,8 @@ motion or the ownership plane. The existing appended POST-CNB cache survives
 skipped frames; the host must force a full frame until that cache is valid.
 """
 
-import re
-
-
 SCRATCH_BYTES = {1080: 20880256, 2160: 83232256, 4320: 332352256}
 CONSTANT_BYTES = 16
-MOTION_BYTES_PER_BLOCK = 16
-PLANE_BYTES_PER_BLOCK = 4
-TEMPORAL_REFERENCE_COMMIT = "9ab64571eda2d4f3a802b2b2e8c1bbe006da15da"
-TEMPORAL_REFERENCE_RELEASE = "dll-2026-10-14"
 
 
 def _tier(tier):

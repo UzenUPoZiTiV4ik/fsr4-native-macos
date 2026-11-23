@@ -19,7 +19,6 @@ REFERENCE_RELEASE = "dll-2026-10-07"
 FOLD_WORDS = {1: 4, 5: 18, 10: 18, 12: 20}
 ROUNDING_PASSES = frozenset((1, 2, 4, 5, 7, 8, 9, 10, 12))
 SHARED_ROUNDING_PASSES = frozenset((7, 8, 9))
-ROUND_HALF_UP_FLAG = 4
 
 
 def rounding_passes(preset="normal"):

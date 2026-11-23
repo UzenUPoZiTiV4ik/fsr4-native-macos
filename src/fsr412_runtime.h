@@ -71,8 +71,7 @@ inline bool validate_options(const Options &o,std::string &error) {
     if(o.neuralTileSize && o.profile!=Profile::Int8LiteLossy) {
         error="neural tile size is supported only by FSR 4.1.2 Lite Lossy";return false;
     }
-    unsigned parsed=0;
-    if(!parse_neural_tile_size(std::to_string(o.neuralTileSize),parsed)) {
+    if(o.neuralTileSize && !fsr412_tiling::valid_size(o.neuralTileSize)) {
         error="neural tile size must be 0, 128, 256, 512, 1024, or 2048";return false;
     }
     if(o.profile==Profile::Int8LiteLossy && o.pixelFix) {

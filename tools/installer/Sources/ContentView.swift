@@ -189,17 +189,9 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .disabled(model.busy)
-            Group {
-                if model.profile == .lite {
-                    Text("AMD's compact INT8 model. Runs the network every frame.")
-                } else if model.profile == .lossy {
-                    Text("Six retrained layers, network on every other frame. Fewer specks in foliage.")
-                } else {
-                    Text("Full network every frame, best quality.")
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Text(model.profile.summary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Toggle("Show the FSR 4 panel next to the game", isOn: $model.panel)
                 .disabled(model.busy)
             if model.panel {

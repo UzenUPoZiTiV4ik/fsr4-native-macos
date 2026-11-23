@@ -4,6 +4,7 @@
 // No Windows DLL, game, GPU counters or capture copies run in timed buffers.
 #include "../../src/fsr412_runtime.h"
 #include "../../src/fsr4_live.h"
+#include "bench_gpu.h"
 #include <chrono>
 #include <fcntl.h>
 #include <numeric>
@@ -16,8 +17,8 @@ extern "C" void fsr4_panel_request(void) {}
 extern "C" void fsr4_panel_publish(void) {}
 
 namespace {
+using namespace bench;
 using Clock = std::chrono::steady_clock;
-void require(bool ok, const std::string &message) { if (!ok) throw std::runtime_error(message); }
 double seconds(Clock::time_point start) { return std::chrono::duration<double>(Clock::now() - start).count(); }
 struct TimingLock {
     int fd = -1;
@@ -27,44 +28,15 @@ struct TimingLock {
     }
     ~TimingLock() { if (fd >= 0) { flock(fd, LOCK_UN); close(fd); } }
 };
-id<MTLTexture> texture(id<MTLDevice> device, MTLPixelFormat format, unsigned w, unsigned h) {
-    auto d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:w height:h mipmapped:NO];
-    d.storageMode = MTLStorageModeShared;
-    d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    auto t = [device newTextureWithDescriptor:d]; require(t != nil, "cannot allocate texture"); return t;
-}
-struct Inputs { id<MTLTexture> color, depth, motion; };
-Inputs inputs(id<MTLDevice> device, unsigned rw, unsigned rh) {
-    Inputs in{texture(device, MTLPixelFormatRGBA16Float, rw, rh), texture(device, MTLPixelFormatR32Float, rw, rh),
-              texture(device, MTLPixelFormatRG16Float, rw, rh)};
-    std::vector<_Float16> color(size_t(rw) * rh * 4), motion(size_t(rw) * rh * 2);
-    std::vector<float> depth(size_t(rw) * rh);
-    uint32_t seed = 0x4128u;
-    for (unsigned y = 0; y < rh; ++y) for (unsigned x = 0; x < rw; ++x) {
-        const size_t i = size_t(y) * rw + x; seed = seed * 1664525u + 1013904223u;
-        color[4*i] = (_Float16)(.05f + .8f * float(x) / rw + float(seed >> 28) / 64.f);
-        color[4*i+1] = (_Float16)(.03f + .6f * float(y) / rh + float((seed >> 24) & 15) / 80.f);
-        color[4*i+2] = (_Float16)(float(((x*7 + y*3) % 23) + 1) / 30.f); color[4*i+3] = 1;
-        depth[i] = .2f + .6f * float((x/8 + y/8) % 11) / 11.f;
-        motion[2*i] = (_Float16)(float(int(x % 9) - 4) * .0625f);
-        motion[2*i+1] = (_Float16)(float(int(y % 5) - 2) * .0625f);
-    }
-    [in.color replaceRegion:MTLRegionMake2D(0,0,rw,rh) mipmapLevel:0 withBytes:color.data() bytesPerRow:rw*8];
-    [in.depth replaceRegion:MTLRegionMake2D(0,0,rw,rh) mipmapLevel:0 withBytes:depth.data() bytesPerRow:rw*4];
-    [in.motion replaceRegion:MTLRegionMake2D(0,0,rw,rh) mipmapLevel:0 withBytes:motion.data() bytesPerRow:rw*4];
-    return in;
-}
 fsr411::Frame frame(const Inputs &in, id<MTLTexture> output, unsigned rw, unsigned rh, unsigned uw, unsigned uh,
                     unsigned index, bool reset) {
     fsr411::Frame f; f.color = in.color; f.depth = in.depth; f.motion = in.motion; f.output = output;
     auto &p = f.input; p.rw = rw; p.rh = rh; p.uw = uw; p.uh = uh;
     p.geometry.color = p.geometry.depth = p.geometry.motion = {rw,rh,0,0}; p.geometry.output = {uw,uh,0,0};
-    p.reset = reset; p.jitterX = index & 1u ? -.25f : .125f;
-    p.jitterY = index % 3u ? 1.f/6.f : -1.f/6.f;
+    p.reset = reset; jitter(index, p.jitterX, p.jitterY);
     p.mvScaleX = p.mvScaleY = 1; p.depthReversed = 1; p.preExposure = 1; p.autoExposure = 1;
     p.inputContentProperties = 1; return f;
 }
-NSArray *numbers(const std::vector<double> &v) { auto a = [NSMutableArray new]; for (double n : v) [a addObject:@(n)]; return a; }
 double mean(const std::vector<double> &v) { return v.empty() ? 0 : std::accumulate(v.begin(),v.end(),0.) / v.size(); }
 double quantile(std::vector<double> v, double p) {
     if (v.empty()) return 0; std::sort(v.begin(),v.end());
@@ -116,8 +88,7 @@ int main(int argc, char **argv) { @autoreleasepool { try {
             && std::isfinite(warmupSeconds) && warmupSeconds>=0 && warmupSeconds<=900, "invalid timing counts");
     TimingLock timingLock;
     require(!NSProcessInfo.processInfo.lowPowerModeEnabled, "disable Low Power Mode before benchmarking");
-    auto device = MTLCreateSystemDefaultDevice(); auto queue = [device newCommandQueue];
-    require(device && queue && [device supportsFamily:(useSimd ? MTLGPUFamilyApple7 : MTLGPUFamilyApple10)],
+    id<MTLDevice> device; auto queue = device_queue(device, useSimd ? MTLGPUFamilyApple7 : MTLGPUFamilyApple10,
             useSimd ? "Apple7/M1+ SIMD device required" : "Apple10/M5 native INT8 device required");
     const auto requestedBackend=useSimd ? fsr411::Backend::Simd : fsr411::Backend::Native;
     const std::string expectedBackend=useSimd ? "int8-simd" : "int8-mpp";
@@ -131,7 +102,7 @@ int main(int argc, char **argv) { @autoreleasepool { try {
     setenv("FSR4_SHARPNESS", "0", 1); setenv("FSR4_RCAS", "0", 1); unsetenv("FSR4_HOOK_LOG");
     fsr4_live_set_profile(3); fsr4_live_set_sharpness(0, 0);
     fsr411::Runtime runtime(device, root, root + "/build");
-    const auto in = inputs(device, rw, rh);
+    const auto in = bench::inputs(device, rw, rh, 0x4128u, false);
     std::vector<std::unique_ptr<Mode>> modes;
     auto add = [&](const char *name, const char *label, fsr411::Profile profile, bool lite, int quality=0) -> Mode & {
         auto m = std::make_unique<Mode>(); m->name=name; m->label=label;
@@ -172,9 +143,7 @@ int main(int argc, char **argv) { @autoreleasepool { try {
             std::string error; const bool ok=runtime.encode(cb,m.view,f,m.options,error); require(ok,m.name+": "+error);
             require(m.view.backendLabel==expectedBackend,m.name+": unexpected backend "+m.view.backendLabel);
         }
-        [cb commit]; [cb waitUntilCompleted];
-        require(cb.status==MTLCommandBufferStatusCompleted,fsr411::metal_error(cb.error));
-        const double ms=(cb.GPUEndTime-cb.GPUStartTime)*1000.; require(std::isfinite(ms) && ms>0,"invalid GPU timestamps");
+        const double ms = commit_timed(cb); require(std::isfinite(ms) && ms>0,"invalid GPU timestamps");
         return ms;
     }};
     auto telemetry=[NSMutableArray new]; const auto started=Clock::now();

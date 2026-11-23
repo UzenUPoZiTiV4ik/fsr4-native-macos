@@ -9,6 +9,7 @@
 #import <Metal/Metal.h>
 #include "../../src/fsr411_model.h"
 #include "../../src/fsr411_mpp_policy.h"
+#include "bench_gpu.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -19,17 +20,7 @@
 #include <vector>
 
 namespace {
-void require(bool ok, const std::string &message) { if (!ok) throw std::runtime_error(message); }
-NSString *ns(const std::string &s) { return [NSString stringWithUTF8String:s.c_str()]; }
-std::string metal_error(NSError *e) { return e ? e.localizedDescription.UTF8String : "Metal allocation failed"; }
-double median(std::vector<double> v) {
-    require(!v.empty(), "empty timing sample"); std::sort(v.begin(),v.end());
-    const size_t n=v.size(); return n%2 ? v[n/2] : (v[n/2-1]+v[n/2])*.5;
-}
-NSArray *numbers(const std::vector<double> &v) { auto a=[NSMutableArray new];for(double x:v)[a addObject:@(x)];return a; }
-unsigned tensor_end(const fsr411::Tensor &t) {
-    return t.channels ? fsr411::tensor_address(t,t.width+1,t.height+1,t.channels-1)+64u : 0u;
-}
+using namespace bench;
 id<MTLLibrary> library(id<MTLDevice> dev,const std::string &root,unsigned tier) {
     NSError *e=nil;
     auto source=[NSString stringWithContentsOfFile:ns(root+"/src/fsr411_mpp.metal") encoding:NSUTF8StringEncoding error:&e];
@@ -55,19 +46,7 @@ id<MTLComputePipelineState> pipeline(id<MTLDevice> dev,id<MTLLibrary> lib,const 
     require(p.staticThreadgroupMemoryLength<=dev.maxThreadgroupMemoryLength,"threadgroup storage exceeds device limit");return p;
 }
 uint32_t probe(id<MTLDevice> dev,id<MTLLibrary> lib,id<MTLCommandQueue> queue) {
-    auto fn=[lib newFunctionWithName:@"fsr411_mpp_chain_probe"];if(!fn)return 0;
-    NSError *e=nil;auto d=[MTLComputePipelineDescriptor new];d.computeFunction=fn;
-    d.maxTotalThreadsPerThreadgroup=32;d.threadGroupSizeIsMultipleOfThreadExecutionWidth=YES;
-    auto p=[dev newComputePipelineStateWithDescriptor:d options:MTLPipelineOptionNone reflection:nil error:&e];
-    require(p && p.threadExecutionWidth==32 && !p.staticThreadgroupMemoryLength,"MPP probe pipeline invalid");
-    std::vector<uint8_t> zeros(fsr411::kMppProbeDummyBytes,0);const uint32_t sentinel=~0u;
-    auto b=[dev newBufferWithBytes:&sentinel length:sizeof(sentinel) options:MTLResourceStorageModeShared];
-    auto dummy=[dev newBufferWithBytes:zeros.data() length:zeros.size() options:MTLResourceStorageModeShared];
-    require(b && dummy,"MPP probe allocation failed");auto cb=[queue commandBuffer];auto enc=[cb computeCommandEncoder];
-    [enc setComputePipelineState:p];[enc setBuffer:b offset:0 atIndex:0];[enc setBuffer:dummy offset:0 atIndex:1];
-    [enc dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
-    [enc endEncoding];[cb commit];[cb waitUntilCompleted];require(cb.status==MTLCommandBufferStatusCompleted,metal_error(cb.error));
-    const uint32_t mask=*(const uint32_t *)b.contents;require(!(mask & ~fsr411::kMppChainKnownMask),"MPP probe returned unknown features");return mask;
+    return [lib newFunctionWithName:@"fsr411_mpp_chain_probe"] ? mpp_chain_probe(dev,queue,lib) : 0;
 }
 id<MTLBuffer> output_copy(id<MTLDevice> dev,id<MTLCommandQueue> q,id<MTLBuffer> scratch,const fsr411::Tensor &t) {
     auto result=[dev newBufferWithLength:size_t(t.width)*t.height*t.channels options:MTLResourceStorageModeShared];
@@ -101,14 +80,10 @@ int main(int argc,char **argv) { @autoreleasepool { try {
         } else throw std::runtime_error("unknown or incomplete option: "+a);
     }
     require(rounds>=2 && rounds<=1000,"rounds must be 2..1000");
-    auto dev=MTLCreateSystemDefaultDevice();auto q=[dev newCommandQueue];
-    require(dev && q && [dev supportsFamily:MTLGPUFamilyApple10],"Apple10/M5 and Metal 4 required");
+    id<MTLDevice> dev;auto q=device_queue(dev,MTLGPUFamilyApple10,"Apple10/M5 and Metal 4 required");
     const auto thermalStart=NSProcessInfo.processInfo.thermalState;NSError *error=nil;
-    auto data=[NSData dataWithContentsOfFile:ns(dir+"/fsr411_native_manifest.json")];
-    NSDictionary *manifest=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:&error]:nil;
-    auto weights=[NSData dataWithContentsOfFile:ns(dir+"/fsr411_native_weights.bin")];
-    auto params=[NSData dataWithContentsOfFile:ns(dir+"/fsr411_native_params.bin")];
-    require(manifest && weights.length && params.length,"missing native model files");
+    const auto model=native_model(dir,"missing native model files");
+    NSDictionary *manifest=model.manifest;auto weights=model.weights,params=model.params;
     require([manifest[@"parameter_size"] unsignedIntValue]==sizeof(fsr411::PassParams),"native parameter ABI mismatch");
     require(weights.length==[manifest[@"weights_bytes"] unsignedLongLongValue],"incomplete weights");
     const unsigned tier=[manifest[@"tier"] unsignedIntValue];const bool lite=[manifest[@"fsr_version"] isEqual:@"4.1.2"];
@@ -117,15 +92,8 @@ int main(int argc,char **argv) { @autoreleasepool { try {
     auto currentLib=library(dev,root,tier),beforeLib=beforeRoot==root?currentLib:library(dev,beforeRoot,tier);
     const uint32_t features=legacyKernels?0:probe(dev,currentLib,q);
     NSMutableDictionary *passes=[manifest[@"passes"] mutableCopy];passes[@"post_cnb"]=manifest[@"auxiliary_passes"][@"post_cnb"];
-    unsigned scratchBytes=0;
-    for(NSString *key in passes) {
-        fsr411::PassParams p;const size_t offset=[passes[key][@"parameter_offset"] unsignedIntValue];
-        require(offset<=params.length && sizeof(p)<=params.length-offset,"parameter region overflow");
-        memcpy(&p,(const uint8_t *)params.bytes+offset,sizeof(p));
-        scratchBytes=std::max({scratchBytes,tensor_end(p.input),tensor_end(p.output),tensor_end(p.skip)});
-    }
-    const unsigned postOffset=(scratchBytes+255u)&~255u;
-    scratchBytes=postOffset+[passes[@"post_cnb"][@"scratch_append_bytes"] unsignedIntValue]+256u;
+    unsigned postOffset=0;
+    const unsigned scratchBytes=bench::scratch_extent(passes,params,postOffset);
     id<MTLBuffer> scratch[2]={[dev newBufferWithLength:scratchBytes options:MTLResourceStorageModePrivate],
                              [dev newBufferWithLength:scratchBytes options:MTLResourceStorageModePrivate]};
     require(wb && scratch[0] && scratch[1],"scratch allocation failed");
@@ -134,8 +102,8 @@ int main(int argc,char **argv) { @autoreleasepool { try {
     [blit endEncoding];[clear commit];[clear waitUntilCompleted];require(clear.status==MTLCommandBufferStatusCompleted,"scratch initialization failed");
     auto results=[NSMutableArray new];constexpr unsigned batch=8,warmups=4;
     for(NSString *key in @[@"1",@"2",@"3",@"4",@"5",@"6",@"7",@"8",@"9",@"10",@"11",@"12",@"post_cnb"]) {
-        NSDictionary *entry=passes[key];if(!entry)continue;fsr411::PassParams p;
-        memcpy(&p,(const uint8_t *)params.bytes+[entry[@"parameter_offset"] unsignedIntValue],sizeof(p));
+        NSDictionary *entry=passes[key];if(!entry)continue;
+        fsr411::PassParams p=pass_params(entry,params);
         const bool post=[key isEqual:@"post_cnb"];
         const auto metadata=fsr411::specialize_metadata(p,post);auto values=[MTLFunctionConstantValues new];
         [values setConstantValues:metadata.values type:MTLDataTypeUInt4 withRange:NSMakeRange(0,fsr411::kPassSpecializationCount)];

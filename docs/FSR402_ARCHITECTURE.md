@@ -110,14 +110,14 @@ GPU time per frame is printed from `MTLCommandBuffer` `GPUStartTime`/
                             emits initializers_f16.bin
     patches/hlsl/ml2code_runtime/fp16_ops.hlsli
                             hand-written real-domain fp16 operator library
-    patches/hlsl/pre_common_f16.hlsli / post_common_f16.hlsli
-                            fp16 variants of the pre/post stage internals
+    patches/hlsl/pre_common_f16.hlsli.patch / post_common_f16.hlsli
+                            fp16 PRE delta and POST implementation
     tools/bin/              vendored dxc / spirv-cross / spirv-val + built tools
     tools/lib/              libdxcompiler.dylib (dxc dependency)
     build_shaders.sh        batch-compile entry point
     third_party/fsr4/       unmodified AMD sources (MIT) — model HLSL +
                             initializers.bin per preset
-    patches/hlsl/           hand-patched HLSL copies (see below)
+    patches/hlsl/           local HLSL and deltas against pinned AMD headers
     build/                  generated: hlsl_shadow/, per-variant dirs, metallibs
     TESTDATA.md             the shared recorded-frame contract
     VERIFICATION.md         golden-vs-port verification log (int8 + fp16)
@@ -177,7 +177,7 @@ Why each flag matters:
 | # | What | Where | Why |
 |---|------|-------|-----|
 | 1 | `OpCopyLogical` (opcode 400) → `OpCopyObject` (83), rewritten in the emitted `.spv` | `tools/compile_variant.py::patch_spv` | DXC emits `OpCopyLogical` for same-type struct copies of resource wrappers, which `spirv-val` rejects |
-| 2 | `_Static_assert(...)` commented out at lines 35–36, 366–367, 657–658, 981–982 | `patches/hlsl/ml2code_runtime/operators/int8_NHWC/Fused/FNB_CT2D_ADD.hlsli` | DXC's SPIR-V backend doesn't implement `_Static_assert` |
+| 2 | `_Static_assert(...)` commented out at lines 35–36, 366–367, 657–658, 981–982 | `tools/compile_variant.py::build_shadow_tree`, in its copy of the INT8 `FNB_CT2D_ADD.hlsli` | DXC's SPIR-V backend doesn't implement `_Static_assert` |
 | 3 | `[unroll]`/`[unroll(n)]` → `[loop]` on every ml2code_runtime/ffx header, applied to generated shadow copies in `build/hlsl_shadow/` | `tools/compile_variant.py` | Full unrolling produced ~500 KB MSL fused-conv kernels; the GPU JIT compiler tripped the ~40 s watchdog (esp. passes 7–9). Rolled loops cut pass-7 SPIR-V ~503 KB → ~25 KB. Scheduling hint only — numerics unchanged. `--keep-unroll 1` leaves the hints in pre/post/rcas (post ~9% faster on M5, output then differs from the `[loop]` build at the fp16-ulp level) |
 | 4 | `.xyzz, uint2` → `.xyzx, uint2` on generated MSL | `tools/compile_variant.py` | `RWTexture2D<float3>` stores expand alpha = `.x` on D3D12 (verified on WARP golden dumps); spirv-cross emits `.xyzz` (alpha = blue) |
 

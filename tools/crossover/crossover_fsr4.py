@@ -104,17 +104,18 @@ def build_hook(log_path: Path, netal_source=None) -> Path:
     out = DIST / "libfsr4hook.dylib"
     common = ["-O2", "-fobjc-arc", "-arch", "x86_64", f"-mmacosx-version-min={MIN_MACOS}",
               "-isysroot", sdk(), "-I", str(ROOT / "src")]
-    run(["clang", "-c", *common, str(HOOK_SRC), "-o", str(DIST / "hook.o")])
-    run(["clang++", "-c", "-std=c++17", *common, str(LIVE_SRC), "-o", str(DIST / "live.o")])
-    run(["clang++", "-c", "-std=c++17", *common, str(LIVE411_SRC), "-o", str(DIST / "live411.o")])
-    run(["clang++", "-c", "-std=c++17", *common, str(LIVE412_SRC), "-o", str(DIST / "live412.o")])
-    run(["clang++", "-c", "-std=c++17", *common, str(PANEL_SRC), "-o", str(DIST / "panel.o")])
-    anr_objects = []
-    for name, source in (("anr_hook", ROOT / "hook/anr_metalfx.mm"),
+    objects = []
+    for name, source in (("hook", HOOK_SRC), ("live", LIVE_SRC), ("live411", LIVE411_SRC),
+                         ("live412", LIVE412_SRC), ("panel", PANEL_SRC),
+                         ("anr_hook", ROOT / "hook/anr_metalfx.mm"),
                          ("anr_live", ROOT / "src/anr_live.mm"), ("anr_runtime", ROOT / "src/anr_runtime.mm")):
         object_path = str(DIST / (name + ".o"))
-        run(["clang++", "-c", "-std=c++17", *common, str(source), "-o", object_path])
-        anr_objects.append(object_path)
+        # fsr4_metalfx.m is Objective-C; the live bridges are Objective-C++.
+        compiler = "clang" if name == "hook" else "clang++"
+        std = ["-std=c++17"] if compiler == "clang++" else []
+        run([compiler, "-c", *std, *common, str(source), "-o", object_path])
+        objects.append(object_path)
+    anr_objects = objects[5:]
     # Keep the old helper intact for hooks already mapped in a running game.
     # UI v2 adds noise-aware recomposition and sampled statistics (ABI 36 bytes).
     helper = ROOT / "build/anr_helpers_ui_v2.metallib"
@@ -133,8 +134,7 @@ def build_hook(log_path: Path, netal_source=None) -> Path:
             netal_objects.append(out_object)
     run([
         "clang++", "-dynamiclib", *common,
-        str(DIST / "hook.o"), str(DIST / "live.o"), str(DIST / "live411.o"), str(DIST / "live412.o"), str(DIST / "panel.o"),
-        *netal_objects, *anr_objects,
+        *objects[:5], *netal_objects, *anr_objects,
         "-framework", "Foundation", "-framework", "Metal", "-framework", "MetalFX",
         # Darwin ld needs an explicit allowance as well as weak_import when
         # linking an encoder without the optional 4.1.1 symbol. The public
@@ -157,41 +157,29 @@ def build_hook(log_path: Path, netal_source=None) -> Path:
     return out
 
 
-def build_smoke() -> Path:
-    out = DIST / "smoke"
-    run([
-        "clang", "-O2", "-fobjc-arc", "-arch", "x86_64",
-        f"-mmacosx-version-min={MIN_MACOS}", "-isysroot", sdk(),
-        str(SMOKE_SRC), str(DIST / "libfsr4hook.dylib"),
-        "-framework", "Foundation", "-framework", "Metal", "-framework", "MetalFX",
-        "-Wl,-rpath", str(DIST),
-        "-o", str(out),
-    ])
-    return out
-
-
-def build_live() -> Path:
-    out = DIST / "live_test"
-    run([
-        "clang++", "-O2", "-fobjc-arc", "-std=c++17", "-arch", "x86_64",
-        f"-mmacosx-version-min={MIN_MACOS}", "-isysroot", sdk(),
-        "-I", str(ROOT / "src"),
-        str(LIVE_TEST_SRC), str(DIST / "libfsr4hook.dylib"),
-        "-framework", "Foundation", "-framework", "Metal", "-framework", "MetalFX",
-        "-Wl,-rpath", str(DIST),
-        "-o", str(out),
-    ])
-    return out
-
-
-def build_anr_live() -> Path:
-    out = DIST / "anr_live_test"
-    run(["clang++", "-O2", "-fobjc-arc", "-std=c++17", "-arch", "x86_64",
-         f"-mmacosx-version-min={MIN_MACOS}", "-isysroot", sdk(), "-I", str(ROOT / "src"),
-         str(ROOT / "tests/anr_live_test.mm"), str(DIST / "libfsr4hook.dylib"),
+def build_hook_test(name: str, source: Path) -> Path:
+    """A small check binary that links the just-built hook and runs under Rosetta."""
+    out = DIST / name
+    cpp = source.suffix == ".mm"
+    run([("clang++" if cpp else "clang"), "-O2", "-fobjc-arc",
+         *(["-std=c++17"] if cpp else []),
+         "-arch", "x86_64", f"-mmacosx-version-min={MIN_MACOS}", "-isysroot", sdk(),
+         "-I", str(ROOT / "src"), str(source), str(DIST / "libfsr4hook.dylib"),
          "-framework", "Foundation", "-framework", "Metal", "-framework", "MetalFX",
          "-Wl,-rpath", str(DIST), "-o", str(out)])
     return out
+
+
+def build_smoke() -> Path:
+    return build_hook_test("smoke", SMOKE_SRC)
+
+
+def build_live() -> Path:
+    return build_hook_test("live_test", LIVE_TEST_SRC)
+
+
+def build_anr_live() -> Path:
+    return build_hook_test("anr_live_test", ROOT / "tests/anr_live_test.mm")
 
 
 def preserve_panel_preferences(conf: Path):
@@ -212,9 +200,7 @@ def preserve_panel_preferences(conf: Path):
         backup.parent.mkdir(parents=True, exist_ok=True)
         if not backup.exists():
             backup.write_bytes(previous)
-    temporary = target.with_name(target.name + f".tmp.{os.getpid()}")
-    shutil.copy2(source, temporary)
-    temporary.replace(target)
+    atomic_copy(source, target)
     print("preserved existing SR panel sharpness/profile preferences")
 
 
@@ -224,13 +210,24 @@ def select_frame_generation(mode):
     DIST.mkdir(parents=True, exist_ok=True)
     path = DIST / "fg-settings.conf"
     if path.exists():
-        backup = DIST / "backups/fg-settings.conf"
-        backup.parent.mkdir(parents=True, exist_ok=True)
-        if not backup.exists():
-            shutil.copy2(path, backup)
-    temporary = path.with_name(path.name + f".tmp.{os.getpid()}")
-    temporary.write_text("schema=fsr4.fg.settings.v1\nmode=" + mode + "\n")
-    temporary.replace(path)
+        backup_once(path, DIST / "backups/fg-settings.conf")
+    atomic_write(path, "schema=fsr4.fg.settings.v1\nmode=" + mode + "\n")
+
+
+def prepare_netal(netal_source, netal_runtime):
+    """Link the pinned Netal checkout and validate its SR runtime, when given."""
+    try:
+        prepare_sources(netal_source)
+        return validate_runtime(netal_runtime) if netal_runtime else None
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise SystemExit("Netal: " + str(error)) from error
+
+
+def check_anr_runtime(value):
+    try:
+        return validate_anr_runtime(value)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise SystemExit("ANR: " + str(error)) from error
 
 
 def cmd_frame_generation(args):
@@ -238,19 +235,11 @@ def cmd_frame_generation(args):
     netal_source = getattr(args, "netal_source", "") or os.environ.get("FSR4_NETAL_SOURCE")
     netal_runtime = getattr(args, "netal_runtime", "") or os.environ.get(NETAL_RUNTIME_KEY)
     if args.mode == "anr" and netal_source:
-        try:
-            prepare_sources(netal_source)
-            if netal_runtime:
-                netal_runtime = validate_runtime(netal_runtime)
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            raise SystemExit("Netal: " + str(error)) from error
+        netal_runtime = prepare_netal(netal_source, netal_runtime)
     elif args.mode == "anr" and netal_runtime:
         raise SystemExit("--netal-runtime requires --netal-source")
     if args.mode == "anr":
-        try:
-            runtime = validate_anr_runtime(args.anr_runtime)
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            raise SystemExit("ANR: " + str(error)) from error
+        runtime = check_anr_runtime(args.anr_runtime)
     bottle = resolve_bottle(args.bottle) if args.bottle else default_bottle(crossover=args.crossover)
     # Do not change the SR profile or panel preferences. Install the combined
     # hook and update only FG/root/framework keys in the selected bottle.
@@ -259,12 +248,12 @@ def cmd_frame_generation(args):
         hook = build_hook(DIST / "hook.log", netal_source=netal_source)
         binary = copy_framework(hook, framework)
         test = build_anr_live()
+        # A validated runtime holds manifest.json at its root or in a WxH profile dir.
         test_runtime = runtime if (runtime / "manifest.json").is_file() else runtime / "1920x1080"
         if not (test_runtime / "manifest.json").is_file():
             test_runtime = next(p.parent for p in runtime.glob("*/manifest.json"))
-        if (test_runtime / "manifest.json").is_file():
-            run(["arch", "-x86_64", str(test), str(ROOT), str(test_runtime), "classic"])
-            run(["arch", "-x86_64", str(test), str(ROOT), str(test_runtime), "metal4"])
+        for api in ("classic", "metal4"):
+            run(["arch", "-x86_64", str(test), str(ROOT), str(test_runtime), api])
         values = {KEY: str(binary), ROOT_KEY: str(ROOT), LOG_KEY: str(DIST / "hook.log"),
                   FG_KEY: "anr", ANR_RUNTIME_KEY: str(runtime), METALFX_KEY: "1"}
         if netal_source:
@@ -574,6 +563,20 @@ def atomic_copy(source: Path, dest: Path):
     os.replace(temp, dest)
 
 
+def atomic_write(path: Path, text: str):
+    """Write `text` to `path` without exposing a half-written file."""
+    temporary = path.with_name(path.name + f".tmp.{os.getpid()}")
+    temporary.write_text(text)
+    temporary.replace(path)
+
+
+def backup_once(path: Path, backup: Path):
+    """Keep a first-time copy of `path` under dist/backups before it changes."""
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    if not backup.exists():
+        shutil.copy2(path, backup)
+
+
 def remove_file(path: Path):
     try:
         path.unlink()
@@ -778,9 +781,8 @@ def conf_set(conf: Path, values: dict):
         for key in missing:
             out.append(f'"{key}" = "{values[key]}"')
     bak = DIST / "backups" / (conf.parent.name + ".cxbottle.conf")
-    bak.parent.mkdir(parents=True, exist_ok=True)
     if not bak.exists():
-        shutil.copy2(conf, bak)
+        backup_once(conf, bak)
         print(f"backup {bak}")
     conf.write_text("\n".join(out) + ("\n" if text.endswith("\n") else ""))
     print(f"set {', '.join(values)} in {conf}")
@@ -807,15 +809,10 @@ def select_panel_profile(profile: str):
     conf = DIST / "panel.conf"
     text = conf.read_text() if conf.exists() else ""
     if conf.exists():
-        backup = DIST / "backups" / "panel.conf"
-        backup.parent.mkdir(parents=True, exist_ok=True)
-        if not backup.exists():
-            shutil.copy2(conf, backup)
+        backup_once(conf, DIST / "backups/panel.conf")
     lines = [line for line in text.splitlines() if line.partition("=")[0].strip() != "profile"]
     lines.append("profile=" + profile)
-    temp = conf.with_name(conf.name + f".tmp.{os.getpid()}")
-    temp.write_text("\n".join(lines) + "\n")
-    temp.replace(conf)
+    atomic_write(conf, "\n".join(lines) + "\n")
     print(f"selected {profile} in {conf}")
 
 
@@ -864,39 +861,41 @@ def build_reference(env):
     if env.get(PROFILE_KEY) == "fsr4":
         version = "4.0.2"  # the live bridge routes this profile to the old model
     model = env.get("FSR4_MODEL", "auto")
-    if version == "4.1.1":
-        aliases = {"auto": "auto", "reference": "reference", "int8": "reference", "scalar": "scalar",
-                   "simd": "simd", "fp16": "simd", "f16": "simd", "native": "i8mpp", "i8mpp": "i8mpp"}
-        if model not in aliases:
-            raise SystemExit("FSR 4.1.1 requires FSR4_MODEL=auto, reference, scalar, simd, or i8mpp")
-        model = aliases[model]
-        version_options = ["--fsr-version", version]
-        profile = env.get(PROFILE_KEY, "lossy")
-        if profile not in LEGACY_PROFILES:
-            raise SystemExit("FSR4_PROFILE must be exact, exact-fast, lossy, lossy2 or fsr4")
-    elif version == "4.1.2":
-        aliases = {"auto": "auto", "native": "i8mpp", "i8mpp": "i8mpp",
-                   "int8": "reference", "reference": "reference", "scalar": "scalar",
-                   "simd": "simd", "fp16": "simd", "f16": "simd"}
-        if model not in aliases:
-            raise SystemExit("FSR 4.1.2 requires FSR4_MODEL=auto, reference, scalar, simd, or i8mpp")
-        model = aliases[model]
-        version_options = ["--fsr-version", version]
-        profile = env.get(PROFILE_KEY, "int8-lite")
-        profile = {"lite": "int8-lite", "lite-hair": "int8-lite-hair", "lite-pixfix": "int8-lite-pixfix",
-                   "lite-lossy": "int8-lite-lossy", "lite-lossy-tiled": "int8-lite-lossy-tiled"}.get(profile, profile)
-        if profile not in LITE_PROFILES:
-            raise SystemExit("FSR4_PROFILE must be int8-lite, int8-lite-pixfix, int8-lite-lossy "
-                             "or int8-lite-lossy-tiled for FSR 4.1.2")
-        if profile in LITE_LOSSY_PROFILES:
-            reject_lite_lossy_reference(model)
-            require_lite_lossy_weights()
-    else:
+    version_options = ["--fsr-version", version]
+    if version == "4.0.2":
         if model == "int8":
             model = "i8mpp"  # historic 4.0.2 live alias
         if model not in ("auto", "f16", "fp16", "i8mpp"):
             model = "auto"
-        version_options = ["--fsr-version", version]
+    else:
+        # 4.1.1 and 4.1.2 accept the same model names; they differ only in the
+        # profile allow-list and in what a valid run.json must report.
+        aliases = {"auto": "auto", "native": "i8mpp", "i8mpp": "i8mpp",
+                   "int8": "reference", "reference": "reference", "scalar": "scalar",
+                   "simd": "simd", "fp16": "simd", "f16": "simd"}
+        if model not in aliases:
+            raise SystemExit(f"FSR {version} requires FSR4_MODEL=auto, reference, scalar, simd, or i8mpp")
+        model = aliases[model]
+        if version == "4.1.1":
+            profile = env.get(PROFILE_KEY, "lossy")
+            if profile not in LEGACY_PROFILES:
+                raise SystemExit("FSR4_PROFILE must be exact, exact-fast, lossy, lossy2 or fsr4")
+            expected_profile = profile
+            backends = ("int8-mpp", "int8-simd", "int8-reference", "int8-scalar")
+        else:
+            profile = env.get(PROFILE_KEY, "int8-lite")
+            profile = {"lite": "int8-lite", "lite-hair": "int8-lite-hair", "lite-pixfix": "int8-lite-pixfix",
+                       "lite-lossy": "int8-lite-lossy", "lite-lossy-tiled": "int8-lite-lossy-tiled"}.get(profile, profile)
+            if profile not in LITE_PROFILES:
+                raise SystemExit("FSR4_PROFILE must be int8-lite, int8-lite-pixfix, int8-lite-lossy "
+                                 "or int8-lite-lossy-tiled for FSR 4.1.2")
+            if profile in LITE_LOSSY_PROFILES:
+                reject_lite_lossy_reference(model)
+                require_lite_lossy_weights()
+            expected_profile = profile if profile in LITE_LOSSY_PROFILES else "int8-lite"
+            backends = ("int8-mpp", "int8-scalar", "int8-simd")
+            if profile not in LITE_LOSSY_PROFILES:
+                backends += ("int8-reference",)
     run(["make", "-B", "tools/bin/fsr4mac"], cwd=ROOT)
     backend_profile = ["--profile", profile] if version == "4.1.2" and profile in LITE_LOSSY_PROFILES else []
     info = json.loads(subprocess.check_output(
@@ -908,32 +907,19 @@ def build_reference(env):
         run(["make", "tools/bin/gen_testcase"], cwd=ROOT)
         run([str(ROOT / "tools/bin/gen_testcase"), str(testcase),
              "quality", "1280", "720", "1920", "1080", "2"])
-    if version == "4.1.1":
-        refdir = DIST / ("reference-4.1.1-" + profile + "-" + model)
-        run([str(ROOT / "tools/bin/fsr4mac"), str(testcase), str(refdir),
-             *version_options, "--profile", profile, "--" + model], cwd=ROOT, env=env)
-        report = json.loads((refdir / "run.json").read_text())
-        if (report.get("fsr_version") != version or report.get("profile") != profile
-                or report.get("backend") not in ("int8-mpp", "int8-simd", "int8-reference", "int8-scalar")):
-            raise SystemExit("reference did not run the requested FSR 4.1.1 model/profile")
-        print(f"reference verified: FSR {version} {profile} {report['backend']}")
-    elif version == "4.1.2":
-        refdir = DIST / ("reference-4.1.2-" + profile + "-" + model)
-        run([str(ROOT / "tools/bin/fsr4mac"), str(testcase), str(refdir),
-             *version_options, "--profile", profile, "--" + model], cwd=ROOT, env=env)
-        report = json.loads((refdir / "run.json").read_text())
-        actual_profile = profile if profile in LITE_LOSSY_PROFILES else "int8-lite"
-        allowed_backends = ("int8-mpp", "int8-scalar", "int8-simd")
-        if profile not in LITE_LOSSY_PROFILES:
-            allowed_backends += ("int8-reference",)
-        if (report.get("fsr_version") != version or report.get("profile") != actual_profile
-                or report.get("backend") not in allowed_backends):
-            raise SystemExit("reference did not run the requested FSR 4.1.2 model/profile: " + profile)
-        print(f"reference verified: FSR {version} {profile} {report['backend']}")
-    else:
+    if version == "4.0.2":
         refdir = DIST / ("reference-" + backend)
         run([str(ROOT / "tools/bin/fsr4mac"), str(testcase), str(refdir),
              *version_options, "--fp16" if backend == "f16" else "--i8mpp"], cwd=ROOT, env=env)
+        return refdir / "f00_out.bin"
+    refdir = DIST / f"reference-{version}-{profile}-{model}"
+    run([str(ROOT / "tools/bin/fsr4mac"), str(testcase), str(refdir),
+         *version_options, "--profile", profile, "--" + model], cwd=ROOT, env=env)
+    report = json.loads((refdir / "run.json").read_text())
+    if (report.get("fsr_version") != version or report.get("profile") != expected_profile
+            or report.get("backend") not in backends):
+        raise SystemExit(f"reference did not run the requested FSR {version} model/profile: {profile}")
+    print(f"reference verified: FSR {version} {profile} {report['backend']}")
     return refdir / "f00_out.bin"
 
 
@@ -945,29 +931,17 @@ def cmd_install(args):
     if fg == "anr":
         if not anr_runtime:
             raise SystemExit("--frame-generation anr requires --anr-runtime (prepared model, not the test kit)")
-        try:
-            anr_runtime = validate_anr_runtime(anr_runtime)
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            raise SystemExit("ANR: " + str(error)) from error
+        anr_runtime = check_anr_runtime(anr_runtime)
     if netal_runtime and not netal_source:
         raise SystemExit("--netal-runtime requires --netal-source (or FSR4_NETAL_SOURCE)")
     if netal_source and args.profile != "netal":
-        try:
-            prepare_sources(netal_source)
-            if netal_runtime:
-                netal_runtime = validate_runtime(netal_runtime)
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            raise SystemExit("Netal: " + str(error)) from error
+        netal_runtime = prepare_netal(netal_source, netal_runtime)
     if args.profile == "netal":
         if args.fsr_version == "4.0.2":
             raise SystemExit("Netal cannot be selected with --fsr-version 4.0.2 (the legacy model pin)")
         if not netal_source or not netal_runtime:
             raise SystemExit("Netal requires --netal-source and --netal-runtime (complete Preset K SR bundle); models are not downloaded")
-        try:
-            prepare_sources(netal_source)
-            netal_runtime = validate_runtime(netal_runtime)
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            raise SystemExit("Netal: " + str(error)) from error
+        netal_runtime = prepare_netal(netal_source, netal_runtime)
     if args.profile in LITE_LOSSY_PROFILES:
         if args.fsr_version != "4.1.2":
             raise SystemExit("Lite Lossy profiles require --fsr-version 4.1.2")

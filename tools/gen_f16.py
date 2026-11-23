@@ -20,7 +20,7 @@ Transform rules
   - op call names -> f16_* ; an output-scale float is appended where the
     int8 op took its store clamp from output.quantizationScale
 """
-import argparse, os, re, struct, sys
+import argparse, json, os, re, struct, sys
 
 # ---------------------------------------------------------------- helpers
 
@@ -156,11 +156,36 @@ _fconsts = {}
 def resolve(v):
     return _fconsts.get(v, v)
 
-def transform_model_source(src, init_blob):
-    """-> (new_src, blob_regions)  blob_regions: [(off, extent, scale)]"""
+def scan_args(s, pos):
+    """top-level comma split of the call args whose '(' is just before pos;
+    -> (fields, index just past the matching ')')."""
+    depth, j = 1, pos
+    while depth:
+        if s[j] == "(":
+            depth += 1
+        elif s[j] == ")":
+            depth -= 1
+        j += 1
+    return split_fields(s[pos:j - 1]), j
+
+def apply_edits(src, edits):
+    """splice (start, end, text) edits into src; spans inside an earlier
+    edit are dropped."""
+    edits.sort(key=lambda t: (t[0], -t[1]))
+    out, pos = [], 0
+    for s, e, txt in edits:
+        if s < pos:
+            continue
+        out.append(src[pos:s]); out.append(txt); pos = e
+    out.append(src[pos:])
+    return "".join(out)
+
+def collect_tensors(src):
+    """-> (scales, tensors)  scales: tensor name -> resolved quantization
+    scale (quantized decls); tensors: name -> decl info."""
     _fconsts.update(re.findall(r"const float (\w+) = ([-0-9.eE]+)", src))
-    scales = {}   # tensor name -> scale (quantized decls)
-    tensors = {}  # name -> dict(kind, scale, fields)
+    scales = {}
+    tensors = {}
     for m in DECL_RE.finditer(src):
         typ, storage, name = m.group(1), m.group(2), m.group(3)
         fields = split_fields(m.group(4))
@@ -169,12 +194,13 @@ def transform_model_source(src, init_blob):
             scales[name] = resolve(sc)
         tensors[name] = dict(typ=typ, storage=storage, scale=resolve(sc) if sc else None,
                              fields=fields, span=(m.start(), m.end()))
+    return scales, tensors
 
+def dequant_edits(src, tensors, regions=None):
+    """embedded array dequant: storage decl `{ NAME_dwords }` for a
+    QuantizedTensor4i8 constant tensor -> emit *_f16dwords. BufferStorage
+    QuantizedTensor4i8 decls append (off, extent, scale) to regions."""
     edits = []
-    blob_regions = []
-
-    # embedded array dequant: storage decl `{ NAME_dwords }` for a
-    # QuantizedTensor4i8 constant tensor -> emit *_f16dwords
     for name, ti in tensors.items():
         if not ti["typ"].startswith("QuantizedTensor4i8"):
             continue
@@ -186,8 +212,7 @@ def transform_model_source(src, init_blob):
             if not pa:
                 sys.exit("array %s not found" % arr)
             s, e, n, dw = pa
-            fq = [v * float(ti["scale"]) for v in unpack_i8_dwords(dw)]
-            packed = f16pack(fq)
+            packed = f16pack([v * float(ti["scale"]) for v in unpack_i8_dwords(dw)])
             lines = ["    " + ", ".join("0x%x" % d for d in packed[i:i + 8]) + ","
                      for i in range(0, len(packed), 8)]
             edits.append((s, e, "static const uint %s_f16dwords[%d] = {\n%s\n};" %
@@ -195,38 +220,37 @@ def transform_model_source(src, init_blob):
             edits.append((sm.start(), sm.end(),
                           "const ConstantBufferStorage<%d> storage_%s = { %s_f16dwords };" %
                           (int(sm.group(1)) * 2, name, arr)))
-        elif ti["storage"] == "BufferStorage":
+        elif ti["storage"] == "BufferStorage" and regions is not None:
             off = None
             for f in ti["fields"]:
                 if re.match(r"^\d+$", f):
                     off = int(f)
             if off is None:
                 sys.exit("no offset for " + name)
-            ext = region_extent(ti["fields"])
-            blob_regions.append((off, ext, float(ti["scale"])))
+            regions.append((off, region_extent(ti["fields"]), float(ti["scale"])))
+    return edits
 
-    # decl rewrites — every DECL_RE match (tensor names can repeat across
-    # #if variants, so iterate matches not the name dict)
+def common_edits(src):
+    """decl rewrites — every DECL_RE match (tensor names can repeat across
+    #if variants, so iterate matches not the name dict) — plus the slice
+    scalar decls."""
+    edits = []
     for m in DECL_RE.finditer(src):
         if m.group(1) in TYPE_MAP:
             newtxt, _, _ = transform_decl(m)
             edits.append((m.start(), m.end(), newtxt))
-
-    # slice scalar decls
     for mm in re.finditer(r"const uint3 tensorByteStrides_(\w+) = uint3\((\d+), (\d+), (\d+)\);", src):
         a, b, c = int(mm.group(2)) * 2, int(mm.group(3)) * 2, int(mm.group(4)) * 2
         edits.append((mm.start(), mm.end(),
                       "const uint3 tensorByteStrides_%s = uint3(%d, %d, %d);" % (mm.group(1), a, b, c)))
+    return edits
 
-    # apply text edits
-    edits.sort(key=lambda t: (t[0], -t[1]))
-    out, pos = [], 0
-    for s, e, txt in edits:
-        if s < pos:
-            continue
-        out.append(src[pos:s]); out.append(txt); pos = e
-    out.append(src[pos:])
-    src = "".join(out)
+def transform_model_source(src):
+    """-> (new_src, blob_regions)  blob_regions: [(off, extent, scale)]"""
+    scales, tensors = collect_tensors(src)
+    blob_regions = []
+    edits = dequant_edits(src, tensors, blob_regions) + common_edits(src)
+    src = apply_edits(src, edits)
 
     # entry/include renames
     src = src.replace("fsr4_model_v07_i8_", "fsr4_model_v07_f16_")
@@ -240,23 +264,12 @@ def transform_model_source(src, init_blob):
         "StoreConstBatchOperation < half4, 8, Tensor3h_NHWC", src)
 
     # --- call rewrites (operate on transformed text; tensor names unchanged)
-    def find_call_args(pos):
-        depth, j = 1, pos
-        while depth:
-            if src[j] == "(":
-                depth += 1
-            elif src[j] == ")":
-                depth -= 1
-            j += 1
-        return src[pos:j - 1], j
-
     call_edits = []
     for m in re.finditer(
             r"(?<![A-Za-z0-9_])(Conv2D_k2s2b|ConvNextBlock|FusedConv2D_k2s2b_QuantizedOutput|"
             r"FasterNetBlock|FNB_CT2D_ADD)\s*(<[0-9, ]+>)?\s*\(", src):
         op, tmpl = m.group(1), m.group(2) or ""
-        args_s, end = find_call_args(m.end())
-        args = split_fields(args_s)
+        args, end = scan_args(src, m.end())
         tail = args[-1].strip()
         if tail != "computeShaderParams":
             continue    # comment/prototype matches, not a real dispatch call
@@ -284,74 +297,22 @@ def transform_model_source(src, init_blob):
             continue
         call_edits.append((m.start(), end, nc))
 
-    call_edits.sort(key=lambda t: t[0])
-    out, pos = [], 0
-    for s, e, txt in call_edits:
-        if s < pos:
-            continue
-        out.append(src[pos:s]); out.append(txt); pos = e
-    out.append(src[pos:])
-    return "".join(out), blob_regions
+    return apply_edits(src, call_edits), blob_regions
 
 def transform_post(src):
-    _fconsts.update(re.findall(r"const float (\w+) = ([-0-9.eE]+)", src))
     """post.hlsl: same machinery but simpler call rewrite (the fused
     FusedConv2D_DW_Conv2D_PW_Relu_Conv2D_Add_ConvTranspose2D -> same name is
     defined in post_common_f16.hlsli with fp16 signature)."""
-    scales = {}
-    tensors = {}
-    for m in DECL_RE.finditer(src):
-        typ, storage, name = m.group(1), m.group(2), m.group(3)
-        fields = split_fields(m.group(4))
-        sc = tensor_scale(fields)
-        if sc is not None:
-            scales[name] = resolve(sc)
-        tensors[name] = dict(typ=typ, storage=storage, scale=resolve(sc) if sc else None,
-                             fields=fields, span=(m.start(), m.end()))
-    edits = []
-    for name, ti in tensors.items():
-        if not ti["typ"].startswith("QuantizedTensor4i8"):
-            continue
-        sm = re.search(
-            r"const ConstantBufferStorage<(\d+)> storage_%s = \{ (\w+)_dwords \};" % name, src)
-        if ti["storage"].startswith("ConstantBufferStorage") and sm:
-            arr = sm.group(2)
-            pa = dword_array(src, arr)
-            s, e, n, dw = pa
-            fq = [v * float(ti["scale"]) for v in unpack_i8_dwords(dw)]
-            packed = f16pack(fq)
-            lines = ["    " + ", ".join("0x%x" % d for d in packed[i:i + 8]) + ","
-                     for i in range(0, len(packed), 8)]
-            edits.append((s, e, "static const uint %s_f16dwords[%d] = {\n%s\n};" %
-                          (arr, len(packed), "\n".join(lines))))
-            edits.append((sm.start(), sm.end(),
-                          "const ConstantBufferStorage<%d> storage_%s = { %s_f16dwords };" %
-                          (int(sm.group(1)) * 2, name, arr)))
-        elif ti["storage"] == "BufferStorage":
-            pass  # post has no InitializerBuffer tensors
-    for m in DECL_RE.finditer(src):
-        if m.group(1) in TYPE_MAP:
-            newtxt, _, _ = transform_decl(m)
-            edits.append((m.start(), m.end(), newtxt))
-    for mm in re.finditer(r"const uint3 tensorByteStrides_(\w+) = uint3\((\d+), (\d+), (\d+)\);", src):
-        a, b, c = int(mm.group(2)) * 2, int(mm.group(3)) * 2, int(mm.group(4)) * 2
-        edits.append((mm.start(), mm.end(),
-                      "const uint3 tensorByteStrides_%s = uint3(%d, %d, %d);" % (mm.group(1), a, b, c)))
-    edits.sort(key=lambda t: (t[0], -t[1]))
-    out, pos = [], 0
-    for s, e, txt in edits:
-        if s < pos:
-            continue
-        out.append(src[pos:s]); out.append(txt); pos = e
-    out.append(src[pos:])
-    src = "".join(out)
+    scales, tensors = collect_tensors(src)
+    # post has no InitializerBuffer tensors -> regions stays empty
+    src = apply_edits(src, dequant_edits(src, tensors) + common_edits(src))
     src = src.replace('#include "post_common.hlsli"', '#include "post_common_f16.hlsli"')
     src = re.sub(
         r"StoreConstBatchOperation\s*<\s*int8_t4_packed\s*,\s*16\s*,\s*QuantizedTensor3i8_NHWC",
         "StoreConstBatchOperation < half4, 8, Tensor3h_NHWC", src)
     return src, scales
 
-def gen_pre(pre_src, preset_dir):
+def gen_pre(pre_src):
     """pre.hlsl -> pre_f16.hlsl: swap include only; pre_common_f16 carries
     the fp16 slice_0 decl + store."""
     src = pre_src.replace('#include "pre_common.hlsli"',
@@ -378,39 +339,36 @@ def _halves_of_dwords(dw):
         out.append(struct.unpack("<e", struct.pack("<H", (d >> 16) & 0xFFFF))[0])
     return out
 
+def kn_transpose(w, dims, strd, kpad):
+    """weight halves -> [K][N] row-major (N contiguous), K padded to kpad;
+    src elem (c,i) at c*strd[2] + i*strd[3]."""
+    k, n = dims[2], dims[3]
+    out = [0.0] * (kpad * n)
+    for c in range(k):
+        for i in range(n):
+            out[c * n + i] = w[int(c * strd[2] + i * strd[3])]
+    return out
+
 def emit_mpp(src, initf16, outdir):
-    import json
     manifest = {"passes": {}}
     blob = bytearray()
-    passes = re.split(r"(void fsr4_model_v07_f16_pass\d+\()", src)
-    for i in range(1, len(passes), 2):
-        hdr, body = passes[i], passes[i + 1]
-        pn = int(re.search(r"pass(\d+)", hdr).group(1))
-        cm = re.search(r"f16_FNB<(\d+),\s*(\d+)>\s*\(", body)
-        if not cm:
-            continue
-        nf, ng = int(cm.group(1)), int(cm.group(2))
-        args_s = body[cm.end():]
-        depth, j = 1, 0
-        while depth:
-            if args_s[j] == "(": depth += 1
-            elif args_s[j] == ")": depth -= 1
-            j += 1
-        args = split_fields(args_s[:j - 1])
-        floats = [a for a in args if is_float(a)]
-        tens = [a for a in args if not is_float(a)]
-        if len(floats) != 5 or len(tens) != 9 or tens[-1] != "computeShaderParams":
-            continue
-        input_, w0, b0, w1, b1, w2, b2, output_ = tens[:8]
+
+    def put(vals):
+        nonlocal blob
+        off = len(blob)
+        for v in vals:
+            blob += struct.pack("<e", v)
+        return off
+
+    def ctx(body):
+        """(tinfo, wdata) lookup helpers bound to one pass body."""
 
         def decl(name):
             m = re.search(
                 r"const (?:Tensor3h_NHWC|Tensor4h_NHWC|Tensor4h_HWCN|Tensor1h)"
                 r"\s*<[^;=]*?>\s+" + re.escape(name) + r"\s*=\s*\{(.*?)\};",
                 body, re.S)
-            if not m:
-                return None
-            return split_fields(m.group(1))
+            return split_fields(m.group(1)) if m else None
 
         def resolve_tup(f):
             """field -> list of ints; handles literal tuples and
@@ -458,9 +416,7 @@ def emit_mpp(src, initf16, outdir):
                 if not am:
                     sys.exit("mpp: array " + sm.group(1) + " not found")
                 return _halves_of_dwords(_u32s(am.group(2))), dims, strd
-            off_f = f[len(f) - 2]
-            mm = re.search(r"(\d+)\s*$", off_f)
-            off = int(mm.group(1))
+            off = int(re.search(r"(\d+)\s*$", f[len(f) - 2]).group(1))
             n = 1
             for d in dims:
                 n *= d
@@ -468,13 +424,30 @@ def emit_mpp(src, initf16, outdir):
             return [struct.unpack("<e", raw[k * 2:k * 2 + 2])[0]
                     for k in range(n)], dims, strd
 
-        def put(vals):
-            nonlocal blob
-            off = len(blob)
-            for v in vals:
-                blob += struct.pack("<e", v)
-            return off
+        return tinfo, wdata
 
+    def call_args(body, cm):
+        args, _ = scan_args(body, cm.end())
+        floats = [a for a in args if is_float(a)]
+        tens = [a for a in args if not is_float(a)]
+        if len(floats) != 5 or len(tens) != 9 or tens[-1] != "computeShaderParams":
+            return None
+        return floats, tens
+
+    passes = re.split(r"(void fsr4_model_v07_f16_pass\d+\()", src)
+    bodies = [(int(re.search(r"pass(\d+)", passes[i]).group(1)), passes[i + 1])
+              for i in range(1, len(passes), 2)]
+    for pn, body in bodies:
+        cm = re.search(r"f16_FNB<(\d+),\s*(\d+)>\s*\(", body)
+        if not cm:
+            continue
+        nf, ng = int(cm.group(1)), int(cm.group(2))
+        ft = call_args(body, cm)
+        if ft is None:
+            continue
+        floats, tens = ft
+        input_, w0, b0, w1, b1, w2, b2, output_ = tens[:8]
+        tinfo, wdata = ctx(body)
         ti = tinfo(input_)
         to = tinfo(output_)
         w0h, w0d, w0s = wdata(w0)
@@ -483,20 +456,9 @@ def emit_mpp(src, initf16, outdir):
         b1h, _, _ = wdata(b1)
         w2h, w2d, w2s = wdata(w2)
         b2h, _, _ = wdata(b2)
-
         cin, cout = w1d[2], w1d[3]
         kpad = (cin + 63) // 64 * 64
-        # transpose to [K][N] row-major; src elem (c,i) at c*w1s[2] + i*w1s[3]
-        w1t = [0.0] * (kpad * cout)
-        for c in range(cin):
-            for i in range(cout):
-                w1t[c * cout + i] = w1h[int(c * w1s[2] + i * w1s[3])]
         k2, n2 = w2d[2], w2d[3]
-        w2t = [0.0] * (k2 * n2)
-        for c in range(k2):
-            for i in range(n2):
-                w2t[c * n2 + i] = w2h[int(c * w2s[2] + i * w2s[3])]
-
         manifest["passes"][str(pn)] = dict(
             kind="fnb",
             nf=nf, ng=ng,
@@ -505,93 +467,35 @@ def emit_mpp(src, initf16, outdir):
             w0s=w0s, w0d=w0d,
             K1=kpad, N1=cout, K2=k2, N2=n2,
             scales=[floats[1], floats[2], floats[3], floats[4]],
-            w0=put(w0h), b0=put(b0h), w1=put(w1t), b1=put(b1h),
-            w2=put(w2t), b2=put(b2h))
-        continue
-    # second split pass: CNB calls (separate loop below needs per-pass body)
-    passes2 = re.split(r"(void fsr4_model_v07_f16_pass\d+\()", src)
-    for i in range(1, len(passes2), 2):
-        hdr, body = passes2[i], passes2[i + 1]
-        pn = int(re.search(r"pass(\d+)", hdr).group(1))
+            w0=put(w0h), b0=put(b0h),
+            w1=put(kn_transpose(w1h, w1d, w1s, kpad)), b1=put(b1h),
+            w2=put(kn_transpose(w2h, w2d, w2s, k2)), b2=put(b2h))
+    # second pass: CNB calls in the passes no FNB entry claimed
+    for pn, body in bodies:
         if str(pn) in manifest["passes"]:
             continue
         cm = re.search(r"f16_ConvNextBlock\s*\(", body)
         if not cm:
             continue
-        args_s = body[cm.end():]
-        depth, j = 1, 0
-        while depth:
-            if args_s[j] == "(": depth += 1
-            elif args_s[j] == ")": depth -= 1
-            j += 1
-        args = split_fields(args_s[:j - 1])
-        floats = [a for a in args if is_float(a)]
-        tens = [a for a in args if not is_float(a)]
-        if len(floats) != 5 or len(tens) != 9 or tens[-1] != "computeShaderParams":
+        ft = call_args(body, cm)
+        if ft is None:
             continue
+        floats, tens = ft
         input_, w0, b0, w1, b1, w2, b2, output_ = tens[:8]
-
-        def decl(name):
-            m = re.search(
-                r"const (?:Tensor3h_NHWC|Tensor4h_NHWC|Tensor4h_HWCN|Tensor1h)"
-                r"\s*<[^;=]*?>\s+" + re.escape(name) + r"\s*=\s*\{(.*?)\};",
-                body, re.S)
-            return split_fields(m.group(1)) if m else None
-
-        def resolve_tup2(f):
-            if is_tuple(f):
-                return [int(v) for v in re.findall(r"\d+", f[f.index("("):])]
-            m = re.search(r"const u?int\d\s+" + re.escape(f) +
-                          r"\s*=\s*u?int\d\(([^)]*)\)", body)
-            return [int(v) for v in re.findall(r"\d+", m.group(1))]
-
-        def tin2(name):
-            f = decl(name)
-            return dict(off=int(re.search(r"(\d+)\s*$", f[len(f) - 2]).group(1)),
-                        strides=resolve_tup2(f[4]), dims=resolve_tup2(f[0]))
-
-        def wdat2(name):
-            f = decl(name)
-            tup = [x for x in f if is_tuple(x)]
-            dims = [int(v) for v in re.findall(r"\d+", tup[0][tup[0].index("("):])] \
-                if tup else [int(x) for x in f if re.match(r"^-?\d+$", x)][:1]
-            strd = [int(v) // 2 for v in
-                    re.findall(r"\d+", tup[4][tup[4].index("("):])] \
-                if len(tup) >= 5 else [1]
-            sm = re.search(r"const ConstantBufferStorage<\d+> storage_" +
-                           re.escape(name) + r"\s*=\s*\{\s*(\w+)\s*\};", body)
-            if sm:
-                am = re.search(r"static const uint %s\[(\d+)\]\s*=\s*\{(.*?)\};"
-                               % re.escape(sm.group(1)), src, re.S)
-                return _halves_of_dwords(_u32s(am.group(2))), dims, strd
-            off = int(re.search(r"(\d+)\s*$", f[len(f) - 2]).group(1))
-            n = 1
-            for dd in dims:
-                n *= dd
-            raw = initf16[off:off + n * 2]
-            return [struct.unpack("<e", raw[k * 2:k * 2 + 2])[0]
-                    for k in range(n)], dims, strd
-
-        def put(vals):
-            nonlocal blob
-            off = len(blob)
-            for v in vals:
-                blob += struct.pack("<e", v)
-            return off
-
-        w0h, w0d, w0s = wdat2(w0)
-        w1h, w1d, w1s = wdat2(w1)
-        w2h, w2d, w2s = wdat2(w2)
+        tinfo, wdata = ctx(body)
+        w0h, w0d, w0s = wdata(w0)
+        w1h, w1d, w1s = wdata(w1)
+        w2h, w2d, w2s = wdata(w2)
         # kernel supports only the CNB16 shape: 16->16(3x3), 16->32, 32->16
         if not (w0d == [3, 3, 16, 16] and w1d == [1, 1, 16, 32]
                 and w2d == [1, 1, 32, 16]):
             continue
-        b0h, _, _ = wdat2(b0)
-        b1h, _, _ = wdat2(b1)
-        b2h, _, _ = wdat2(b2)
+        b0h, _, _ = wdata(b0)
+        b1h, _, _ = wdata(b1)
+        b2h, _, _ = wdata(b2)
         manifest["passes"][str(pn)] = dict(
             kind="cnb",
-            inT=tin2(input_), outT=tin2(output_),
+            inT=tinfo(input_), outT=tinfo(output_),
             w0s=w0s, w0d=w0d, w1s=w1s, w2s=w2s,
             # kernel wants final requant scales: conv1/2 take 1/rcpr,
             # contract store takes outputScale directly
@@ -600,14 +504,11 @@ def emit_mpp(src, initf16, outdir):
             w0=put(w0h), b0=put(b0h), w1=put(w1h), b1=put(b1h),
             w2=put(w2h), b2=put(b2h))
     if manifest["passes"]:
-        open(os.path.join(a_out(outdir, "mpp_weights.bin")), "wb").write(blob)
+        open(os.path.join(outdir, "mpp_weights.bin"), "wb").write(blob)
         open(os.path.join(outdir, "mpp_manifest.json"), "w").write(
             json.dumps(manifest, indent=1))
         print("gen_f16: mpp manifest for passes %s" %
               ",".join(sorted(manifest["passes"], key=int)))
-
-def a_out(outdir, name):
-    return os.path.join(outdir, name)
 
 def write_blob(regions, init_blob, outpath):
     size = len(init_blob) * 2
@@ -632,7 +533,7 @@ def main():
     init_blob = open(os.path.join(pdir, "initializers.bin"), "rb").read()
 
     passes = open(os.path.join(pdir, "passes_%s.hlsl" % a.res)).read()
-    newsrc, regions = transform_model_source(passes, init_blob)
+    newsrc, regions = transform_model_source(passes)
     os.makedirs(a.outdir, exist_ok=True)
     open(os.path.join(a.outdir, "passes_%s.hlsl" % a.res), "w").write(newsrc)
 
@@ -641,7 +542,7 @@ def main():
     open(os.path.join(a.outdir, "post_f16.hlsl"), "w").write(postsrc)
 
     pre = open(os.path.join(pdir, "pre.hlsl")).read()
-    open(os.path.join(a.outdir, "pre_f16.hlsl"), "w").write(gen_pre(pre, pdir))
+    open(os.path.join(a.outdir, "pre_f16.hlsl"), "w").write(gen_pre(pre))
 
     initf16 = write_blob(regions, init_blob,
                os.path.join(a.outdir, "initializers_f16.bin"))

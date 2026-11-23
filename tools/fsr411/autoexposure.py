@@ -15,8 +15,6 @@ The original ae_ours.hlsl remains available as an independent oracle.
 """
 
 
-THREADS_PER_GROUP = 256
-TILE_SIDE = 64
 MARKER = "// fsr411-generated-autoexposure: "
 
 

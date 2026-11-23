@@ -6,8 +6,7 @@ It does not execute the DLL/GPU or claim untested Windows/runtime equivalence.
 """
 from pathlib import Path
 import json
-import subprocess
-from upstream_oracle import external_output, require, sha256, translate, NOOP_SHA256
+from upstream_oracle import build_metallib, external_output, require, sha256, translate, NOOP_SHA256
 from oracle_variants import build_selected
 from oracle_pass1_border import build as build_pass1_border
 from lossy_weights import decode_post
@@ -36,12 +35,8 @@ def resource_abi(selected,inventory):
 
 
 def compile_source(bundle,stem,optimization=None):
-    msl=bundle/(stem+'.metal');air=bundle/(stem+'.air');library=bundle/(stem+'.metallib')
-    command=['xcrun','-sdk','macosx','metal','-std=metal3.1','-fno-fast-math']
-    if optimization:command.append(optimization)
-    command+=['-c',str(msl),'-o',str(air)];subprocess.run(command,check=True)
-    subprocess.run(['xcrun','-sdk','macosx','metallib',str(air),'-o',str(library)],check=True)
-    return {'compile_command':command,'optimization_profile':optimization or 'default','library_sha256':sha256(library.read_bytes())}
+    command,library_sha256=build_metallib(bundle,stem,optimization)
+    return {'compile_command':command,'optimization_profile':optimization or 'default','library_sha256':library_sha256}
 
 
 def build_bundle(assets,bundle,selected,converter,cross,compile_metal=False,post_mode='isolated'):

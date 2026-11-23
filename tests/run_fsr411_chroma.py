@@ -18,12 +18,14 @@ import json
 from pathlib import Path
 import re
 import subprocess
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
+if __package__:
+    from . import probe_pipeline as probe
+else:
+    import probe_pipeline as probe
+
 from compile_fsr411 import portability_source, run
-from compile_variant import parse_signature, patch_spv, wgsize
+from compile_variant import parse_signature, wgsize
 
 
 def sha256(path: Path) -> str:
@@ -32,7 +34,7 @@ def sha256(path: Path) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--builddir", type=Path, default=ROOT / "build/fsr411-chroma-probe",
+    parser.add_argument("--builddir", type=Path, default=probe.ROOT / "build/fsr411-chroma-probe",
                         help="artifact parent; production and raw use separate subdirectories")
     parser.add_argument("--compile-only", action="store_true")
     parser.add_argument("--raw", action="store_true",
@@ -42,7 +44,7 @@ def main() -> int:
     output = args.builddir.resolve() / mode
     output.mkdir(parents=True, exist_ok=True)
 
-    source_path = ROOT / "third_party/fsr411/shaders/reimpl2160/pre_rev_411_v15_2160.hlsl"
+    source_path = probe.ROOT / "third_party/fsr411/shaders/reimpl2160/pre_rev_411_v15_2160.hlsl"
     source = source_path.read_text()
     matches = list(re.finditer(r"^[ \t]*const float color_distance = [^;\n]+;", source, re.M))
     if len(matches) != 1:
@@ -67,7 +69,6 @@ void main(uint3 dtid : SV_DispatchThreadID)
     (output / "chroma.imported.hlsl").write_text(snippet)
     hlsl = output / "chroma.hlsl"
     hlsl.write_text(snippet if args.raw else portability_source(snippet))
-    tool = ROOT / "tools/bin"
     spv, metal, air, library = [output / ("chroma." + ext)
                                for ext in ("spv", "metal", "air", "metallib")]
     commands = []
@@ -79,14 +80,7 @@ void main(uint3 dtid : SV_DispatchThreadID)
 
     # Match compile_fsr411.py's PRE DXC/SPIRV-Cross flags. This small kernel
     # has no imported includes, feature defines, loop hints or literal tables.
-    execute([tool / "dxc", "-spirv", "-T", "cs_6_6", "-E", "main",
-             "-enable-16bit-types", "-HV", "2021", "-O3", "-Vd",
-             "-fspv-target-env=vulkan1.3", "-fvk-t-shift", "32", "0",
-             "-fvk-u-shift", "64", "0", "-Fo", spv, hlsl], output / "dxc.log")
-    patch_count = patch_spv(str(spv))
-    execute([tool / "spirv-val", "--target-env", "vulkan1.3", spv],
-            output / "validation.log")
-    msl = execute([tool / "spirv-cross", spv, "--msl", "--msl-version", "20300"]).decode()
+    msl, patch_count = probe.hlsl_to_msl(hlsl, spv, execute=execute)
     entry = "fsr411_chroma_probe"
     msl, renamed = re.subn(r"(kernel\s+void\s+)\w+(\s*\()",
                            rf"\g<1>{entry}\2", msl, count=1)
@@ -101,7 +95,7 @@ void main(uint3 dtid : SV_DispatchThreadID)
     buffers, textures, samplers = parse_signature(msl, entry)
     if sorted(binding[1] for binding in buffers) != ["inputPairs", "outputDistances"] or textures or samplers:
         raise ValueError("unexpected reflected probe resources")
-    workgroup = wgsize(str(spv), "main", str(tool / "spirv-cross"))
+    workgroup = wgsize(str(spv), "main", str(probe.TOOL / "spirv-cross"))
     if workgroup != [1, 1, 1]:
         raise ValueError("probe requires exactly one invocation per dispatched threadgroup")
     info = {"entry": entry, "library": library.name, "wgsize": workgroup,
@@ -109,7 +103,7 @@ void main(uint3 dtid : SV_DispatchThreadID)
             "mode": mode}
     (output / "binding.json").write_text(json.dumps(info, indent=2) + "\n")
 
-    harness = ROOT / "tests/fsr411_chroma_test.mm"
+    harness = probe.ROOT / "tests/fsr411_chroma_test.mm"
     binary = output / "fsr411_chroma_test"
     execute(["xcrun", "clang++", "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror",
              "-fno-fast-math", "-ffp-contract=off", "-fobjc-arc",
@@ -117,7 +111,7 @@ void main(uint3 dtid : SV_DispatchThreadID)
             output / "harness.log")
     receipt = {
         "mode": mode,
-        "source": str(source_path.relative_to(ROOT)),
+        "source": str(source_path.relative_to(probe.ROOT)),
         "source_sha256": sha256(source_path),
         "source_line": source_line,
         "imported_expression": expression,
@@ -127,17 +121,18 @@ void main(uint3 dtid : SV_DispatchThreadID)
         "metal_options": ["-std=macos-metal2.3", *math_options],
         "metal_version": run(["xcrun", "metal", "--version"]).decode().strip(),
         "spirv_copy_patches": patch_count,
-        "tool_sha256": {name: sha256(tool / name) for name in ("dxc", "spirv-cross", "spirv-val")},
+        "tool_sha256": {name: sha256(probe.TOOL / name) for name in ("dxc", "spirv-cross", "spirv-val")},
         "production_source_sha256": {
-            name: sha256(ROOT / name)
+            name: sha256(probe.ROOT / name)
             for name in ("tools/compile_fsr411.py", "tools/compile_variant.py", "tools/fsr411/portability.py")
         },
         "artifact_sha256": {path.name: sha256(path) for path in
                             (hlsl, spv, metal, library, binary)},
         "harness_source_sha256": sha256(harness),
         "runner_source_sha256": sha256(Path(__file__)),
+        "probe_pipeline_sha256": sha256(Path(probe.__file__)),
         "commands": commands,
-        "reflection_command": [str(tool / "spirv-cross"), str(spv), "--reflect"],
+        "reflection_command": [str(probe.TOOL / "spirv-cross"), str(spv), "--reflect"],
     }
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     # A compile-only run must not leave an older GPU result appearing current.
@@ -150,8 +145,4 @@ void main(uint3 dtid : SV_DispatchThreadID)
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except (OSError, ValueError, RuntimeError) as error:
-        print(f"FSR 4.1.1 chroma probe: {error}", file=sys.stderr)
-        raise SystemExit(1)
+    probe.run_probe("FSR 4.1.1 chroma probe", main)

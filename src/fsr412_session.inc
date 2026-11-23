@@ -1,6 +1,40 @@
 // SPDX-License-Identifier: MIT
 // Model-specific loader within fsr411::Runtime. Resource lifetime, input
 // conversion and Metal 3/4 synchronization use the common runtime.
+
+// Shared tail of every session loader: build one manifest kernel entry into
+// a PSO, attach optional literal tables and record resource bindings.
+// `family`/`wgError` keep each route's established diagnostics. `descriptorPso`
+// requests the explicit threadgroup descriptor (all Lite kernels, MPP-tuned
+// 4.1.1 entries); otherwise the plain function-based pipeline is created.
+bool load_kernel_entry(const std::string &dir,NSDictionary *entry,const std::string &stage,
+                       const char *family,const std::string &wgError,Kernel &k,std::string &error,
+                       bool descriptorPso=true) {
+    NSError *e=nil;
+    auto lib=[device_ newLibraryWithURL:[NSURL fileURLWithPath:ns(dir+"/"+utf8(entry[@"library"]))] error:&e];
+    auto fn=lib?[lib newFunctionWithName:entry[@"entry"]]:nil;
+    NSArray *wg=entry[@"wgsize"];if(wg.count!=3) {error=wgError;return false;}
+    k.threads=MTLSizeMake([wg[0] unsignedIntValue],[wg[1] unsignedIntValue],[wg[2] unsignedIntValue]);
+    if(descriptorPso) {
+        MTLComputePipelineDescriptor *descriptor=[MTLComputePipelineDescriptor new];
+        descriptor.computeFunction=fn;
+        descriptor.maxTotalThreadsPerThreadgroup=k.threads.width*k.threads.height*k.threads.depth;
+        descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth=descriptor.maxTotalThreadsPerThreadgroup%32u==0;
+        k.pso=fn?[device_ newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&e]:nil;
+    } else if(fn) k.pso=[device_ newComputePipelineStateWithFunction:fn error:&e];
+    if(!k.pso) {error=std::string(family)+" pipeline "+stage+": "+metal_error(e);return false;}
+    if(NSString *tables=entry[@"literal_tables"]) {
+        NSData *bytes=[NSData dataWithContentsOfFile:ns(dir+"/"+utf8(tables))];
+        if(!bytes.length) {error=std::string("missing ")+family+" shader table";return false;}
+        k.literalTables=[device_ newBufferWithBytes:bytes.bytes length:bytes.length options:MTLResourceStorageModeShared];
+        if(!k.literalTables) {error=std::string("cannot allocate ")+family+" shader table";return false;}
+    }
+    for(NSArray *a in entry[@"buffers"])k.buffers.emplace_back([a[0] unsignedIntegerValue],utf8(a[1]));
+    for(NSArray *a in entry[@"textures"])k.textures.emplace_back([a[0] unsignedIntegerValue],utf8(a[1]));
+    for(NSArray *a in entry[@"samplers"])k.samplers.emplace_back([a[0] unsignedIntegerValue],utf8(a[1]));
+    return true;
+}
+
 Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &o,Kernels kind,std::string &error) {
     const bool lossy=o.profile==Profile::Int8LiteLossy;
     if(o.temporalQuality) {error="Lite does not support legacy temporal quality";return nullptr;}
@@ -106,24 +140,8 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
             error="invalid FSR 4.1.2 dispatch geometry: "+stage;return nullptr;
         }
         if(portable && s->nativeSequence.count(stage)) {s->kernels.emplace(stage,std::move(k));continue;}
-        NSError *e=nil;auto lib=[device_ newLibraryWithURL:[NSURL fileURLWithPath:ns(buildDir_+"/"+key+"/"+utf8(entry[@"library"]))] error:&e];
-        auto fn=lib?[lib newFunctionWithName:entry[@"entry"]]:nil;
-        NSArray *wg=entry[@"wgsize"];if(wg.count!=3) {error="missing FSR 4.1.2 threadgroup size";return nullptr;}
-        k.threads=MTLSizeMake([wg[0] unsignedIntValue],[wg[1] unsignedIntValue],[wg[2] unsignedIntValue]);
-        MTLComputePipelineDescriptor *descriptor=[MTLComputePipelineDescriptor new];
-        descriptor.computeFunction=fn;
-        descriptor.maxTotalThreadsPerThreadgroup=k.threads.width*k.threads.height*k.threads.depth;
-        descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth=descriptor.maxTotalThreadsPerThreadgroup%32u==0;
-        k.pso=fn?[device_ newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&e]:nil;
-        if(!k.pso) {error="FSR 4.1.2 pipeline "+stage+": "+metal_error(e);return nullptr;}
-        if(NSString *tables=entry[@"literal_tables"]) {
-            NSData *bytes=[NSData dataWithContentsOfFile:ns(buildDir_+"/"+key+"/"+utf8(tables))];
-            if(!bytes.length) {error="missing FSR 4.1.2 shader table";return nullptr;}
-            k.literalTables=[device_ newBufferWithBytes:bytes.bytes length:bytes.length options:MTLResourceStorageModeShared];
-        }
-        for(NSArray *a in entry[@"buffers"])k.buffers.emplace_back([a[0] unsignedIntegerValue],utf8(a[1]));
-        for(NSArray *a in entry[@"textures"])k.textures.emplace_back([a[0] unsignedIntegerValue],utf8(a[1]));
-        for(NSArray *a in entry[@"samplers"])k.samplers.emplace_back([a[0] unsignedIntegerValue],utf8(a[1]));
+        if(!load_kernel_entry(buildDir_+"/"+key,entry,stage,"FSR 4.1.2",
+                             "missing FSR 4.1.2 threadgroup size",k,error))return nullptr;
         s->kernels.emplace(stage,std::move(k));
     }
     for(const auto &name:order)if(!s->kernels.count(name)) {error="incomplete FSR 4.1.2 graph: "+name;return nullptr;}

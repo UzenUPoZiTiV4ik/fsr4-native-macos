@@ -1,27 +1,17 @@
-#import <Metal/Metal.h>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <vector>
+#include "mpp_probe.h"
+
+using namespace mpp_probe;
 
 struct DP { uint32_t W, H; int ox, oy, sx, sy, dx, dy; uint32_t useSliceA, useSliceD; };
 
 int main(int argc, char **argv) {
     @autoreleasepool {
-        id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
-        id<MTLCommandQueue> q = [dev newCommandQueue];
-        NSError *err = nil;
-        id<MTLLibrary> lib = [dev newLibraryWithURL:[NSURL fileURLWithPath:@"/tmp/mpp_diag.metallib"] error:&err];
-        if (!lib) { printf("lib: %s\n", err.localizedDescription.UTF8String); return 1; }
+        if (!open("/tmp/mpp_diag.metallib")) return 1;
         const int W = 96, H = 20, C = 16, O = 16;
         size_t na = (size_t)W * H * C, nw = 9 * C * O, no = (size_t)W * H * O;
-        id<MTLBuffer> a = [dev newBufferWithLength:na options:MTLResourceStorageModeShared];
-        id<MTLBuffer> w = [dev newBufferWithLength:nw options:MTLResourceStorageModeShared];
-        id<MTLBuffer> o = [dev newBufferWithLength:no * 4 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> a = mkbuf(na), w = mkbuf(nw), o = mkbuf(no * 4);
+        fill_i8(a, na, 1); fill_i8(w, nw, 0);
         int8_t *ap = (int8_t *)a.contents, *wp = (int8_t *)w.contents;
-        srand(1);
-        for (size_t i = 0; i < na; i++) ap[i] = (int8_t)(rand() % 256 - 128);
-        for (size_t i = 0; i < nw; i++) wp[i] = (int8_t)(rand() % 256 - 128);
         struct K { const char *n; int dw, dh; bool tiled; } ks[] = {
             {"diag_32x4_34x6", 32, 4, true}, {"diag_96x20_96x20", 96, 20, false},
             {"diag_32x4_96x20", 32, 4, true}, {"diag_32x4_32x4", 32, 4, true},
@@ -35,6 +25,7 @@ int main(int argc, char **argv) {
         };
         for (auto &k : ks) {
             id<MTLFunction> fn = [lib newFunctionWithName:[NSString stringWithUTF8String:k.n]];
+            NSError *err = nil;
             id<MTLComputePipelineState> pso = [dev newComputePipelineStateWithFunction:fn error:&err];
             if (!pso) { printf("%s pso: %s\n", k.n, err.localizedDescription.UTF8String); continue; }
             int offs[][2] = {{0, 0}, {-1, -1}, {-1000, -1000}, {1, 1}};   // -1000 => plain 0 without tile add

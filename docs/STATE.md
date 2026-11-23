@@ -479,7 +479,7 @@ built with `xcrun metal` into `build/.../i8mpp_<hash>.metallib`.
 
 Pass 13 = post's ConvNextBlock + ConvTranspose (see the 2026-09-23 section
 above); the int8 post is compiled with `-DFSR4_POST_EXT_CT2D`
-(`patches/hlsl/post_common.hlsli`, variant suffix `_pt`) and loads the model
+(`patches/hlsl/post_common.hlsli.patch`, variant suffix `_pt`) and loads the model
 parameters. Tensors are a fixed canvas per tier; the kernels tile only the
 `upscale>>(level+1)` region (`I8Mpp::set_region`).
 
@@ -701,7 +701,7 @@ Rules: compare only same-session numbers (GPU frequency scaling); never diff
 - Repo: `src/fsr4mac.mm` (host), `src/fnb_mpp.metal` (native kernels),
   `tools/gen_f16.py` (fp16 codegen + mpp manifest/weights),
   `tools/compile_variant.py` (DXC→SPIR-V→MSL pipeline),
-  `patches/hlsl/**` (patched operator headers),
+  `patches/hlsl/**` (local operators and deltas against AMD headers),
   `VERIFICATION.md` (accuracy evidence + rejected-approach metrics),
   `BENCHMARK.md` (perf protocol, per-pass table, bandwidth analysis),
   `README.md` (build/quickstart/toolchain details), `TESTDATA.md` (format).

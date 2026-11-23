@@ -217,7 +217,8 @@ static void run_probe(id<MTLDevice> device, id<MTLLibrary> library, id<MTLComman
 int main(int argc, char **argv) { @autoreleasepool {
     try {
         const bool cpuOnly = argc == 2 && std::strcmp(argv[1], "--cpu-only") == 0;
-        require(argc == 2, "usage: fsr411_quantize_test METALLIB | --cpu-only");
+        const bool simd = argc == 3 && std::strcmp(argv[2], "--simd") == 0;
+        require(argc == 2 || simd, "usage: fsr411_quantize_test METALLIB [--simd] | --cpu-only");
         check_scalar_contract();
         const auto cases = test_cases();
         require(cases.size() < UINT32_MAX && cases.size() % 128u != 0,
@@ -256,6 +257,11 @@ int main(int argc, char **argv) { @autoreleasepool {
         auto input = [device newBufferWithBytes:cases.data() length:cases.size() * sizeof(QuantizeCase) options:MTLResourceStorageModeShared];
         auto queue = [device newCommandQueue];
         require(input && queue, "cannot allocate quantization input/queue");
+        if (simd) {
+            run_probe(device, library, queue, input, cases, expected,
+                      "fsr411_simd_quantize_test", "production SIMD quantize", true);
+            return 0;
+        }
         run_probe(device, library, queue, input, cases, expected,
                   "fsr411_quantize_test", "production vector quantize", true);
         run_probe(device, library, queue, input, cases, expectedNoResidual,

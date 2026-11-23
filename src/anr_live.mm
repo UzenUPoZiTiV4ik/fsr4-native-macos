@@ -313,7 +313,7 @@ int fsr4_anr_encode_frame(const Fsr4AnrFrame *frame){@autoreleasepool{
         }];
     }
     if(!ok){v.history=false;return reject(error.empty()?"ANR: FG encode failed; keeping MetalFX":error.c_str());}
-    v.history=true;v.swapPending=true;status.width=f.uw;status.height=f.uh;
+    v.history=true;v.swapPending=true;
     if(priming){++status.primed;status.active=0;snprintf(status.reason,sizeof status.reason,"ANR: history primed; MetalFX presents first/reset frame");publish();return 2;}
     status.active=1;status.reason[0]=0;++status.generated;
     if(status.uiMode==FSR4_ANR_UI_PRECOMPOSITED)++status.uiComposited;

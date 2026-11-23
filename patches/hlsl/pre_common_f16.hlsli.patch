@@ -1,0 +1,125 @@
+--- third_party/fsr4/include/gpu/fsr4/pre_common.hlsli
++++ pre_common_f16.hlsli
+@@ -7,6 +7,7 @@
+
+ #include "ml2code_runtime/tensor_float16.hlsli"
+ #include "ml2code_runtime/tensor_int8.hlsli"
++#include "ml2code_runtime/fp16_ops.hlsli"
+
+ #define RESOLUTION_1080 0
+ #define RESOLUTION_2160 1
+@@ -263,7 +264,9 @@
+         const RWBufferStorage storage_slice_0 = { ScratchBuffer };
+         const uint3 paddingBegin_slice_0 = uint3(0, 0, 0);
+         const uint3 paddingEnd_slice_0 = uint3(0, 0, 0);
+-        const QuantizedTensor3i8_NHWC<RWBufferStorage> output = { logicalSize_slice_0, groupStart_slice_0, groupSize_slice_0, storageSize_slice_0, tensorByteStrides_slice_0, paddingBegin_slice_0, paddingEnd_slice_0, threadGroupByteOffsetInTensor_slice_0 + 0, quantizationScale_slice_0, storage_slice_0 };
++        const uint3 tensorByteStrides_f16_slice_0 = tensorByteStrides_slice_0 * 2;
++        const int threadGroupByteOffsetInTensor_f16_slice_0 = dot(groupStart_slice_0, tensorByteStrides_f16_slice_0);
++        const Tensor3h_NHWC<RWBufferStorage> output = { logicalSize_slice_0, groupStart_slice_0, groupSize_slice_0, storageSize_slice_0, tensorByteStrides_f16_slice_0, paddingBegin_slice_0, paddingEnd_slice_0, threadGroupByteOffsetInTensor_f16_slice_0 + 0, storage_slice_0 };
+
+         float accumulators[16];
+         [unroll]
+@@ -276,56 +279,59 @@
+         uint2 downscaleLocalID = gtid % 2;
+
+         [unroll]
+-        for (uint f = 0 ; f < 16; f++)
+-        {
+-            const uint weightsOffset = (downscaleLocalID.x + downscaleLocalID.y * 2 + 0 + f * 4);
+-            const uint4 weightDwords = embedded_encoder1_DownscaleStridedConv2x2_downscale_conv_weight_dwords_C[weightsOffset];
+-
+-            //const uint weightsOffset = weights.OffsetOf(uint4(downscaleLocalID.x, downscaleLocalID.y, 0, f));
+-            //const uint4 weightDwords = weights.storage.Load4(weightsOffset);
+-
+-            half4 ws = Unpack4h(weightDwords.xy);
+-            accumulators[f] = dot2add(ws.xy, downscaleInputs[0].xy, accumulators[f]);
+-            accumulators[f] = dot2add(ws.zw, downscaleInputs[0].zw, accumulators[f]);
+-
+-            ws = Unpack4h(weightDwords.zw);
+-            accumulators[f] = dot2add(ws.xy, downscaleInputs[1].xy, accumulators[f]);
+-            accumulators[f] = dot2add(ws.zw, downscaleInputs[1].zw, accumulators[f]);
+-
+-            // Add the results from the lanes in the quad to accumulators[f] .. f in [0..15]
+-            accumulators[f] += QuadReadAcrossX(accumulators[f]);
+-            accumulators[f] += QuadReadAcrossY(accumulators[f]);
++        for (uint f = 0; f < 16; f += 4)
++        {
++            const uint base = downscaleLocalID.x + downscaleLocalID.y * 2;
++            uint4 w0 = embedded_encoder1_DownscaleStridedConv2x2_downscale_conv_weight_dwords_C[base + (f + 0) * 4];
++            uint4 w1 = embedded_encoder1_DownscaleStridedConv2x2_downscale_conv_weight_dwords_C[base + (f + 1) * 4];
++            uint4 w2 = embedded_encoder1_DownscaleStridedConv2x2_downscale_conv_weight_dwords_C[base + (f + 2) * 4];
++            uint4 w3 = embedded_encoder1_DownscaleStridedConv2x2_downscale_conv_weight_dwords_C[base + (f + 3) * 4];
++            half4 h0 = Unpack4h(w0.xy), h1 = Unpack4h(w1.xy), h2 = Unpack4h(w2.xy), h3 = Unpack4h(w3.xy);
++            float a0 = dot2add(h0.xy, downscaleInputs[0].xy, accumulators[f]);
++            float a1 = dot2add(h1.xy, downscaleInputs[0].xy, accumulators[f + 1]);
++            float a2 = dot2add(h2.xy, downscaleInputs[0].xy, accumulators[f + 2]);
++            float a3 = dot2add(h3.xy, downscaleInputs[0].xy, accumulators[f + 3]);
++            a0 = dot2add(h0.zw, downscaleInputs[0].zw, a0);
++            a1 = dot2add(h1.zw, downscaleInputs[0].zw, a1);
++            a2 = dot2add(h2.zw, downscaleInputs[0].zw, a2);
++            a3 = dot2add(h3.zw, downscaleInputs[0].zw, a3);
++            h0 = Unpack4h(w0.zw); h1 = Unpack4h(w1.zw); h2 = Unpack4h(w2.zw); h3 = Unpack4h(w3.zw);
++            a0 = dot2add(h0.xy, downscaleInputs[1].xy, a0);
++            a1 = dot2add(h1.xy, downscaleInputs[1].xy, a1);
++            a2 = dot2add(h2.xy, downscaleInputs[1].xy, a2);
++            a3 = dot2add(h3.xy, downscaleInputs[1].xy, a3);
++            a0 = dot2add(h0.zw, downscaleInputs[1].zw, a0);
++            a1 = dot2add(h1.zw, downscaleInputs[1].zw, a1);
++            a2 = dot2add(h2.zw, downscaleInputs[1].zw, a2);
++            a3 = dot2add(h3.zw, downscaleInputs[1].zw, a3);
++            a0 += QuadReadAcrossX(a0); a0 += QuadReadAcrossY(a0);
++            a1 += QuadReadAcrossX(a1); a1 += QuadReadAcrossY(a1);
++            a2 += QuadReadAcrossX(a2); a2 += QuadReadAcrossY(a2);
++            a3 += QuadReadAcrossX(a3); a3 += QuadReadAcrossY(a3);
++            accumulators[f] = a0; accumulators[f + 1] = a1;
++            accumulators[f + 2] = a2; accumulators[f + 3] = a3;
+         }
+
+         if (all(downscaleLocalID == 0))
+         {
+-            // Add bias + Store
++            // Add bias + Store (fp16 real-domain: no requant, i8 saturation
++            // range preserved as a clamp)
+             const uint4 biasDwords = bias.storage.Load4(bias.OffsetOf(0));
+             const uint4 biasDwords2 = bias.storage.Load4(bias.OffsetOf(8));
+
+-            uint4 storageBytes;
+-
+-            float4 vs = float4(accumulators[0], accumulators[1], accumulators[2], accumulators[3]);
+-            int4 quantized_vs = round((vs + Unpack4h(biasDwords.xy)) * rcpScale);
+-            storageBytes.x = pack_clamp_s8(quantized_vs);
+-
+-            vs = float4(accumulators[4], accumulators[5], accumulators[6], accumulators[7]);
+-            quantized_vs = round((vs + Unpack4h(biasDwords.zw)) * rcpScale);
+-            storageBytes.y = pack_clamp_s8(quantized_vs);
+-
+-            vs = float4(accumulators[8], accumulators[9], accumulators[10], accumulators[11]);
+-            quantized_vs = round((vs + Unpack4h(biasDwords2.xy)) * rcpScale);
+-            storageBytes.z = pack_clamp_s8(quantized_vs);
+-
+-            vs = float4(accumulators[12], accumulators[13], accumulators[14], accumulators[15]);
+-            quantized_vs = round((vs + Unpack4h(biasDwords2.zw)) * rcpScale);
+-            storageBytes.w = pack_clamp_s8(quantized_vs);
+-
++            float4 vs0 = float4(accumulators[0], accumulators[1], accumulators[2], accumulators[3]) + Unpack4h(biasDwords.xy);
++            float4 vs1 = float4(accumulators[4], accumulators[5], accumulators[6], accumulators[7]) + Unpack4h(biasDwords.zw);
++            float4 vs2 = float4(accumulators[8], accumulators[9], accumulators[10], accumulators[11]) + Unpack4h(biasDwords2.xy);
++            float4 vs3 = float4(accumulators[12], accumulators[13], accumulators[14], accumulators[15]) + Unpack4h(biasDwords2.zw);
++
++            const float s = quantizationScale_slice_0;
+
+             int2 localId = int2(gid.xy) * int2(8, 8) + int2(gtid.xy/2);
+-            const uint byteAddress = output.OffsetOf(int3(localId, 0));
+-
+-            output.storage.Store4(byteAddress, storageBytes);
+-        }
+-    }
+-}
++            const int3 po = int3(localId, 0);
++            Store4hA(output, po + int3(0, 0, 0), half4(f16_requant4(vs0, float4(s, s, s, s))));
++            Store4hA(output, po + int3(0, 0, 4), half4(f16_requant4(vs1, float4(s, s, s, s))));
++            Store4hA(output, po + int3(0, 0, 8), half4(f16_requant4(vs2, float4(s, s, s, s))));
++            Store4hA(output, po + int3(0, 0, 12), half4(f16_requant4(vs3, float4(s, s, s, s))));
++        }
++    }
++}

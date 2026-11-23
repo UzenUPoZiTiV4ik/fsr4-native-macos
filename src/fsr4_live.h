@@ -133,6 +133,15 @@ void fsr4_live_set_sharpness(float sharpness, int rcas);
 // FSR4_PROFILE sets the initial preference; panel.conf overrides it unless
 // FSR4_SETTINGS=none. The 4.1.1 bridge includes 0-2 in its session/history
 // identity; switching to or from 3 or 5-8 changes the model and resets history.
+// Canonical profile names written to panel.conf and status.conf; the encoder
+// parses the same names (plus aliases) back.
+static inline const char *fsr4_live_profile_name(int profile) {
+    return profile == 1 ? "lossy" : profile == 2 ? "exact-fast" : profile == 3 ? "fsr4"
+         : profile == 4 ? "lossy2" : profile == 5 ? "int8-lite" : profile == 6 ? "int8-lite-pixfix"
+         : profile == 7 ? "int8-lite-lossy" : profile == 8 ? "int8-lite-lossy-tiled"
+         : profile == 9 ? "netal" : "exact";
+}
+
 void fsr4_live_get_profile(int *profile);
 // FSR 4.1.2 Lite pixelization fix strength 0..1 (panel slider, default 0.5);
 // used only with profile 6.

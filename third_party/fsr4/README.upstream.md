@@ -23,6 +23,10 @@ git checkout FETCH_HEAD
 
 ## Layout
 
+The macOS checkout keeps the INT8 and FP16 operator headers. It omits the
+unused `operators/{float32,float32_NHWC,float8_NHWC,uint8_NHWC}` families
+from the upstream layout shown below. The pinned checkout above contains them.
+
 ```
 src/Kits/FidelityFX/upscalers/fsr4/     the FSR 4 upscaler itself (12 MB, 183 files)
   include/ffx_provider_fsr4.h           provider class

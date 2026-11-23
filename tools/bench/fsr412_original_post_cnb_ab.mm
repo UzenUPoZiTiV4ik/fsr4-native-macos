@@ -139,7 +139,7 @@ int main(int argc,char **argv){@autoreleasepool{try {
     if(originalPair)b.kernels["post"].pipeline=originalCandidatePipeline;
     if(rowOrder){NSError *error=nil;auto lib=[b.device newLibraryWithURL:[NSURL fileURLWithPath:ns(root+"/build/fsr412_upstream/a69f41a0bb37376178001a7f73087d4726e21c0d531e7635653277053ac4b268.isolated-row.metallib")] error:&error];check(lib!=nil,utf8(error.localizedDescription));b.kernels["post"].pipeline=[b.device newComputePipelineStateWithFunction:[lib newFunctionWithName:@"main0"] error:&error];check(b.kernels["post"].pipeline!=nil,utf8(error.localizedDescription));}
     NativeCnb native(b,root,kind);unsigned skipped=0;double originalMs=0,rewriteMs=0,cnbMs=0;
-    for(unsigned f=0;f<frames;++f){inputs(a,f);inputs(b,f);float jx=f&1?-.25f:.125f,jy=f%3?1.f/6.f:-1.f/6.f;
+    for(unsigned f=0;f<frames;++f){inputs(a,f);inputs(b,f);float jx,jy;jitter(f,jx,jy);
         a.set_frame(jx,jy,f==0);b.set_frame(jx,jy,f==0);
         for(const std::string &stage:{"pre","pass1","pass2","border","pass3"}){a.dispatch(stage);b.dispatch(stage);}
         auto marker=*(const uint32_t *)((const uint8_t *)b.scratch.contents+33273792);bool skip=marker==1511506142;skipped+=skip;

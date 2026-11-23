@@ -5,6 +5,10 @@ imported model. Transforms reject unknown source shapes instead of guessing.
 """
 from __future__ import annotations
 import re
+try:
+    from upstream_oracle import balanced_end
+except ImportError:
+    from fsr412.upstream_oracle import balanced_end
 
 REVISION = 3
 
@@ -116,15 +120,8 @@ def post_color_tile(text: str) -> str:
 
 def closing(text, start, left="(", right=")"):
     assert text[start] == left
-    depth = 0
-    for index in range(start, len(text)):
-        if text[index] == left:
-            depth += 1
-        elif text[index] == right:
-            depth -= 1
-            if depth == 0:
-                return index
-    raise ValueError("unbalanced imported Metal expression")
+    return balanced_end(text, start, left, right,
+                        "unbalanced imported Metal expression")
 
 
 def input_color_cache(text: str, expected: int) -> tuple[str, str]:

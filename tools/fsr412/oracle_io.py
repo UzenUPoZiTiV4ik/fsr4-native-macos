@@ -8,6 +8,10 @@ matching DXIL masks at partial buffer boundaries.
 """
 from __future__ import annotations
 import re
+try:
+    from upstream_oracle import balanced_end, argument_list
+except ImportError:
+    from fsr412.upstream_oracle import balanced_end, argument_list
 
 HELPERS = r"""
 // Independent oracle IO ABI: preserve every valid access, zero invalid reads,
@@ -40,22 +44,7 @@ inline void OracleTextureWrite(texture2d<T,A> t, vec<T,4> v, uint2 p) {
 
 def _closing(text, start, opening="(", closing=")"):
     assert text[start] == opening
-    depth = 1
-    for end in range(start + 1, len(text)):
-        depth += (text[end] == opening) - (text[end] == closing)
-        if depth == 0:
-            return end
-    raise ValueError("unterminated Metal IO expression")
-
-
-def _arguments(text):
-    depth, start, result = 0, 0, []
-    for i, char in enumerate(text):
-        if char in "([{": depth += 1
-        elif char in ")]}": depth -= 1
-        elif char == "," and depth == 0:
-            result.append(text[start:i].strip()); start = i + 1
-    return result + [text[start:].strip()]
+    return balanced_end(text, start, opening, closing, "unterminated Metal IO expression")
 
 
 def guard_scalar_io(source, bindings, buffer_byte_lengths):
@@ -73,7 +62,7 @@ def guard_scalar_io(source, bindings, buffer_byte_lengths):
     atomic_sites = []
     for match in re.finditer(r"atomic_fetch_max_explicit\(", source):
         end = _closing(source, match.end() - 1)
-        arguments = _arguments(source[match.end():end])
+        arguments = argument_list(source[match.end():end])
         if len(arguments) != 3:
             raise ValueError("unexpected atomic shape")
         pointer = re.fullmatch(r"\(device atomic_uint\*\)&(\w+)\._m0\[(.*)\]", arguments[0], re.S)

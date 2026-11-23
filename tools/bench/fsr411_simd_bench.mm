@@ -6,6 +6,7 @@
 #import <Metal/Metal.h>
 #include "../../src/fsr411_model.h"
 #include "../../src/fsr411_simd_weights.h"
+#include "bench_gpu.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -13,22 +14,8 @@
 #include <stdexcept>
 #include <vector>
 
-static void require(bool ok, const char *message) {
-    if (!ok) throw std::runtime_error(message);
-}
-static unsigned end(const fsr411::Tensor &t) {
-    return t.channels ? fsr411::tensor_address(t, t.width + 1, t.height + 1, t.channels - 1) + 64 : 0;
-}
-static double median(std::vector<double> values) {
-    std::sort(values.begin(), values.end());
-    const size_t n = values.size();
-    return n % 2 ? values[n/2] : (values[n/2-1]+values[n/2])*.5;
-}
-static NSArray *numbers(const std::vector<double> &values) {
-    NSMutableArray *result = [NSMutableArray new];
-    for (double value : values) [result addObject:@(value)];
-    return result;
-}
+using namespace bench;
+
 static id<MTLLibrary> library(id<MTLDevice> dev, NSString *root, unsigned mb16, unsigned mb32, unsigned mb64) {
     NSError *error = nil;
     NSString *source = [NSString stringWithContentsOfFile:[root stringByAppendingPathComponent:@"src/fsr411_simd.metal"] encoding:NSUTF8StringEncoding error:&error];
@@ -83,15 +70,11 @@ int main(int argc, char **argv) {
         require(mb16 <= 16 && mb32 <= 8 && mb64 <= 8, "matrix block count too large");
         require(!winograd || (mb16 == 4 && mb32 == 4), "Winograd uses the unchanged 32x4 tile");
         NSString *root = @(argv[1]), *dir = @(argv[2]); NSError *error = nil;
-        auto dev = MTLCreateSystemDefaultDevice(); auto queue = [dev newCommandQueue];
-        require(dev && queue && [dev supportsFamily:MTLGPUFamilyApple7], "Apple7+ Metal GPU required");
+        id<MTLDevice> dev; auto queue = device_queue(dev, MTLGPUFamilyApple7, "Apple7+ Metal GPU required");
         const auto thermalStart = NSProcessInfo.processInfo.thermalState;
         const bool lowPower = NSProcessInfo.processInfo.lowPowerModeEnabled;
-        NSData *data = [NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:@"fsr411_native_manifest.json"]];
-        NSDictionary *manifest = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:&error] : nil;
-        NSData *weights = [NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:@"fsr411_native_weights.bin"]];
-        NSData *params = [NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:@"fsr411_native_params.bin"]];
-        require(manifest && weights.length && params.length, "missing native model");
+        const auto model = native_model(dir.UTF8String);
+        NSDictionary *manifest = model.manifest; NSData *weights = model.weights, *params = model.params;
         require([manifest[@"parameter_size"] unsignedIntValue] == sizeof(fsr411::PassParams), "parameter ABI mismatch");
         auto wb = [dev newBufferWithBytes:weights.bytes length:weights.length options:MTLResourceStorageModeShared];
         std::vector<_Float16> widened(weights.length);
@@ -103,20 +86,16 @@ int main(int argc, char **argv) {
         auto beforeLib = compareRoot ? library(dev,compareRoot,4,4,2) : nil;
         NSMutableDictionary *passes = [manifest[@"passes"] mutableCopy];
         passes[@"post_cnb"] = manifest[@"auxiliary_passes"][@"post_cnb"];
-        unsigned scratchBytes = 0; std::vector<_Float16> transformed;
+        std::vector<_Float16> transformed;
         NSMutableSet *winogradPasses = [NSMutableSet new];
-        for (NSString *key in passes) {
-            fsr411::PassParams p; const size_t off = [passes[key][@"parameter_offset"] unsignedIntValue];
-            require(off <= params.length && sizeof(p) <= params.length-off, "parameter offset overflow");
-            std::memcpy(&p, (const uint8_t *)params.bytes+off, sizeof(p));
-            scratchBytes = std::max({scratchBytes,end(p.input),end(p.output),end(p.skip)});
-            if (winograd && fsr411::prepare_simd_winograd_weights((const uint8_t *)weights.bytes,weights.length,p,transformed))
-                [winogradPasses addObject:key];
-        }
+        unsigned postOffset = 0;
+        const unsigned scratchBytes = bench::scratch_extent(passes, params, postOffset,
+            [&](NSString *key, const fsr411::PassParams &p) {
+                if (winograd && fsr411::prepare_simd_winograd_weights((const uint8_t *)weights.bytes,weights.length,p,transformed))
+                    [winogradPasses addObject:key];
+            });
         auto wg = transformed.empty() ? nil : [dev newBufferWithBytes:transformed.data() length:transformed.size()*sizeof(_Float16) options:MTLResourceStorageModeShared];
         require(transformed.empty() || wg, "Winograd weight allocation failed");
-        const unsigned postOffset = (scratchBytes+255u)&~255u;
-        scratchBytes = postOffset+[passes[@"post_cnb"][@"scratch_append_bytes"] unsignedIntValue]+256;
         auto scratch = [dev newBufferWithLength:scratchBytes options:MTLResourceStorageModePrivate];
         require(wb && wh && scratch, "buffer allocation failed");
         auto clear = [queue commandBuffer]; auto blit = [clear blitCommandEncoder];
@@ -127,8 +106,7 @@ int main(int argc, char **argv) {
         constexpr unsigned batch = 8, warmups = 3;
         for (NSString *key in @[@"1",@"2",@"3",@"4",@"5",@"6",@"7",@"8",@"9",@"10",@"11",@"12",@"post_cnb"]) {
             NSDictionary *entry = passes[key]; if (!entry) continue;
-            fsr411::PassParams p;
-            std::memcpy(&p,(const uint8_t *)params.bytes+[entry[@"parameter_offset"] unsignedIntValue],sizeof(p));
+            auto p = pass_params(entry, params);
             const bool post = [key isEqual:@"post_cnb"], ct = [entry[@"kind"] isEqual:@"ct"], ds = [entry[@"kind"] isEqual:@"ds"];
             const bool useWinograd = [winogradPasses containsObject:key];
             const auto metadata = fsr411::specialize_metadata(p,post);

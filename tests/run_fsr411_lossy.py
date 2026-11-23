@@ -9,27 +9,19 @@ small test allocation; motion, depth, ownership and parity logic is unchanged.
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import re
-import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def run(args):
-    result = subprocess.run([str(x) for x in args], capture_output=True, text=True)
-    if result.returncode:
-        raise RuntimeError("command failed: " + " ".join(map(str, args)) + "\n" + result.stdout + result.stderr)
-    return result.stdout
+sys.path.insert(0, str(ROOT / "tools"))
+from compile_fsr411 import run
+from compile_variant import parse_signature
+from fsr411 import lossy_shaders as module
 
 
 def source(tier):
-    path = ROOT / "tools/fsr411/lossy_shaders.py"
-    spec = importlib.util.spec_from_file_location("fsr411_lossy_qa_source", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
     dirname = "reimpl411" if tier == 1080 else "reimpl" + str(tier)
     suffix = "" if tier == 1080 else "_" + str(tier)
     post = module.apply_lossy_post((ROOT / "third_party/fsr411/shaders" / dirname / ("post_rev_411" + suffix + ".hlsl")).read_text(), tier)
@@ -118,14 +110,6 @@ void qa_resolve(uint id : SV_DispatchThreadID) {
     return declarations + module._declarations(tier) + module.PRE_HELPERS + module.POST_HELPERS + record + query + blend
 
 
-def signature(msl, entry):
-    body = re.search(r"kernel\s+void\s+" + entry + r"\s*\((.*?)\)\s*\{", msl, re.S)
-    if not body:
-        raise ValueError("Metal entry missing: " + entry)
-    return {kind + "s": [[int(slot), name] for name, slot in re.findall(r"(\w+)\s*\[\[" + kind + r"\((\d+)\)\]\]", body[1])]
-            for kind in ("buffer", "texture")}
-
-
 def compile_fixture(args):
     out, tier, inverted, low = args
     folder = out / f"tier{tier}_di{inverted}_lm{low}"
@@ -140,12 +124,13 @@ def compile_fixture(args):
         run([ROOT / "tools/bin/dxc", "-spirv", "-T", "cs_6_6", "-E", entry, "-HV", "2021", "-O3",
              "-fspv-target-env=vulkan1.3", "-fvk-t-shift", "32", "0", "-fvk-u-shift", "64", "0",
              "-DFFX_MLSR_LOW_RES_MV=" + str(low), "-DFFX_MLSR_DEPTH_INVERTED=" + str(inverted), "-Fo", spv, path])
-        msl = run([ROOT / "tools/bin/spirv-cross", spv, "--msl", "--msl-version", "20300"])
+        msl = run([ROOT / "tools/bin/spirv-cross", spv, "--msl", "--msl-version", "20300"]).decode()
         msl = re.sub(r"^([ \t]*)(for|while)\s*\(", r"\1#pragma clang loop unroll(disable)\n\1\2 (", msl, flags=re.M)
         metal.write_text(msl)
         run(["xcrun", "metal", "-std=macos-metal2.3", "-O3", "-c", metal, "-o", air])
         run(["xcrun", "metallib", air, "-o", lib])
-        metadata["kernels"][entry] = {"library": lib.name, **signature(msl, entry)}
+        buffers, textures, _samplers = parse_signature(msl, entry)
+        metadata["kernels"][entry] = {"library": lib.name, "buffers": buffers, "textures": textures}
     (folder / "fixture.json").write_text(json.dumps(metadata, indent=2) + "\n")
     return str(folder)
 
@@ -168,7 +153,7 @@ def main():
     run(["xcrun", "clang++", "-std=c++17", "-O2", "-fobjc-arc", ROOT / "tests/fsr411_lossy_test.mm",
          "-framework", "Foundation", "-framework", "Metal", "-o", binary])
     for directory in directories:
-        print(run([binary, directory]).strip(), flush=True)
+        print(run([binary, directory]).decode().strip(), flush=True)
 
 
 if __name__ == "__main__":

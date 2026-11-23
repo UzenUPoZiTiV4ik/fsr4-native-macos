@@ -165,25 +165,9 @@ Session *ensure_original_session(int tier,const Fsr4InputPrepared &p,const Optio
         if(!bytes.length || ![entry[@"library_sha256"] isEqual:ns(sha256_bytes(bytes.bytes,bytes.length))]) {
             error="original Lite library identity mismatch: "+stage;return nullptr;
         }
-        Kernel k;NSError *e=nil;
-        auto lib=[device_ newLibraryWithURL:[NSURL fileURLWithPath:ns(library)] error:&e];
-        auto fn=lib?[lib newFunctionWithName:entry[@"entry"]]:nil;
-        NSArray *wg=entry[@"wgsize"];if(wg.count!=3) {error="missing original threadgroup size: "+stage;return nullptr;}
-        k.threads=MTLSizeMake([wg[0] unsignedIntValue],[wg[1] unsignedIntValue],[wg[2] unsignedIntValue]);
-        MTLComputePipelineDescriptor *descriptor=[MTLComputePipelineDescriptor new];
-        descriptor.computeFunction=fn;
-        descriptor.maxTotalThreadsPerThreadgroup=k.threads.width*k.threads.height*k.threads.depth;
-        descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth=descriptor.maxTotalThreadsPerThreadgroup%32u==0;
-        k.pso=fn?[device_ newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&e]:nil;
-        if(!k.pso) {error="original Lite pipeline "+stage+": "+metal_error(e);return nullptr;}
-        if(NSString *tables=entry[@"literal_tables"]) {
-            NSData *table=[NSData dataWithContentsOfFile:ns(dir+"/"+utf8(tables))];
-            if(!table.length) {error="missing original Lite shader table";return nullptr;}
-            k.literalTables=[device_ newBufferWithBytes:table.bytes length:table.length options:MTLResourceStorageModeShared];
-        }
-        for(NSArray *a in entry[@"buffers"])k.buffers.emplace_back([a[0] unsignedIntegerValue],utf8(a[1]));
-        for(NSArray *a in entry[@"textures"])k.textures.emplace_back([a[0] unsignedIntegerValue],utf8(a[1]));
-        for(NSArray *a in entry[@"samplers"])k.samplers.emplace_back([a[0] unsignedIntegerValue],utf8(a[1]));
+        Kernel k;
+        if(!load_kernel_entry(dir,entry,stage,"original Lite",
+                             "missing original threadgroup size: "+stage,k,error))return nullptr;
         s->kernels.emplace(stage,std::move(k));
     }
     if(s->originalPostFast) {

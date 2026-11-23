@@ -9,8 +9,7 @@ from pathlib import Path
 import argparse
 import json
 import re
-import subprocess
-from upstream_oracle import ACTIVE_2160, external_output, require, sha256
+from upstream_oracle import ACTIVE_2160, build_metallib, external_output, require, sha256, verified_translation
 
 
 def force_border_group(source):
@@ -29,10 +28,10 @@ def force_border_group(source):
 
 
 def build(output=Path('build/fsr412_upstream'),identity=None,compile_metal=True):
-    output=external_output(output);identity=identity or ACTIVE_2160['pass1'];receipt=json.loads((output/(identity+'.translation.json')).read_text())
+    output=external_output(output);identity=identity or ACTIVE_2160['pass1']
+    receipt,source=verified_translation(output,identity,'original P1 source identity mismatch')
     previous_path=output/(identity+'.border-only.translation.json')
     previous=json.loads(previous_path.read_text()) if previous_path.is_file() else {}
-    source=(output/(identity+'.metal')).read_text();require(sha256(source.encode())==receipt['metal_sha256'],'original P1 source identity mismatch')
     require(receipt['reflection']['entryPoints'][0]['workgroup_size']==[64,2,1],'unknown original P1 thread geometry')
     text=(output/(identity+'.ll')).read_text();skip='1511506142' in text
     if skip:
@@ -44,9 +43,7 @@ def build(output=Path('build/fsr412_upstream'),identity=None,compile_metal=True)
     record['execute_policy']='safe to call every frame; original marker gate makes this a no-op on skipped 1080/2160 frames; 4320 runs every frame'
     record['transformation']='group/global coordinate substitution only; original border stores and early skip return unchanged'
     if compile_metal:
-        air=output/(stem+'.air');library=output/(stem+'.metallib');command=['xcrun','-sdk','macosx','metal','-std=metal3.1','-fno-fast-math','-c',str(msl),'-o',str(air)]
-        subprocess.run(command,check=True);subprocess.run(['xcrun','-sdk','macosx','metallib',str(air),'-o',str(library)],check=True)
-        record['compile_command']=command;record['library_sha256']=sha256(library.read_bytes())
+        record['compile_command'],record['library_sha256']=build_metallib(output,stem)
     else:
         library=output/(stem+'.metallib')
         if library.is_file() and previous.get('metal_sha256')==record['metal_sha256'] and previous.get('library_sha256')==sha256(library.read_bytes()):

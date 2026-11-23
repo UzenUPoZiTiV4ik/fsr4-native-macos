@@ -20,6 +20,7 @@ Writes into <builddir>/fsr4_<key>/:
     *.metal / *.spv / *.log (intermediates, kept for debugging)
 """
 import argparse, json, os, re, struct, subprocess, sys
+from pathlib import Path
 
 def sh(cmd, log=None):
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -88,9 +89,10 @@ def wgsize(spv_path, entry, spirv_cross):
 #    their channel loops; the resulting ~500KB kernels exceed the 40s GPU
 #    watchdog when the paravirtual driver JIT-compiles them.  [loop] is a pure
 #    scheduling hint: iteration order and arithmetic are identical.
-# 2) patches/hlsl/* take precedence as hand-maintained patched copies
-#    (currently only FNB_CT2D_ADD.hlsli, whose _Static_assert lines DXC's
-#    SPIR-V backend does not implement).
+# 2) The SPIR-V backend rejects the eight template assertions in the INT8
+#    fused block. Disable them in the shadow copy used for either unroll mode.
+INT8_FUSED_HEADER = "ml2code_runtime/operators/int8_NHWC/Fused/FNB_CT2D_ADD.hlsli"
+
 def source_files(root):
     import glob
     files = [os.path.abspath(__file__), os.path.join(root, "tools/gen_f16.py")]
@@ -108,7 +110,7 @@ def source_hash(root):
     h = hashlib.sha1()
     for f in sorted(source_files(root)):
         h.update(os.path.relpath(f, root).encode())
-        h.update(open(f, "rb").read())
+        h.update(Path(f).read_bytes())
     return h.hexdigest()
 
 def build_shadow_tree(root, builddir, keep_unroll=False):
@@ -125,10 +127,9 @@ def build_shadow_tree(root, builddir, keep_unroll=False):
     # traffic) and the watchdog concern of the fused model passes does not
     # apply.
     shadow = os.path.join(builddir, "hlsl_shadow_unroll" if keep_unroll else "hlsl_shadow")
-    stamp = os.path.join(shadow, ".done")
-    # the tree copies patches/hlsl/** — rebuild it when any source it was
-    # made from is newer than the stamp (a stale copy silently compiles the
-    # previous patch)
+    # Older shadow trees did not contain the generated FP16 PRE include.
+    stamp = os.path.join(shadow, ".overlays-v2.done")
+    # Rebuild the shadow when any input, including an overlay delta, changes.
     if os.path.exists(stamp) and os.path.getmtime(stamp) >= source_mtime(root):
         return shadow
     import shutil
@@ -138,21 +139,38 @@ def build_shadow_tree(root, builddir, keep_unroll=False):
     for sr in srcroots:
         for f in glob.glob(sr + "/**/*.hls*", recursive=True) + \
                  glob.glob(sr + "/**/*.h", recursive=True):
-            txt = open(f, errors="replace").read()
             rel = os.path.relpath(f, sr)
             patched = os.path.join(root, "patches/hlsl", rel)
-            has_patch = os.path.exists(patched)
-            if not has_patch and not re.search(r"\[\s*unroll\b", txt):
+            has_patch = os.path.isfile(patched)
+            with open(patched if has_patch else f, errors="replace") as source:
+                txt = source.read()
+            if rel == INT8_FUSED_HEADER:
+                txt, count = re.subn(r"^([ \t]*)_Static_assert\(", r"\1// FSR4MAC-PATCH _Static_assert(", txt, flags=re.M)
+                if count != 8:
+                    raise ValueError(f"expected 8 template assertions in {rel}, found {count}")
+            elif not has_patch and not re.search(r"\[\s*unroll\b", txt):
                 continue
-            # hand-patched copy wins as the transform source
-            txt = open(patched if has_patch else f, errors="replace").read()
             if not keep_unroll:
                 txt = re.sub(r"\[\s*unroll[^\]]*\]", "[loop]", txt)
             dst = os.path.join(shadow, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            open(dst, "w").write(txt)
+            Path(dst).write_text(txt)
             n += 1
-    open(stamp, "w").write("%d files\n" % n)
+    # The optional 4.0.2 source payload ships deltas against the pinned AMD
+    # headers. PRE FP16 historically came directly from the include path and
+    # keeps its unroll hints in both modes. INT8 POST follows the shadow policy.
+    patch_dir = os.path.join(root, "patches/hlsl")
+    if os.path.isdir(patch_dir):
+        for upstream, target in [("pre_common.hlsli", "pre_common_f16.hlsli"),
+                                 ("post_common.hlsli", "post_common.hlsli")]:
+            source = os.path.join(root, "third_party/fsr4/include/gpu/fsr4", upstream)
+            delta = os.path.join(patch_dir, target + ".patch")
+            text = subprocess.check_output(["patch", "-s", "-f", "-F", "0", "-o", "-", source, delta], text=True)
+            if target == "post_common.hlsli" and not keep_unroll:
+                text = re.sub(r"\[\s*unroll[^\]]*\]", "[loop]", text)
+            with open(os.path.join(shadow, target), "w") as header:
+                header.write(text)
+    Path(stamp).write_text("%d files\n" % n)
     return shadow
 
 def main():

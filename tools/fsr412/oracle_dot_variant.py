@@ -8,7 +8,7 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
-from upstream_oracle import ACTIVE_2160, external_output, metal_descriptor_abi, require, sha256
+from upstream_oracle import ACTIVE_2160, build_metallib, external_output, metal_descriptor_abi, sha256
 from oracle_io import guard_scalar_io
 
 
@@ -20,10 +20,8 @@ def build(converter,output=Path('build/fsr412_upstream'),cross=Path('tools/bin/s
     subprocess.run([str(cross),str(spv),'--msl','--msl-version','30100','--msl-decoration-binding','--output',str(msl)],check=True)
     unguarded=msl.read_text();(output/(stem+'.unguarded.metal')).write_text(unguarded)
     source,io=guard_scalar_io(unguarded,bindings,{'t18':131072,'u11':99820992});msl.write_text(source)
-    air=output/(stem+'.air');library=output/(stem+'.metallib')
-    subprocess.run(['xcrun','-sdk','macosx','metal','-std=metal3.1','-fno-fast-math','-c',str(msl),'-o',str(air)],check=True)
-    subprocess.run(['xcrun','-sdk','macosx','metallib',str(air),'-o',str(library)],check=True)
-    receipt={'schema':'fsr412_p2_native_dot_diagnostic_v1','dxil_sha256':identity,'entry':'main0','bindings':bindings,'io_guard':io,'converter_command':command,'converter_sha256':sha256(converter.read_bytes()),'spirv_sha256':sha256(patched),'metal_sha256':sha256(source.encode()),'library':library.name,'library_sha256':sha256(library.read_bytes()),'executed':False,'equivalence':'unverified diagnostic; compare against original integer DXIL CPU SSA'}
+    _,library_sha256=build_metallib(output,stem)
+    receipt={'schema':'fsr412_p2_native_dot_diagnostic_v1','dxil_sha256':identity,'entry':'main0','bindings':bindings,'io_guard':io,'converter_command':command,'converter_sha256':sha256(converter.read_bytes()),'spirv_sha256':sha256(patched),'metal_sha256':sha256(source.encode()),'library':stem+'.metallib','library_sha256':library_sha256,'executed':False,'equivalence':'unverified diagnostic; compare against original integer DXIL CPU SSA'}
     (output/(stem+'.translation.json')).write_text(json.dumps(receipt,indent=2)+'\n');return receipt
 
 

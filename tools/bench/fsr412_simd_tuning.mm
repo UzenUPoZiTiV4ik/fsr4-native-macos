@@ -6,14 +6,12 @@
 #include "../../tests/fsr411_native_test.mm"
 #undef main
 #pragma clang diagnostic pop
+#include "bench_gpu.h"
 #include <numeric>
 
 namespace {
+using namespace bench;
 struct Candidate {const char *name;unsigned x,y,threads;};
-unsigned tensor_end(fsr411::Tensor t) {return t.channels?fsr411::tensor_address(t,t.width+1u,t.height+1u,t.channels-1u)+64u:0u;}
-void ensure(bool ok,const std::string &reason) {if(!ok)throw std::runtime_error(reason);}
-double percentile(std::vector<double> v,double p) {std::sort(v.begin(),v.end());return v.empty()?0:v[size_t((v.size()-1)*p)];}
-NSArray *numbers(const std::vector<double> &v) {auto a=[NSMutableArray array];for(double x:v)[a addObject:@(x)];return a;}
 std::vector<Candidate> candidates(const std::string &kind) {
     const std::string prefix=kind=="cnb"?"fsr412_simd_cnb_":kind=="fnb"?"fsr412_simd_fnb32_":kind=="ct"?"fsr412_simd_ct32_":"fsr412_simd_ds16_";
     static const char *names[4][6]={
@@ -28,7 +26,7 @@ std::vector<Candidate> candidates(const std::string &kind) {
 }
 }
 int main(int argc,char **argv) {@autoreleasepool {try {
-    ensure(argc>=3,"usage: fsr412_simd_tuning ROOT NATIVE_DIR [--size HALF_W HALF_H] [--timing-lock --rounds N] [--report FILE]");
+    require(argc>=3,"usage: fsr412_simd_tuning ROOT NATIVE_DIR [--size HALF_W HALF_H] [--timing-lock --rounds N] [--report FILE]");
     std::string root=argv[1],dir=argv[2],report="build/lite-lossy-optimization/simd-tuning.json";
     bool timing=false;unsigned width=38,height=12,rounds=20;
     for(int i=3;i<argc;++i) {
@@ -39,20 +37,20 @@ int main(int argc,char **argv) {@autoreleasepool {try {
         else if(a=="--report" && i+1<argc)report=argv[++i];
         else throw std::runtime_error("unknown option: "+a);
     }
-    ensure(width>=4 && height>=4 && rounds>=2 && rounds<=200,"invalid size/rounds");
-    auto dev=MTLCreateSystemDefaultDevice();auto queue=[dev newCommandQueue];ensure(dev && queue,"missing GPU");
+    require(width>=4 && height>=4 && rounds>=2 && rounds<=200,"invalid size/rounds");
+    id<MTLDevice> dev;auto queue=device_queue(dev,MTLGPUFamily(0),"missing GPU");
     NSError *error=nil;
     auto load=[&](const std::string &path){return [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:path.c_str()]];};
     NSData *wdata=load(dir+"/fsr411_native_weights.bin"),*pdata=load(dir+"/fsr411_native_params.bin"),*mdata=load(dir+"/fsr411_native_manifest.json");
-    ensure(wdata && pdata && mdata,"missing model cache");
-    NSDictionary *manifest=[NSJSONSerialization JSONObjectWithData:mdata options:0 error:&error];ensure(manifest!=nil,"invalid manifest");
+    require(wdata && pdata && mdata,"missing model cache");
+    NSDictionary *manifest=[NSJSONSerialization JSONObjectWithData:mdata options:0 error:&error];require(manifest!=nil,"invalid manifest");
     NSString *source=[NSString stringWithContentsOfFile:[NSString stringWithUTF8String:(root+"/src/fsr411_simd.metal").c_str()] encoding:NSUTF8StringEncoding error:&error];
     NSString *extra=[NSString stringWithContentsOfFile:[NSString stringWithUTF8String:(root+"/src/fsr412_simd.metal").c_str()] encoding:NSUTF8StringEncoding error:&error];
     NSString *header=[NSString stringWithContentsOfFile:[NSString stringWithUTF8String:(root+"/src/fsr411_model.h").c_str()] encoding:NSUTF8StringEncoding error:&error];
-    ensure(source && extra && header,"missing shader sources");
+    require(source && extra && header,"missing shader sources");
     source=[[source stringByReplacingOccurrencesOfString:@"#include \"fsr411_model.h\"" withString:header] stringByAppendingString:extra];
     auto options=[MTLCompileOptions new];options.languageVersion=MTLLanguageVersion3_0;options.preprocessorMacros=@{@"FSR411_SPECIALIZE":@0};
-    auto lib=[dev newLibraryWithSource:source options:options error:&error];ensure(lib!=nil,error?error.description.UTF8String:"library failed");
+    auto lib=[dev newLibraryWithSource:source options:options error:&error];require(lib!=nil,error?error.description.UTF8String:"library failed");
     std::vector<unsigned char> weights(wdata.length);std::memcpy(weights.data(),wdata.bytes,wdata.length);
     auto wb=[dev newBufferWithBytes:wdata.bytes length:wdata.length options:MTLResourceStorageModeShared];
     std::vector<_Float16> half(weights.size());for(size_t i=0;i<weights.size();++i)half[i]=(_Float16)signed_byte(weights[i]);
@@ -66,7 +64,7 @@ int main(int argc,char **argv) {@autoreleasepool {try {
         const auto in=shape([entry[@"input_slot"] unsignedIntValue]),out=shape([entry[@"output_slot"] unsignedIntValue]);
         p.input.width=in.first;p.input.height=in.second;p.output.width=out.first;p.output.height=out.second;
         if(entry[@"skip_slot"]){p.skip.width=width;p.skip.height=height;}
-        unsigned end=std::max({tensor_end(p.input),tensor_end(p.output),tensor_end(p.skip)})+512;
+        unsigned end=std::max({scratch_tensor_end(p.input),scratch_tensor_end(p.output),scratch_tensor_end(p.skip)})+512;
         if([key isEqual:@"post_cnb"]){p.output.offset=(end+511u)&~255u;end=p.output.offset+p.output.strideY*p.output.height+512;}
         std::vector<unsigned char> initial(end,0x93);uint32_t seed=0x1badf00d;
         for(unsigned y=0;y<p.input.height;++y)for(unsigned x=0;x<p.input.width;++x)for(unsigned c=0;c<p.input.channels;++c){seed^=seed<<13;seed^=seed>>17;seed^=seed<<5;initial[fsr411::tensor_address(p.input,x,y,c)]=uint8_t(seed);}
@@ -78,9 +76,9 @@ int main(int argc,char **argv) {@autoreleasepool {try {
         auto specs=candidates(kind);specs.insert(specs.begin(),{baseline.UTF8String,[entry[@"simd"][@"tile"][0] unsignedIntValue],[entry[@"simd"][@"tile"][1] unsignedIntValue],128});
         std::vector<id<MTLComputePipelineState>> pipelines;std::vector<id<MTLBuffer>> scratch;
         for(const auto &s:specs) {
-            auto fn=[lib newFunctionWithName:[NSString stringWithUTF8String:s.name]];ensure(fn!=nil,std::string("missing kernel ")+s.name);
+            auto fn=[lib newFunctionWithName:[NSString stringWithUTF8String:s.name]];require(fn!=nil,std::string("missing kernel ")+s.name);
             auto d=[MTLComputePipelineDescriptor new];d.computeFunction=fn;d.maxTotalThreadsPerThreadgroup=s.threads;d.threadGroupSizeIsMultipleOfThreadExecutionWidth=YES;
-            auto ps=[dev newComputePipelineStateWithDescriptor:d options:MTLPipelineOptionNone reflection:nil error:&error];ensure(ps!=nil,error?error.description.UTF8String:"pipeline failed");
+            auto ps=[dev newComputePipelineStateWithDescriptor:d options:MTLPipelineOptionNone reflection:nil error:&error];require(ps!=nil,error?error.description.UTF8String:"pipeline failed");
             pipelines.push_back(ps);scratch.push_back([dev newBufferWithBytes:initial.data() length:initial.size() options:MTLResourceStorageModeShared]);
         }
         auto dispatch=[&](size_t which,unsigned count){
@@ -88,7 +86,7 @@ int main(int argc,char **argv) {@autoreleasepool {try {
             [e setBuffer:scratch[which] offset:0 atIndex:0];[e setBuffer:wb offset:0 atIndex:1];[e setBytes:&p length:sizeof p atIndex:2];[e setBuffer:wh offset:0 atIndex:3];if(wg)[e setBuffer:wg offset:0 atIndex:4];
             const unsigned w=kind=="ct"?p.input.width:p.output.width,h=kind=="ct"?p.input.height:p.output.height;
             for(unsigned k=0;k<count;++k){[e dispatchThreadgroups:MTLSizeMake((w+specs[which].x-1)/specs[which].x,(h+specs[which].y-1)/specs[which].y,1) threadsPerThreadgroup:MTLSizeMake(specs[which].threads,1,1)];if(count>1)[e memoryBarrierWithScope:MTLBarrierScopeBuffers];}
-            [e endEncoding];[cb commit];[cb waitUntilCompleted];ensure(cb.status==MTLCommandBufferStatusCompleted,cb.error?cb.error.description.UTF8String:"GPU failure");return (cb.GPUEndTime-cb.GPUStartTime)*1000./count;
+            [e endEncoding];[cb commit];[cb waitUntilCompleted];require(cb.status==MTLCommandBufferStatusCompleted,cb.error?cb.error.description.UTF8String:"GPU failure");return (cb.GPUEndTime-cb.GPUStartTime)*1000./count;
         };
         for(size_t v=0;v<specs.size();++v){
             dispatch(v,1);
@@ -111,7 +109,7 @@ int main(int argc,char **argv) {@autoreleasepool {try {
     }
     auto result=@{@"device":dev.name,@"profile":manifest[@"profile"],@"verified_cases":@(verified),@"timing_enabled":@(timing),
         @"physical_pre_m5_measured":@NO,@"size":@[@(width),@(height)],@"rows":rows};
-    auto json=[NSJSONSerialization dataWithJSONObject:result options:NSJSONWritingPrettyPrinted error:&error];ensure(json!=nil,"JSON failed");
-    ensure([json writeToFile:[NSString stringWithUTF8String:report.c_str()] atomically:YES],"report write failed");
+    auto json=[NSJSONSerialization dataWithJSONObject:result options:NSJSONWritingPrettyPrinted error:&error];require(json!=nil,"JSON failed");
+    require([json writeToFile:[NSString stringWithUTF8String:report.c_str()] atomically:YES],"report write failed");
     std::printf("SIMD layouts: %u CPU/GPU full-scratch parity cases passed; %s\n",verified,report.c_str());return 0;
 } catch(const std::exception &e){std::fprintf(stderr,"SIMD tuning: %s\n",e.what());return 1;} }}

@@ -52,8 +52,6 @@ UPSTREAM_CONTAINERS = frozenset((
 ))
 # SHA-256 of the byte-reproducible .npz written from them.
 UPSTREAM_SHA256 = "33ef308990fd749af2d7c833dfbb5ad1879220d7cf4002d3abd982c3c9a17143"
-# Previous pin (dll-2026-10-19 lossy2), still accepted through --lossy2-weights.
-PREVIOUS_SHA256 = "9a458f65812848b273dace03edcbd346d66364d5d41a99d0963adaa601a3c93c"
 
 # logical pass -> (kind, 3x3 table, expansion table, contraction table)
 TABLES = {

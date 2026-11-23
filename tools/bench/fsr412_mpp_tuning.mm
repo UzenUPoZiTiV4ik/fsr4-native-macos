@@ -12,6 +12,7 @@
 #import <Metal/Metal.h>
 #include <CommonCrypto/CommonDigest.h>
 #include "fsr412_mpp_oracle.h"
+#include "bench_gpu.h"
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -19,13 +20,11 @@
 #include <string>
 
 namespace {
+using namespace bench;
 using fsr411::PassParams;
 using fsr412_tuning_cpu::tensor_end;
-void need(bool value,const std::string &message) {if(!value)throw std::runtime_error(message);}
-NSString *ns(const std::string &s) {return [NSString stringWithUTF8String:s.c_str()];}
-std::string error(NSError *e) {return e?e.localizedDescription.UTF8String:"Metal allocation failed";}
 std::string contents(const std::string &p) {
-    std::ifstream f(p,std::ios::binary);need(bool(f),"cannot read "+p);
+    std::ifstream f(p,std::ios::binary);require(bool(f),"cannot read "+p);
     std::ostringstream s;s<<f.rdbuf();return s.str();
 }
 std::vector<uint8_t> bytes(const std::string &p) {auto s=contents(p);return {s.begin(),s.end()};}
@@ -39,7 +38,7 @@ std::string sha(const std::vector<uint8_t> &data) {
     for(auto x:hash) {s+=hex[x>>4];s+=hex[x&15];}return s;
 }
 PassParams params(const std::vector<uint8_t> &data,size_t offset) {
-    need(offset<=data.size() && sizeof(PassParams)<=data.size()-offset,"parameter overflow");
+    require(offset<=data.size() && sizeof(PassParams)<=data.size()-offset,"parameter overflow");
     PassParams p;std::memcpy(&p,data.data()+offset,sizeof(p));return p;
 }
 struct Shape {const char *name;unsigned x,y,threads,bit;};
@@ -53,15 +52,15 @@ const Shape fusedShapes[]={{"fsr412_cnb_ds_coop_32x2",16,1,32,0},{"fsr412_cnb_ds
 id<MTLLibrary> library(id<MTLDevice> dev,const std::string &root,bool candidate,bool specialized,unsigned tier) {
     std::string s=contents(root+"/src/fsr411_mpp.metal");
     const std::string include="#include \"fsr411_model.h\"";
-    auto at=s.find(include);need(at!=s.npos,"model include missing");
+    auto at=s.find(include);require(at!=s.npos,"model include missing");
     s.replace(at,include.size(),contents(root+"/src/fsr411_model.h"));
     if(candidate) {
         auto c=contents(root+"/src/fsr412_mpp.metal");const std::string common="#include \"fsr411_mpp.metal\"";
-        auto pos=c.find(common);need(pos!=c.npos,"common MPP include missing");c.replace(pos,common.size(),s);s=c;
+        auto pos=c.find(common);require(pos!=c.npos,"common MPP include missing");c.replace(pos,common.size(),s);s=c;
     }
     auto o=[MTLCompileOptions new];o.languageVersion=MTLLanguageVersion4_0;
     o.preprocessorMacros=@{@"FSR411_SPECIALIZE":@(specialized),@"FSR411_MAXW":@(tier*8u/9u),@"FSR411_MAXH":@(tier/2u)};
-    NSError *e=nil;auto lib=[dev newLibraryWithSource:ns(s) options:o error:&e];need(lib!=nil,error(e));return lib;
+    NSError *e=nil;auto lib=[dev newLibraryWithSource:ns(s) options:o error:&e];require(lib!=nil,metal_error(e));return lib;
 }
 id<MTLComputePipelineState> pipeline(id<MTLDevice> dev,id<MTLLibrary> lib,const Shape &s,
     const PassParams *p=nullptr,const PassParams *second=nullptr) {
@@ -76,13 +75,10 @@ id<MTLComputePipelineState> pipeline(id<MTLDevice> dev,id<MTLLibrary> lib,const 
         }
         f=[lib newFunctionWithName:ns(s.name) constantValues:v error:&e];
     } else f=[lib newFunctionWithName:ns(s.name)];
-    need(f!=nil,error(e));auto d=[MTLComputePipelineDescriptor new];d.computeFunction=f;
+    require(f!=nil,metal_error(e));auto d=[MTLComputePipelineDescriptor new];d.computeFunction=f;
     d.maxTotalThreadsPerThreadgroup=s.threads;d.threadGroupSizeIsMultipleOfThreadExecutionWidth=YES;
     auto state=[dev newComputePipelineStateWithDescriptor:d options:MTLPipelineOptionNone reflection:nil error:&e];
-    need(state && state.threadExecutionWidth==32 && state.maxTotalThreadsPerThreadgroup>=s.threads,error(e));return state;
-}
-void done(id<MTLCommandBuffer> cb) {
-    [cb commit];[cb waitUntilCompleted];need(cb.status==MTLCommandBufferStatusCompleted,error(cb.error));
+    require(state && state.threadExecutionWidth==32 && state.maxTotalThreadsPerThreadgroup>=s.threads,metal_error(e));return state;
 }
 void dispatch(id<MTLComputeCommandEncoder> e,id<MTLComputePipelineState> state,const Shape &s,
     id<MTLBuffer> scratch,id<MTLBuffer> weights,const PassParams &p) {
@@ -94,22 +90,11 @@ void dispatch(id<MTLComputeCommandEncoder> e,id<MTLComputePipelineState> state,c
 uint32_t probe(id<MTLDevice> dev,id<MTLCommandQueue> q,id<MTLLibrary> lib,
     const char *name="fsr412_mpp_tuning_probe",unsigned known=127u) {
     Shape s={name,1,1,32,0};auto state=pipeline(dev,lib,s);
-    auto b=[dev newBufferWithLength:4 options:MTLResourceStorageModeShared];need(b!=nil,"probe buffer");
+    auto b=[dev newBufferWithLength:4 options:MTLResourceStorageModeShared];require(b!=nil,"probe buffer");
     *(uint32_t *)b.contents=~0u;auto cb=[q commandBuffer];auto e=[cb computeCommandEncoder];
     [e setComputePipelineState:state];[e setBuffer:b offset:0 atIndex:0];
-    [e dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];[e endEncoding];done(cb);
-    auto mask=*(uint32_t *)b.contents;need(!(mask&~known),"invalid probe result");return mask;
-}
-uint32_t common_probe(id<MTLDevice> dev,id<MTLCommandQueue> q,id<MTLLibrary> lib) {
-    Shape s={"fsr411_mpp_chain_probe",1,1,32,0};auto state=pipeline(dev,lib,s);
-    auto b=[dev newBufferWithLength:4 options:MTLResourceStorageModeShared];
-    std::vector<uint8_t> zeros(fsr411::kMppProbeDummyBytes,0);
-    auto dummy=[dev newBufferWithBytes:zeros.data() length:zeros.size() options:MTLResourceStorageModeShared];
-    need(b && dummy,"common probe buffers");*(uint32_t *)b.contents=~0u;
-    auto cb=[q commandBuffer];auto e=[cb computeCommandEncoder];[e setComputePipelineState:state];
-    [e setBuffer:b offset:0 atIndex:0];[e setBuffer:dummy offset:0 atIndex:1];
-    [e dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];[e endEncoding];done(cb);
-    const unsigned mask=*(uint32_t *)b.contents;need(!(mask&~fsr411::kMppChainKnownMask),"invalid common probe");return mask;
+    [e dispatchThreadgroups:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];[e endEncoding];commit_timed(cb);
+    auto mask=*(uint32_t *)b.contents;require(!(mask&~known),"invalid probe result");return mask;
 }
 size_t correctness(id<MTLDevice> dev,id<MTLCommandQueue> q,id<MTLLibrary> before,id<MTLLibrary> after,
     PassParams p,const std::vector<uint8_t> &weights,const std::vector<uint8_t> &init,unsigned mask) {
@@ -117,7 +102,7 @@ size_t correctness(id<MTLDevice> dev,id<MTLCommandQueue> q,id<MTLLibrary> before
     NSMutableArray *states=[NSMutableArray new];for(size_t i=0;i<selected.size();++i)
         [states addObject:pipeline(dev,i?after:before,selected[i])];
     auto wb=[dev newBufferWithBytes:weights.data() length:weights.size() options:MTLResourceStorageModeShared];
-    need(wb!=nil,"correctness weights allocation");size_t count=0;
+    require(wb!=nil,"correctness weights allocation");size_t count=0;
     for(auto wh : {std::pair<unsigned,unsigned>{1,1},{3,5},{17,9},{129,3},{130,4}})
         for(bool banked : {true,false})for(unsigned pattern=0;pattern<5;++pattern) {
             auto a=fsr412_tuning_cpu::shape(p,wh.first,wh.second,banked);
@@ -128,39 +113,34 @@ size_t correctness(id<MTLDevice> dev,id<MTLCommandQueue> q,id<MTLLibrary> before
             NSMutableArray *buffers=[NSMutableArray new];auto cb=[q commandBuffer];auto e=[cb computeCommandEncoder];
             for(size_t i=0;i<selected.size();++i) {
                 auto b=[dev newBufferWithBytes:input.data() length:input.size() options:MTLResourceStorageModeShared];
-                need(b!=nil,"correctness scratch allocation");[buffers addObject:b];dispatch(e,states[i],selected[i],b,wb,a);
+                require(b!=nil,"correctness scratch allocation");[buffers addObject:b];dispatch(e,states[i],selected[i],b,wb,a);
             }
-            [e endEncoding];done(cb);
+            [e endEncoding];commit_timed(cb);
             for(size_t i=0;i<selected.size();++i) {
                 id<MTLBuffer> b=buffers[i];const auto *got=(const uint8_t *)b.contents;
                 auto mismatch=std::mismatch(expected.begin(),expected.end(),got);
-                need(mismatch.first==expected.end(),std::string(selected[i].name)+" CPU oracle/guard mismatch, input "
+                require(mismatch.first==expected.end(),std::string(selected[i].name)+" CPU oracle/guard mismatch, input "
                     +std::to_string(wh.first)+"x"+std::to_string(wh.second)+", byte "+std::to_string(mismatch.first-expected.begin()));
                 ++count;
             }
         }
     return count;
 }
-double median(std::vector<double> v) {
-    need(!v.empty(),"no timing samples");std::sort(v.begin(),v.end());size_t n=v.size();
-    return n%2?v[n/2]:(v[n/2-1]+v[n/2])/2;
-}
-NSArray *numbers(const std::vector<double> &v) {auto a=[NSMutableArray new];for(auto x:v)[a addObject:@(x)];return a;}
 void cpu_check_output(id<MTLBuffer> b,const PassParams &p,const std::vector<uint8_t> &weights,
     const std::vector<uint8_t> &initializer) {
     const auto *data=(const uint8_t *)b.contents;
     const std::vector<uint8_t> snapshot(data,data+b.length);
     const auto oracle=fsr412_tuning_cpu::ds16(p,snapshot,weights,initializer,true);
     for(unsigned y=0;y<p.output.height;++y)for(unsigned x=0;x<p.output.width;++x)for(unsigned c=0;c<32;++c)
-        need(data[fsr411::tensor_address(p.output,x,y,c)]==oracle[(size_t(y)*p.output.width+x)*32u+c],
+        require(data[fsr411::tensor_address(p.output,x,y,c)]==oracle[(size_t(y)*p.output.width+x)*32u+c],
             "timed-size GPU output differs from the raw initializer CPU oracle");
 }
 void equal_buffers(id<MTLBuffer> a,id<MTLBuffer> b) {
-    need(a.length==b.length && !std::memcmp(a.contents,b.contents,a.length),"A/B scratch differs (including guards)");
+    require(a.length==b.length && !std::memcmp(a.contents,b.contents,a.length),"A/B scratch differs (including guards)");
 }
 void fused_dispatch(id<MTLComputeCommandEncoder> e,id<MTLComputePipelineState> state,const Shape &s,
     id<MTLBuffer> scratch,id<MTLBuffer> weights,fsr412_tuning_cpu::CnbDsParams p) {
-    need(fsr412_tuning_cpu::valid_fused_params(p),"invalid/aliased fused CNB+DS geometry");
+    require(fsr412_tuning_cpu::valid_fused_params(p),"invalid/aliased fused CNB+DS geometry");
     [e setComputePipelineState:state];[e setBuffer:scratch offset:0 atIndex:0];[e setBuffer:weights offset:0 atIndex:1];
     [e setBytes:&p.cnb length:sizeof(p.cnb) atIndex:2];[e setBytes:&p.ds length:sizeof(p.ds) atIndex:3];
     // Cover ALL CNB/B pixels even when DS output is floor(input/2).
@@ -178,7 +158,7 @@ size_t fused_correctness(id<MTLDevice> dev,id<MTLCommandQueue> q,id<MTLLibrary> 
         for(auto s:selected)[states addObject:pipeline(dev,after,s)];
     }
     auto wb=[dev newBufferWithBytes:weights.data() length:weights.size() options:MTLResourceStorageModeShared];
-    need(wb!=nil,"fused correctness weights");size_t count=0;
+    require(wb!=nil,"fused correctness weights");size_t count=0;
     for(auto wh : {std::pair<unsigned,unsigned>{1,1},{3,5},{17,9},{65,3},{129,5},{130,4}})
         for(bool banked : {true,false})for(bool floorOutput : {true,false})for(unsigned pattern=0;pattern<5;++pattern) {
             const auto p=fsr412_tuning_cpu::fused_shape(cnb,ds,wh.first,wh.second,banked,floorOutput);
@@ -191,15 +171,15 @@ size_t fused_correctness(id<MTLDevice> dev,id<MTLCommandQueue> q,id<MTLLibrary> 
             NSMutableArray *buffers=[NSMutableArray new];auto cb=[q commandBuffer];auto e=[cb computeCommandEncoder];
             for(size_t i=0;i<=selected.size();++i) {
                 auto b=[dev newBufferWithBytes:input.data() length:input.size() options:MTLResourceStorageModeShared];
-                need(b!=nil,"fused correctness scratch");[buffers addObject:b];
+                require(b!=nil,"fused correctness scratch");[buffers addObject:b];
                 if(i)fused_dispatch(e,states[i-1],selected[i-1],b,wb,p);
                 else {dispatch(e,cp,baseCnb,b,wb,p.cnb);if(p.ds.output.width && p.ds.output.height)dispatch(e,dp,baseline,b,wb,p.ds);}
             }
-            [e endEncoding];done(cb);
+            [e endEncoding];commit_timed(cb);
             for(size_t i=0;i<buffers.count;++i) {
                 id<MTLBuffer> b=buffers[i];const auto *got=(const uint8_t *)b.contents;
                 const auto mismatch=std::mismatch(expected.begin(),expected.end(),got);
-                need(mismatch.first==expected.end(),std::string(i?selected[i-1].name:"CNB+DS baseline")
+                require(mismatch.first==expected.end(),std::string(i?selected[i-1].name:"CNB+DS baseline")
                     +" fused CPU oracle/B skip/guard mismatch, "+std::to_string(wh.first)+"x"+std::to_string(wh.second)
                     +", byte "+std::to_string(mismatch.first-expected.begin()));
                 ++count;
@@ -220,18 +200,18 @@ void fused_benchmark(id<MTLDevice> dev,id<MTLLibrary> before,id<MTLLibrary> afte
     }
     report[@"compiled"]=compiled;report[@"fusion_contract"]=@"B retained globally for p3 skip; full CNB output dispatch including odd floor-DS boundaries; one SIMD device-memory barrier; no cross-threadgroup B reads; separate PassParams buffers2/3; no ABI replacement";
     if(mode=="compile")return;
-    auto q=[dev newCommandQueue];need(q!=nil,"fused queue");const unsigned mask=probe(dev,q,after,"fsr412_cnb_ds_tuning_probe",3u);
+    auto q=[dev newCommandQueue];require(q!=nil,"fused queue");const unsigned mask=probe(dev,q,after,"fsr412_cnb_ds_tuning_probe",3u);
     report[@"fused_probe_mask"]=@(mask);
     report[@"fused_gpu_oracle_cases"]=@(fused_correctness(dev,q,before,after,cnb,ds,weights,init,mask));
     report[@"fused_gpu_specialized_oracle_cases"]=@(fused_correctness(dev,q,beforeSpec,afterSpec,cnb,ds,weights,init,mask,true));
     if(mode!="timing")return;
-    need(mask!=0,"no supported fused layouts: do not dispatch these candidates");
-    const unsigned commonMask=common_probe(dev,q,before)&common_probe(dev,q,after);
+    require(mask!=0,"no supported fused layouts: do not dispatch these candidates");
+    const unsigned commonMask=mpp_chain_probe(dev,q,before)&mpp_chain_probe(dev,q,after);
     const Shape baseCnb={(commonMask&fsr411::kMppChainCnb)?"fsr411_cnb_coop_fast_32x1":"fsr411_cnb_coop_chain_32x1",32,1,32,0};
     auto cp=pipeline(dev,beforeSpec,baseCnb,&p.cnb),dp=pipeline(dev,beforeSpec,baseline,&p.ds);
     const auto initial=fsr412_tuning_cpu::fused_input(p,0);
     const auto expected=fsr412_tuning_cpu::fused_oracle(p,initial,weights,init,true);
-    auto wb=[dev newBufferWithBytes:weights.data() length:weights.size() options:MTLResourceStorageModeShared];need(wb!=nil,"fused weights");
+    auto wb=[dev newBufferWithBytes:weights.data() length:weights.size() options:MTLResourceStorageModeShared];require(wb!=nil,"fused weights");
     auto results=[NSMutableArray new],completed=[NSMutableArray new];const unsigned warmups=4;
     const auto thermal=NSProcessInfo.processInfo.thermalState;
     for(auto s:fusedShapes) {
@@ -239,16 +219,16 @@ void fused_benchmark(id<MTLDevice> dev,id<MTLLibrary> before,id<MTLLibrary> afte
         auto candidate=pipeline(dev,afterSpec,s,&p.cnb,&p.ds);
         id<MTLBuffer> scratch[2]={[dev newBufferWithBytes:initial.data() length:initial.size() options:MTLResourceStorageModeShared],
             [dev newBufferWithBytes:initial.data() length:initial.size() options:MTLResourceStorageModeShared]};
-        need(scratch[0] && scratch[1],"fused scratch");std::vector<double> times[2];
+        require(scratch[0] && scratch[1],"fused scratch");std::vector<double> times[2];
         for(unsigned r=0;r<rounds+warmups;++r)for(unsigned j=0;j<2;++j) {
             const unsigned v=((r+orderPhase)&1u)^j;auto cb=[q commandBuffer];auto e=[cb computeCommandEncoder];
             for(unsigned k=0;k<batch;++k) {
                 if(v)fused_dispatch(e,candidate,s,scratch[v],wb,p);
                 else {dispatch(e,cp,baseCnb,scratch[v],wb,p.cnb);dispatch(e,dp,baseline,scratch[v],wb,p.ds);}
             }
-            [e endEncoding];done(cb);const double ms=(cb.GPUEndTime-cb.GPUStartTime)*1000./batch;
-            need(std::isfinite(ms) && ms>0,"invalid fused timestamp");
-            need(scratch[v].length==expected.size() && !memcmp(scratch[v].contents,expected.data(),expected.size()),
+            [e endEncoding];const double ms=commit_timed(cb)/batch;
+            require(std::isfinite(ms) && ms>0,"invalid fused timestamp");
+            require(scratch[v].length==expected.size() && !memcmp(scratch[v].contents,expected.data(),expected.size()),
                 std::string(v?s.name:"tuned CNB+DS baseline")+" measured-batch raw CPU oracle/B skip/guard mismatch");
             if(r>=warmups)times[v].push_back(ms);
         }
@@ -260,10 +240,10 @@ void fused_benchmark(id<MTLDevice> dev,id<MTLLibrary> before,id<MTLLibrary> afte
             @"candidate_threadgroup_bytes":@(candidate.staticThreadgroupMemoryLength),@"cnb_tile":@[@(s.x*2),@2],@"threads":@(s.threads),
             @"batch_cpu_oracle_checks":@((rounds+warmups)*2),@"order_phase":@(orderPhase)}];
     }
-    need(results.count>0,"no supported fused candidates selected");
+    require(results.count>0,"no supported fused candidates selected");
     // The expected raw-initializer result is computed once before warmups.
     // Every measured batch is compared outside its timed command buffer.
-    for(id<MTLBuffer> b in completed)need(b.length==expected.size() && !memcmp(b.contents,expected.data(),expected.size()),"fused timed-size raw CPU oracle/B skip mismatch");
+    for(id<MTLBuffer> b in completed)require(b.length==expected.size() && !memcmp(b.contents,expected.data(),expected.size()),"fused timed-size raw CPU oracle/B skip mismatch");
     report[@"timings"]=results;report[@"timed_size_full_scratch_cpu_oracle"]=@YES;
     report[@"size"]=@[@(width),@(height)];report[@"rounds"]=@(rounds);report[@"batch"]=@(batch);report[@"warmup_pairs"]=@(warmups);
     report[@"thermal_start"]=@(thermal);report[@"thermal_end"]=@(NSProcessInfo.processInfo.thermalState);
@@ -273,7 +253,7 @@ void fused_benchmark(id<MTLDevice> dev,id<MTLLibrary> before,id<MTLLibrary> afte
 }
 }
 int main(int argc,char **argv) { @autoreleasepool {try {
-    need(argc>=4,"usage: fsr412_mpp_tuning ROOT NATIVE_DIR INITIALIZER [--cpu-only|--compile-only|--correctness|--timing-lock]");
+    require(argc>=4,"usage: fsr412_mpp_tuning ROOT NATIVE_DIR INITIALIZER [--cpu-only|--compile-only|--correctness|--timing-lock]");
     std::string root=argv[1],dir=argv[2],beforeRoot=root,mode="cpu",scope="isolated",only;
     unsigned width=960,height=540,rounds=20,batch=16,orderPhase=0;
     for(int i=4;i<argc;++i) {
@@ -289,15 +269,15 @@ int main(int argc,char **argv) { @autoreleasepool {try {
         else if(a=="--size" && i+2<argc) {width=std::stoul(argv[++i]);height=std::stoul(argv[++i]);}
         else throw std::runtime_error("unknown/incomplete option "+a);
     }
-    need(width && height && width<=7680 && height<=4320 && rounds>=2 && rounds<=1000 && batch>=1 && batch<=256,"invalid size/rounds/batch");
-    need(orderPhase<=1,"order-phase must be 0 or 1");
-    need(scope=="isolated" || scope=="p1-ds-p2" || scope=="cnb-ds","invalid scope");
+    require(width && height && width<=7680 && height<=4320 && rounds>=2 && rounds<=1000 && batch>=1 && batch<=256,"invalid size/rounds/batch");
+    require(orderPhase<=1,"order-phase must be 0 or 1");
+    require(scope=="isolated" || scope=="p1-ds-p2" || scope=="cnb-ds","invalid scope");
     auto packed=bytes(dir+"/fsr411_native_weights.bin"),pb=bytes(dir+"/fsr411_native_params.bin"),init=bytes(argv[3]);
     NSError *e=nil;auto md=[NSData dataWithContentsOfFile:ns(dir+"/fsr411_native_manifest.json")];
     NSDictionary *manifest=md?[NSJSONSerialization JSONObjectWithData:md options:0 error:&e]:nil;
-    need(manifest && [manifest[@"fsr_version"] isEqual:@"4.1.2"],"missing/non-Lite manifest");
-    need(sha(init)==[manifest[@"initializer_sha256"] UTF8String],"initializer identity mismatch");
-    need(sha(packed)==[manifest[@"weights_sha256"] UTF8String] && sha(pb)==[manifest[@"params_sha256"] UTF8String],"native blob identity mismatch");
+    require(manifest && [manifest[@"fsr_version"] isEqual:@"4.1.2"],"missing/non-Lite manifest");
+    require(sha(init)==[manifest[@"initializer_sha256"] UTF8String],"initializer identity mismatch");
+    require(sha(packed)==[manifest[@"weights_sha256"] UTF8String] && sha(pb)==[manifest[@"params_sha256"] UTF8String],"native blob identity mismatch");
     auto p=params(pb,[manifest[@"passes"][@"4"][@"parameter_offset"] unsignedIntValue]);
     const auto p1=params(pb,[manifest[@"passes"][@"1"][@"parameter_offset"] unsignedIntValue]);
     const bool trainedHalfUp = [manifest[@"trained"] boolValue] && [manifest[@"lite_native_revision"] unsignedIntValue] == 3;
@@ -315,7 +295,7 @@ int main(int argc,char **argv) { @autoreleasepool {try {
         @"cpu_oracle_cases":@(cpuCases),@"fused_cpu_oracle_cases":@(fusedCpuCases),@"scope":ns(scope),@"full_frame_measured":@NO,
         @"full_frame_suitability":@"Requires original-shader/temporal parity and full-frame measurements in production; this bench selects no runtime kernel."}];
     if(mode!="cpu") {
-        auto dev=MTLCreateSystemDefaultDevice();need(dev && [dev supportsFamily:MTLGPUFamilyApple10],"M5/Apple10 required");
+        id<MTLDevice> dev;device_queue(dev,MTLGPUFamilyApple10,"M5/Apple10 required");
         unsigned tier=[manifest[@"tier"] unsignedIntValue];
         auto before=library(dev,beforeRoot,false,false,tier),after=library(dev,root,true,false,tier);
         auto beforeSpec=library(dev,beforeRoot,false,true,tier),afterSpec=library(dev,root,true,true,tier);
@@ -331,12 +311,12 @@ int main(int argc,char **argv) { @autoreleasepool {try {
         if(scope=="cnb-ds") {
             fused_benchmark(dev,before,after,beforeSpec,afterSpec,p1,p,packed,init,mode,only,width,height,rounds,batch,orderPhase,report);
         } else if(mode!="compile") {
-            auto q=[dev newCommandQueue];need(q!=nil,"command queue unavailable");const unsigned mask=probe(dev,q,after);
+            auto q=[dev newCommandQueue];require(q!=nil,"command queue unavailable");const unsigned mask=probe(dev,q,after);
             report[@"probe_mask"]=@(mask);report[@"gpu_oracle_cases"]=@(correctness(dev,q,before,after,p,packed,init,mask));
             if(mode=="timing") {
                 auto thermal=NSProcessInfo.processInfo.thermalState;
-                auto wb=[dev newBufferWithBytes:packed.data() length:packed.size() options:MTLResourceStorageModeShared];need(wb!=nil,"weights buffer");
-                const unsigned commonMask=common_probe(dev,q,before)&common_probe(dev,q,after);
+                auto wb=[dev newBufferWithBytes:packed.data() length:packed.size() options:MTLResourceStorageModeShared];require(wb!=nil,"weights buffer");
+                const unsigned commonMask=mpp_chain_probe(dev,q,before)&mpp_chain_probe(dev,q,after);
                 const Shape cnb={(commonMask&fsr411::kMppChainCnb)?"fsr411_cnb_coop_fast_32x1":"fsr411_cnb_coop_chain_32x1",32,1,32,0};
                 const Shape fnb={(commonMask&fsr411::kMppChainFnb32)?"fsr411_fnb32_coop_fast_16x1":"fsr411_fnb32_coop_chain_16x1",16,1,32,0};
                 report[@"neighbor_probe_features"]=@(commonMask);
@@ -364,7 +344,7 @@ int main(int argc,char **argv) { @autoreleasepool {try {
                     auto base=pipeline(dev,beforeSpec,baseline,&a),candidate=pipeline(dev,afterSpec,s,&a);
                     id<MTLBuffer> scratch[2]={[dev newBufferWithBytes:initial.data() length:initial.size() options:MTLResourceStorageModeShared],
                         [dev newBufferWithBytes:initial.data() length:initial.size() options:MTLResourceStorageModeShared]};
-                    need(scratch[0] && scratch[1],"timing scratch allocation");std::vector<double> times[2];
+                    require(scratch[0] && scratch[1],"timing scratch allocation");std::vector<double> times[2];
                     for(unsigned r=0;r<rounds+warmups;++r)for(unsigned j=0;j<2;++j) {
                         const unsigned v=(r&1u)^j;auto cb=[q commandBuffer];auto enc=[cb computeCommandEncoder];
                         for(unsigned k=0;k<batch;++k) {
@@ -372,8 +352,8 @@ int main(int argc,char **argv) { @autoreleasepool {try {
                             dispatch(enc,v?candidate:base,v?s:baseline,scratch[v],wb,a);
                             if(post[v])dispatch(enc,post[v],fnb,scratch[v],wb,p2);
                         }
-                        [enc endEncoding];done(cb);double ms=(cb.GPUEndTime-cb.GPUStartTime)*1000./batch;
-                        need(std::isfinite(ms) && ms>0,"invalid timestamp");if(r>=warmups)times[v].push_back(ms);
+                        [enc endEncoding];double ms=commit_timed(cb)/batch;
+                        require(std::isfinite(ms) && ms>0,"invalid timestamp");if(r>=warmups)times[v].push_back(ms);
                     }
                     equal_buffers(scratch[0],scratch[1]);
                     cpu_check_output(scratch[1],a,packed,init);
@@ -384,7 +364,7 @@ int main(int argc,char **argv) { @autoreleasepool {try {
                         @"baseline_threadgroup_bytes":@(base.staticThreadgroupMemoryLength),@"candidate_threadgroup_bytes":@(candidate.staticThreadgroupMemoryLength),
                         @"tile":@[@(s.x),@(s.y)],@"threads":@(s.threads)}];
                 }
-                need(results.count>0,"no probed candidates selected");report[@"timings"]=results;
+                require(results.count>0,"no probed candidates selected");report[@"timings"]=results;
                 report[@"size"]=@[@(width),@(height)];report[@"rounds"]=@(rounds);report[@"batch"]=@(batch);report[@"warmup_pairs"]=@(warmups);
                 report[@"thermal_start"]=@(thermal);report[@"thermal_end"]=@(NSProcessInfo.processInfo.thermalState);
                 report[@"low_power_mode"]=@(NSProcessInfo.processInfo.lowPowerModeEnabled);
@@ -392,6 +372,6 @@ int main(int argc,char **argv) { @autoreleasepool {try {
             }
         }
     }
-    auto json=[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:&e];need(json!=nil,error(e));
+    auto json=[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:&e];require(json!=nil,metal_error(e));
     fwrite(json.bytes,1,json.length,stdout);puts("");return 0;
 } catch(const std::exception &e) {fprintf(stderr,"FSR412 MPP tuning: %s\n",e.what());return 1;} } }

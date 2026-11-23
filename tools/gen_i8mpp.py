@@ -32,13 +32,14 @@ def frcp(a):
 
 
 class Pass:
-    def __init__(self, src, n):
+    def __init__(self, src, n, init):
         a = src.find("#ifdef MLSR_PASS_%d\n" % n)
         b = src.find("#endif // #ifdef MLSR_PASS_%d\n" % n)
         if a < 0 or b < 0:
             sys.exit("pass %d not found" % n)
         self.n = n
         self.src = src
+        self.init = init
         self.body = src[a:b]
         m = re.search(r"\n\s+(FasterNetBlock|FNB_CT2D_ADD|ConvNextBlock|"
                       r"FusedConv2D_k2s2b_QuantizedOutput)(<[^>]*>)?\s*\((.*?)\);",
@@ -47,7 +48,10 @@ class Pass:
             sys.exit("pass %d: no operator call" % n)
         self.op = m.group(1)
         self.tmpl = [int(v) for v in re.findall(r"\d+", m.group(2) or "")]
-        args = split_fields(m.group(3))
+        self.parse_args(m.group(3))
+
+    def parse_args(self, argtext):
+        args = split_fields(argtext)
         self.floats = [float(x) for x in args if is_float(x)]
         self.tens = [x for x in args if not is_float(x) and x != "computeShaderParams"]
 
@@ -108,6 +112,19 @@ class Pass:
             qs = self.fscalar(f[8])
         return dict(off=off, sx=strides[0], sy=strides[1], w=dims[0], h=dims[1], c=dims[2], qs=qs)
 
+    def dwords(self, name):
+        """embedded uint array behind `storage_<name>`, or None when the
+        tensor lives in the initializer blob."""
+        sm = re.search(r"const ConstantBufferStorage<\d+>\s+storage_" + re.escape(name)
+                       + r"\s*=\s*\{\s*(\w+)\s*\};", self.body)
+        if not sm:
+            return None
+        am = re.search(r"static const uint %s\[(\d+)\]\s*=\s*\{(.*?)\};" % re.escape(sm.group(1)),
+                       self.src, re.S)
+        if not am:
+            sys.exit("pass %d: dword array %s missing" % (self.n, sm.group(1)))
+        return _u32s(am.group(2))
+
     def wdata(self, name):
         """-> (int8 list, dims, elem strides, qscale)"""
         ty, storage, f = self.decl(name)
@@ -117,14 +134,9 @@ class Pass:
         n = 1
         for d in dims:
             n *= d
-        sm = re.search(r"const ConstantBufferStorage<\d+>\s+storage_" + re.escape(name)
-                       + r"\s*=\s*\{\s*(\w+)\s*\};", self.body)
-        if sm:
-            am = re.search(r"static const uint %s\[(\d+)\]\s*=\s*\{(.*?)\};" % re.escape(sm.group(1)),
-                           self.src, re.S)
-            if not am:
-                sys.exit("pass %d: dword array %s missing" % (self.n, sm.group(1)))
-            vals = unpack_i8_dwords(_u32s(am.group(2)))[:n]
+        dw = self.dwords(name)
+        if dw is not None:
+            vals = unpack_i8_dwords(dw)[:n]
         else:
             off = self.scalar(f[7])
             raw = self.init[off:off + n]
@@ -135,12 +147,9 @@ class Pass:
         """fp16 bias -> list of floats"""
         ty, storage, f = self.decl(name)
         n = int(re.findall(r"\d+", f[0])[0])
-        sm = re.search(r"const ConstantBufferStorage<\d+>\s+storage_" + re.escape(name)
-                       + r"\s*=\s*\{\s*(\w+)\s*\};", self.body)
-        if sm:
-            am = re.search(r"static const uint %s\[(\d+)\]\s*=\s*\{(.*?)\};" % re.escape(sm.group(1)),
-                           self.src, re.S)
-            return _halves_of_dwords(_u32s(am.group(2)))[:n]
+        dw = self.dwords(name)
+        if dw is not None:
+            return _halves_of_dwords(dw)[:n]
         off = self.scalar(f[7])
         raw = self.init[off:off + n * 2]
         return [struct.unpack("<e", raw[k * 2:k * 2 + 2])[0] for k in range(n)]
@@ -159,7 +168,7 @@ def select_resolution(src, res):
             keep = tag in st
             continue
         if inblk and st.startswith("#else"):
-            keep = not keep and False
+            keep = False
             continue
         if inblk and st.startswith("#endif"):
             inblk, keep = False, True
@@ -170,35 +179,35 @@ def select_resolution(src, res):
 
 
 class PostPass(Pass):
-    def __init__(self, src):
+    def __init__(self, src, init):
         self.n = 13
         self.src = src
+        self.init = init
         self.body = src
         m = re.search(r"\n\s+FusedConv2D_DW_Conv2D_PW_Relu_Conv2D_Add_ConvTranspose2D\s*\((.*?)\);", src, re.S)
         if not m:
             sys.exit("post: no fused CNB+CT2D call")
         self.op = "PostCNB"
         self.tmpl = []
-        args = split_fields(m.group(1))
-        self.floats = [float(x) for x in args if is_float(x)]
-        self.tens = [x for x in args if not is_float(x)]
+        self.parse_args(m.group(1))
 
 
 class Blob:
     def __init__(self):
         self.b = bytearray()
 
-    def put_i8(self, vals):
+    def pad64(self):
         while len(self.b) % 64:
             self.b.append(0)
-        off = len(self.b)
+        return len(self.b)
+
+    def put_i8(self, vals):
+        off = self.pad64()
         self.b += bytes((v & 0xFF) for v in vals)
         return off
 
     def put_h(self, vals):
-        while len(self.b) % 64:
-            self.b.append(0)
-        off = len(self.b)
+        off = self.pad64()
         for v in vals:
             self.b += struct.pack("<e", v)
         return off
@@ -272,9 +281,7 @@ def main():
     manifest = {"preset": a.preset, "res": a.res, "passes": {}}
 
     for n in range(1, 13):
-        p = Pass(src, n)
-        p.init = init
-        e = {}
+        p = Pass(src, n, init)
         if p.op == "ConvNextBlock":
             if len(p.floats) != 4 or len(p.tens) != 8:
                 sys.exit("pass %d: unexpected CNB signature" % n)
@@ -319,9 +326,8 @@ def main():
             fpg = hf // ng
             if w0d != [3, 3, 16, hf] or w1d != [1, 1, nf, 2 * nf] or w2d != [1, 1, 2 * nf, nf]:
                 sys.exit("pass %d: FNB shape %s" % (n, [w0d, w1d, w2d]))
-            w0blk = []
-            for g in range(ng):
-                w0blk += conv_hwio(w0v, w0d, w0s, g * fpg, fpg)
+            w0blk = [v for g in range(ng)
+                     for v in conv_hwio(w0v, w0d, w0s, g * fpg, fpg)]
             if len(p.floats) == 5:
                 qs0, qs1, act, qo0, qo1 = p.floats
                 ro0, ro1 = frcp(qo0), frcp(qo1)
@@ -358,9 +364,8 @@ def main():
             if w0d != [3, 3, 16, hf] or w1d != [1, 1, nf, 2 * nf] or w2d != [1, 1, 2 * nf, nf] \
                     or w3d[:2] != [2, 2] or w3d[3] != nf:
                 sys.exit("pass %d: CT2D shape %s" % (n, [w0d, w1d, w2d, w3d]))
-            w0blk = []
-            for g in range(ng):
-                w0blk += conv_hwio(w0v, w0d, w0s, g * fpg, fpg)
+            w0blk = [v for g in range(ng)
+                     for v in conv_hwio(w0v, w0d, w0s, g * fpg, fpg)]
             if len(p.floats) == 6:
                 qs0, qs1, act, fo, qo0, qo1 = p.floats
                 ro0, ro1 = frcp(qo0), frcp(qo1)
@@ -396,8 +401,7 @@ def main():
     # instead of recomputing CNB + CT2D.
     post = open(os.path.join(pdir, "post.hlsl")).read()
     post = select_resolution(post, a.res)
-    pp = PostPass(post)
-    pp.init = init
+    pp = PostPass(post, init)
     if len(pp.floats) != 5 or len(pp.tens) < 10:
         sys.exit("post: unexpected CNB call (%d floats, %d tensors)" % (len(pp.floats), len(pp.tens)))
     inp, w0, b0, w1, b1, w2, b2, w3, b3 = pp.tens[:9]

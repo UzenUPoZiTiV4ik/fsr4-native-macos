@@ -250,7 +250,7 @@ struct NativePass {
     unsigned inputSlot = 0, outputSlot = 0, skipSlot = 0;
     unsigned tileX = 1, tileY = 1, threads = 128, offset = 0;
     bool inputDispatch = false, hasSkip = false;
-    bool winograd = false, mppFast = false;
+    bool winograd = false;
 };
 struct Session {
     std::string key;
@@ -559,13 +559,7 @@ public:
             for (const auto &name : session->order) {
                 if(session->originalLossy) {
                     dispatch_original_stage(enc,m4,*slot,*session,name,view,sizes,b,skip,p);
-                    const auto capture=view.captures.find(name);
-                    if(capture!=view.captures.end()) {
-                        const uint32_t count=uint32_t(view.scratch.length/16);
-                        put(*slot,9728,count);
-                        helper(enc,m4,*slot,"capture_"+name,"fsr411_snapshot",
-                               {{view.scratch,0},{capture->second,0},{slot->constants,9728}},{},MTLSizeMake(count,1,1));
-                    }
+                    capture_scratch(enc,m4,*slot,view,name);
                     continue;
                 }
                 if (skip && name!="pre" && name!="post") continue;
@@ -603,13 +597,7 @@ public:
                         ? "pre_reuse" : name=="post" && lite_post_tile_fits(*session,p) ? "post_tile" : name;
                     dispatch(enc, m4, *slot, *session, stage, groups, b);
                 }
-                const auto capture = view.captures.find(name);
-                if (capture != view.captures.end()) {
-                    const uint32_t count = uint32_t(view.scratch.length / 16);
-                    put(*slot,9728,count);
-                    helper(enc,m4,*slot,"capture_"+name,"fsr411_snapshot",
-                           {{view.scratch,0},{capture->second,0},{slot->constants,9728}}, {}, MTLSizeMake(count,1,1));
-                }
+                capture_scratch(enc,m4,*slot,view,name);
             }
             if (rcas) dispatch(enc,m4,*slot,*session,"rcas",MTLSizeMake(ceil_div(p.alignedUW,16),ceil_div(p.alignedUH,16),1),b);
             if (p.copyMask & FSR4_INPUT_COPY_OUTPUT) {
@@ -666,6 +654,7 @@ private:
     static constexpr NSUInteger kTensor = 256, kSpd = 768, kRcas = 1024, kLossy = 1280,
         kQuality = 1312, kLiteLossy = 1344, kNative = 2048, kNeuralTile = 16384;
     static constexpr NSUInteger kSnapshot = 12288, kOriginalCopy = 11008, kOriginalSentinel = 11040;
+    static constexpr NSUInteger kCapture = 9728;
     static_assert(kSnapshot + 768 + sizeof(RegionConstants) < FrameSlot::kDone, "snapshot constant region overflow");
     id<MTLDevice> device_;
     std::string root_, buildDir_;
@@ -1099,7 +1088,7 @@ private:
                 const auto tuned=mpp_fast_dispatch(name.c_str(),np.tileX,np.tileY,np.threads,s.mppFeatures);
                 if(tuned.feature) {
                     name=tuned.function;np.tileX=tuned.tileX;np.tileY=tuned.tileY;np.threads=tuned.threads;
-                    np.mppFast=true;++s.mppFastPasses;
+                    ++s.mppFastPasses;
                 }
             }
             np.offset=[entry[@"parameter_offset"] unsignedIntValue];
@@ -1258,38 +1247,18 @@ private:
         }
         if (externalPost && !load_native(*s,o.allowCompile,kind,error)) return nullptr;
         NSDictionary *entries=manifest[@"kernels"];
+        const bool descriptorPso=kind==Kernels::Mpp && mpp_tuning_enabled();
         for (NSString *name in entries) {
-            NSDictionary *entry=entries[name]; NSError *e=nil;
+            NSDictionary *entry=entries[name];
             // Native stages never execute the generated scalar shader. Avoid
             // compiling unused PSOs (and their large constant-folding graphs).
             const std::string stage=utf8(name);
             const int logical=stage.rfind("pass",0)==0?std::atoi(stage.c_str()+4):0;
             if(portable && logical && s->native.count(logical)) {s->kernels.emplace(stage,Kernel{});continue;}
-            auto url=[NSURL fileURLWithPath:ns(buildDir_+"/"+key+"/"+utf8(entry[@"library"]))];
-            auto lib=[device_ newLibraryWithURL:url error:&e];
-            if (!lib) { error=metal_error(e); return nullptr; }
-            auto fn=[lib newFunctionWithName:entry[@"entry"]];
-            id<MTLComputePipelineState> pso=nil;
-            NSArray *launch=entry[@"wgsize"];
-            if(fn && kind==Kernels::Mpp && mpp_tuning_enabled() && launch.count==3) {
-                auto descriptor=[MTLComputePipelineDescriptor new];descriptor.computeFunction=fn;
-                descriptor.maxTotalThreadsPerThreadgroup=[launch[0] unsignedIntValue]*[launch[1] unsignedIntValue]*[launch[2] unsignedIntValue];
-                descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth=descriptor.maxTotalThreadsPerThreadgroup%32u==0;
-                pso=[device_ newComputePipelineStateWithDescriptor:descriptor options:MTLPipelineOptionNone reflection:nil error:&e];
-            } else if(fn) pso=[device_ newComputePipelineStateWithFunction:fn error:&e];
-            if (!pso) { error="pipeline "+utf8(name)+": "+metal_error(e); return nullptr; }
-            Kernel k; k.pso=pso; NSArray *wg=entry[@"wgsize"];
-            if(NSString *tables=entry[@"literal_tables"]) {
-                NSData *bytes=[NSData dataWithContentsOfFile:ns(buildDir_+"/"+key+"/"+utf8(tables))];
-                if(!bytes.length) {error="missing shader literal tables for "+stage;return nullptr;}
-                k.literalTables=[device_ newBufferWithBytes:bytes.bytes length:bytes.length options:MTLResourceStorageModeShared];
-                if(!k.literalTables) {error="cannot allocate shader literal tables";return nullptr;}
-            }
-            k.threads=MTLSizeMake([wg[0] unsignedIntValue],[wg[1] unsignedIntValue],[wg[2] unsignedIntValue]);
-            for (NSArray *a in entry[@"buffers"]) k.buffers.emplace_back([a[0] unsignedIntegerValue],utf8(a[1]));
-            for (NSArray *a in entry[@"textures"]) k.textures.emplace_back([a[0] unsignedIntegerValue],utf8(a[1]));
-            for (NSArray *a in entry[@"samplers"]) k.samplers.emplace_back([a[0] unsignedIntegerValue],utf8(a[1]));
-            s->kernels.emplace(utf8(name),std::move(k));
+            Kernel k;
+            if(!load_kernel_entry(buildDir_+"/"+key,entry,stage,"FSR 4.1.1",
+                                 "missing FSR 4.1.1 threadgroup size",k,error,descriptorPso)) return nullptr;
+            s->kernels.emplace(stage,std::move(k));
         }
         for (const auto &name:s->order) if(!s->kernels.count(name)) { error="incomplete 4.1.1 graph: "+name; return nullptr; }
         if (!s->kernels.count("ae") || !s->kernels.count("rcas")) { error="missing 4.1.1 AE/RCAS kernels"; return nullptr; }
@@ -1439,6 +1408,15 @@ private:
               Fsr4InputRect rect,uint32_t x,uint32_t y,NSUInteger off,bool depth) {
         RegionConstants r={{rect.x,rect.y,rect.width,rect.height},{x,y,0,0}}; put(s,off,r);
         helper(enc,m4,s,tag,depth?"fsr411_copy_depth":"fsr411_copy",{{s.constants,off}},{from,to},MTLSizeMake(rect.width,rect.height,1));
+    }
+    // Records the shared scratch arena after a named stage (captureStages).
+    void capture_scratch(id __strong &enc,bool m4,FrameSlot &slot,const View &view,const std::string &name) {
+        const auto capture=view.captures.find(name);
+        if (capture==view.captures.end()) return;
+        const uint32_t count=uint32_t(view.scratch.length/16);
+        put(slot,kCapture,count);
+        helper(enc,m4,slot,"capture_"+name,"fsr411_snapshot",
+               {{view.scratch,0},{capture->second,0},{slot.constants,kCapture}},{},MTLSizeMake(count,1,1));
     }
     id<MTLTexture> bind_texture(const std::string &name,const Bindings &b) {
         if(name=="r_input_color") return b.color;

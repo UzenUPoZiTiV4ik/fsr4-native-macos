@@ -77,6 +77,10 @@ def finish_tail(model, acc, residual):
     return result
 
 
+# (width, height, value extent) grids shared by the literal-vs-matrix sweeps.
+PIXEL_GRIDS = ((1, 1, 0), (3, 5, 3), (7, 5, 128))
+
+
 def literal_post_pixel(model, image, x, y):
     """POST has flat tap/output-major tables and a floating residual tail."""
     dw, pw1, pw2 = model["post_literal_weights"]
@@ -130,13 +134,26 @@ class NativeModelTests(unittest.TestCase):
         }
         # Cooperative chains must dispatch exactly like their SG1 fallback,
         # which runs whenever the runtime's cooperative layout differs.
-        fnb_fallback = re.search(r"fsr411_gpu::fnb<(\d+),(\d+),(\d+),UPSAMPLE,(\d+)>", source)
-        nf, width, height, groups = map(int, fnb_fallback.groups())
-        for name, up in re.findall(r"FSR411_FNB_CHAIN\((fsr411_\w+),\s*(true|false)\)", source):
-            cls.kernel_tiles[name] = (nf, width, height, up == "true", groups)
-        cnb_fallback = re.search(r"kernel void (fsr411_cnb_coop_chain_\w+)\(.*?fsr411_gpu::cnb<(\d+),(\d+),(\d+)>",
-                                 source, re.S)
-        cls.cnb_tiles[cnb_fallback.group(1)] = tuple(map(int, cnb_fallback.groups()[1:]))
+        chains = re.findall(r"FSR411_COOP_CHAIN\((fsr411_\w+),.*?fsr411_gpu::(cnb|fnb)<([^>]+)>",
+                            source, re.S)
+        for name, kind, args in chains:
+            tiles = cls.cnb_tiles if kind == "cnb" else cls.kernel_tiles
+            tiles[name] = tuple(int(x) if x.isdigit() else x == "true" for x in args.split(","))
+
+    def assert_literal_sweep(self, oracle, model, rng, context, grids):
+        for width, height, extent in grids:
+            image = [[[rng.randrange(-extent, extent) if extent else 0 for _ in range(16)]
+                      for _ in range(width)] for _ in range(height)]
+            for y in range(height):
+                for x in range(width):
+                    self.assertEqual(oracle(model, image, x, y), matrix_pixel(model, image, x, y),
+                                         (*context, width, height, x, y))
+
+    def encode_manifest(self, initializer, tier, out, *args):
+        path = native.encode_model(self.source_dir, initializer, tier, out, *args)
+        manifest = json.loads(path.read_text())
+        self.assert_native_dispatch_contract(manifest)
+        return manifest
 
     def assert_native_dispatch_contract(self, manifest):
         entries = list(manifest["passes"].values()) + list(manifest["auxiliary_passes"].values())
@@ -181,21 +198,16 @@ class NativeModelTests(unittest.TestCase):
         rng = random.Random(411)
         for number in (1, 2, 12):
             model = native.parse_cnb(self.source_dir / "reimpl411" / f"reimpl_pass{number}.hlsl", self.initializer)
-            for width, height, extent in ((1, 1, 0), (3, 2, 3), (7, 5, 128)):
-                image = [[[rng.randrange(-extent, extent) if extent else 0 for _ in range(16)] for _ in range(width)] for _ in range(height)]
-                for y in range(height):
-                    for x in range(width):
-                        self.assertEqual(literal_pixel(model, image, x, y), matrix_pixel(model, image, x, y), (number, width, height, x, y))
+            self.assert_literal_sweep(literal_pixel, model, rng, (number,),
+                                      ((1, 1, 0), (3, 2, 3), (7, 5, 128)))
 
     def test_all_tiers_and_abi(self):
         with tempfile.TemporaryDirectory() as tmp:
             for tier in (1080, 2160, 4320):
                 out = Path(tmp) / str(tier)
-                native.encode_model(self.source_dir, ROOT / "third_party/fsr411/initializers.bin", tier, out)
+                manifest = self.encode_manifest(ROOT / "third_party/fsr411/initializers.bin", tier, out)
                 params = (out / "fsr411_native_params.bin").read_bytes()
                 self.assertEqual(len(params), 13 * 256)
-                manifest = json.loads((out / "fsr411_native_manifest.json").read_text())
-                self.assert_native_dispatch_contract(manifest)
                 weights = (out / "fsr411_native_weights.bin").read_bytes()
                 self.assertEqual(manifest["weights_bytes"], len(weights))
                 self.assertEqual(manifest["weights_sha256"], hashlib.sha256(weights).hexdigest())
@@ -222,11 +234,7 @@ class NativeModelTests(unittest.TestCase):
         model = native.parse_post_cnb(self.source_dir / "reimpl411/post_rev_411.hlsl",
                                       self.source_dir / "reimpl411/post_rev_411_tables.hlsli", 1080)
         rng = random.Random(41126)
-        for width, height, extent in ((1, 1, 0), (3, 5, 3), (7, 5, 128)):
-            image = [[[rng.randrange(-extent, extent) if extent else 0 for _ in range(16)] for _ in range(width)] for _ in range(height)]
-            for y in range(height):
-                for x in range(width):
-                    self.assertEqual(literal_post_pixel(model, image, x, y), matrix_pixel(model, image, x, y), (width, height, x, y))
+        self.assert_literal_sweep(literal_post_pixel, model, rng, (), PIXEL_GRIDS)
 
     def test_post_rejects_changed_residual_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -243,9 +251,7 @@ class NativeModelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             for tier in (1080, 2160, 4320):
                 out = Path(tmp) / str(tier)
-                manifest_path = native.encode_model(self.source_dir, initializer, tier, out, "ultraperformance", self.up_dir)
-                manifest = json.loads(manifest_path.read_text())
-                self.assert_native_dispatch_contract(manifest)
+                manifest = self.encode_manifest(initializer, tier, out, "ultraperformance", self.up_dir)
                 self.assertEqual(manifest["initializer_sha256"], evidence["initializer_sha256"])
                 self.assertEqual(manifest["presets"], ["ultraperformance"])
                 self.assertEqual(len((out / "fsr411_native_params.bin").read_bytes()), 13 * 256)
@@ -267,11 +273,7 @@ class NativeModelTests(unittest.TestCase):
                                              self.up_dir / "reimpl411/post_rev_411_tables.hlsli", 1080), literal_post_pixel))
         rng = random.Random(4113)
         for model, oracle in models:
-            for width, height, extent in ((1, 1, 0), (3, 5, 3), (7, 5, 128)):
-                image = [[[rng.randrange(-extent, extent) if extent else 0 for _ in range(16)] for _ in range(width)] for _ in range(height)]
-                for y in range(height):
-                    for x in range(width):
-                        self.assertEqual(oracle(model, image, x, y), matrix_pixel(model, image, x, y), (model["source"], width, height, x, y))
+            self.assert_literal_sweep(oracle, model, rng, (model["source"],), PIXEL_GRIDS)
 
     def test_rejects_mixed_model_initializer(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -293,9 +295,7 @@ class NativeModelTests(unittest.TestCase):
                     manifests, blobs = {}, {}
                     for profile in ("exact", "lossy"):
                         out = Path(tmp) / f"{tier}_{preset}_{profile}"
-                        path = native.encode_model(self.source_dir, initializer, tier, out, preset, self.up_dir, profile)
-                        manifests[profile] = json.loads(path.read_text())
-                        self.assert_native_dispatch_contract(manifests[profile])
+                        manifests[profile] = self.encode_manifest(initializer, tier, out, preset, self.up_dir, profile)
                         blobs[profile] = (out / "fsr411_native_weights.bin").read_bytes()
                         self.assertEqual(manifests[profile]["profile"], profile)
                     selected = (1, 2, 4, 5, 7, 8, 9, 10, 12) if preset == "normal" else (7, 8, 9)

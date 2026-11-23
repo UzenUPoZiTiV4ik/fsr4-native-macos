@@ -11,21 +11,15 @@ import argparse
 import hashlib
 import re
 from pathlib import Path
+try:
+    from upstream_oracle import balanced_end
+except ImportError:
+    from fsr412.upstream_oracle import balanced_end
 
 ROOT=Path(__file__).resolve().parents[2]
 REVISION=1
 BEGIN='// fsr412-neural-tiling-v1-begin\n'
 END='// fsr412-neural-tiling-v1-end\n'
-
-
-def close_parenthesis(text,start):
-    depth=0
-    for i in range(start,len(text)):
-        if text[i]=='(':depth+=1
-        elif text[i]==')':
-            depth-=1
-            if depth==0:return i
-    raise ValueError('unterminated native Metal kernel signature')
 
 
 def apply_neural_tiling(source: str,header: str|None=None) -> str:
@@ -49,7 +43,7 @@ def apply_neural_tiling(source: str,header: str|None=None) -> str:
         if name in ('fsr411_mpp_chain_probe','fsr411_simd_probe'):
             continue
         start=match.end()-1
-        end=close_parenthesis(source,start)
+        end=balanced_end(source,start,message='unterminated native Metal kernel signature')
         signature=source[start+1:end]
         if '[[buffer(2)]]' not in signature and 'FSR411_SIMD_ARGS' not in signature:
             raise ValueError('unknown integer kernel arguments: '+name)

@@ -39,16 +39,6 @@ struct Native {
         if(pass==4) r.dispatch("pass1_border");
     }
 };
-void input(Replay &r,unsigned frame) {
-    std::vector<float> c(r.renderWidth*r.renderHeight*4),d(r.renderWidth*r.renderHeight),m(r.renderWidth*r.renderHeight*2);
-    for(unsigned y=0;y<r.renderHeight;++y)for(unsigned x=0;x<r.renderWidth;++x){size_t i=size_t(y)*r.renderWidth+x;
-        const float a=.05f+.5f*float(x)/r.renderWidth+.1f*float(y)/r.renderHeight;
-        c[i*4]=a;c[i*4+1]=a*.7f;c[i*4+2]=a*.4f;c[i*4+3]=1;
-        if((x+frame)%29==0)c[i*4]=c[i*4+1]=c[i*4+2]=.9f;
-        const bool foreground=x>r.renderWidth/2;d[i]=foreground?.8f:.2f;m[i*2]=foreground?1.f/r.width:0;m[i*2+1]=0;
-    }
-    r.upload(r.textures["input"],c.data());r.upload(r.textures["depth"],d.data());r.upload(r.textures["velocity"],m.data());float exp[2]={1,1};r.upload(r.textures["exposure"],exp);
-}
 bool identical(NSData *a,NSData *b){return a.length==b.length && std::memcmp(a.bytes,b.bytes,a.length)==0;}
 void tensor(Replay &a,Replay &b,const std::string &name,size_t base,size_t pitch,unsigned w,unsigned h) {
     NSData *x=a.compact_tensor(base,pitch,w,h),*y=b.compact_tensor(base,pitch,w,h);
@@ -79,7 +69,7 @@ int main(int argc,char **argv) {@autoreleasepool {try {
         check(original.kernels["pass3"].pipeline!=nil,utf8(error.localizedDescription));
     }
     Native native(candidate,root,kind);unsigned matches=0;
-    for(unsigned f=0;f<frames;++f){input(original,f);input(candidate,f);float jx=f&1u?-.25f:.125f,jy=f%3?1.f/6.f:-1.f/6.f;
+    for(unsigned f=0;f<frames;++f){gradient_input(original,f,true);gradient_input(candidate,f,true);float jx,jy;jitter(f,jx,jy);
         original.set_frame(jx,jy,f==0);candidate.set_frame(jx,jy,f==0);
         std::fprintf(stderr,"upstream/native frame=%u\n",f);
         original.dispatch("pre");candidate.dispatch("pre");
