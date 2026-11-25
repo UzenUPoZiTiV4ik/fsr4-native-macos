@@ -10,7 +10,7 @@
 
 ![FSR4 Installer](images/installer.png)
 
-1. Скачайте **FSR4-Installer-v2.0.dmg** из
+1. Скачайте **FSR4-Installer-v4.1.dmg** из
    [последнего релиза](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/releases/latest),
    откройте его и перетащите **FSR4 Installer** в «Программы».
 2. Первый запуск. Приложение не нотаризовано Apple, поэтому macOS его
@@ -66,7 +66,7 @@
 ```sh
 xcodebuild -downloadComponent MetalToolchain
 make -B
-python3 tools/fsr412_import_model.py --dll /path/to/amdvkffx64.dll --with-shaders
+python3 tools/fsr412/import_model.py --dll /path/to/amdvkffx64.dll --with-shaders
 tools/bin/fsr4mac --backend-info
 ```
 
@@ -122,6 +122,13 @@ Tiled убран из выбора в панели, но `int8-lite-lossy-tiled`
 Перезапуск для смены режима не нужен, но после обновления самого хука
 игру нужно перезапустить. Свежие замеры 1080p/1440p с учётом прогрева:
 [README](../README.md), [методика и разброс](FSR_V3_BENCHMARKS.md).
+
+В панели также есть переключатель **Генерация кадров**: `MetalFX / ANR 2x / ANR 3x`
+(для игр с включённым **DLSS Frame Generation**). С версии v4.1 ANR работает на
+**FG-V.B20** с любым разрешением от `640x360` до `7680x4320`, нативным цветом
+(`srgb8`/`pq10`/`scrgb16`) и нейроускорителями M5 (MPP NAX). Веса ANR не входят
+в релиз и готовятся локально из `anr-fg-V.B20-addon.zip`; подробнее:
+[ANR_RESEARCH.md](ANR_RESEARCH.md).
 
 ## 5. Как всё вернуть
 

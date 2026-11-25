@@ -1,5 +1,37 @@
 # Releases
 
+## v4.1 (2026-11-25)
+
+Upgrade experimental ANR frame generation to **FG-V.B20** (dynamic resolution
+`640x360..7680x4320`, native `srgb8`/`pq10`/`scrgb16`), add experimental **3x
+frame generation** (`MetalFX | ANR 2x | ANR 3x`), and optimize the Metal
+runtime and shaders for Apple M5 (Metal 4 MPP NAX `conv_packed_m1`, `optnone`
+stripping, plain threadgroup gather access, DAG barrier elision, and zero-conversion
+live bridge). No FSR 4.1.2 upscaler model or weight changes.
+[Release notes](docs/releases/v4.1.md).
+
+- **FG-V.B20 dynamic runtime (`fsr4_anr_runtime_v2`)**: `tools/anr/prepare.py --addon`
+  builds a single ~1.5 MB runtime from upstream `anr-fg-V.B20-addon.zip` using
+  `spirv-cross` and Xcode's Metal compiler (no Metal Shader Converter SDK needed).
+  Supports any resolution from `640x360` to `7680x4320` natively in `srgb8`,
+  `pq10`, or `scrgb16`; legacy `FG-V.B14` runtimes remain supported for 2x.
+- **Experimental 3x frame generation (`anr3x`)**: encodes `t=1/3` and `t=2/3`
+  from a single pair pass on V.B20; a lazy presentation hook (`CAMetalDrawable`,
+  `MTL4CommandQueue`, `MTLCommandBuffer`) inserts `t=2/3` with EMA 1/3 pacing
+  only when `ANR 3x` is active (zero overhead in `MetalFX` and `ANR 2x`). Live
+  `2x <-> 3x` switching in `FSR4 Panel.app` keeps pipelines warm.
+- **M5 Metal 4 MPP NAX & shader optimizations**: `conv_packed_m1` runs on native
+  Metal 4 `mpp::tensor_ops::matmul2d` (`kernels_mpp.metallib` on Apple10 / M5+,
+  clean fallback on M1-M4, `FSR4_ANR_MPP=0` toggle). Interleaved 1080p A/B on M5:
+  **+17.6% to +21.1% faster** than unoptimized V.B20 in 2x, **+14.4% to +19.6%**
+  in 3x, and **+11.7% faster** than legacy V.B14 `packed` in 2x (~3.85 ms boost
+  clock). Passes `verify.py` PSNR gates (`73.10 dB` at `t=0.5`, `72.30 dB` at `t=0.75`).
+- **Live bridge & verification**: zero-conversion direct color import/export,
+  cached per-slot `MTLResidencySet`s, `anr_import_dm` depth/motion fast path,
+  and full Metal 3/4 + Rosetta x86_64 live tests (1080p PQ10/HDR, `1710x1073`
+  native SDR, `CAMetalLayer` 3x insertion, and 2x/3x motion-position checks).
+  ANR weights and compiled shaders stay local under `build/` and are not packaged.
+
 ## v4.0 (2026-11-25)
 
 Faster Lite Lossy reuse, wider exact Winograd, probe-verified MPP fast paths,
