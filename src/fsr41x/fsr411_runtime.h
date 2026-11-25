@@ -263,6 +263,7 @@ struct Session {
     int tier = 0;
     uint32_t postPixelsPerGroup = 32;
     uint32_t mppFeatures = 0, mppFastPasses = 0;
+    uint32_t preTileSide = 0;    // Optional FSR 4.1.2 PRE variants; 0 for older bundles.
     // FSR 4.1.2: tile side of the optional tiled POST ("post_tile"), 0 if absent.
     uint32_t postTileSide = 0;
     bool splitAutoExposure = false;
@@ -574,8 +575,9 @@ public:
                     // kernels (with optional tiled colour taps) while partial
                     // tiled mode stays on the unified POST.
                     std::string stage = name;
-                    if (skip && name == "pre" && session->kernels.count("pre_reuse")) {
-                        stage = "pre_reuse";
+                    if (name == "pre") {
+                        if (skip && session->kernels.count("pre_reuse")) stage = "pre_reuse";
+                        if (lite_pre_tile_fits(*session, p) && session->kernels.count(stage + "_tile")) stage += "_tile";
                     } else if (name == "post") {
                         const bool tileFits = lite_post_tile_fits(*session, p);
                         if (liteLossy && !partial) {
@@ -1455,7 +1457,7 @@ private:
         if(name=="InitializerBuffer" || name=="t18_initializer") return {s.initializer,0};
         if(name=="MLSR_Optimized_Constants") {
             const bool frameStage =
-                stage=="pre" || stage=="pre_reuse" || stage=="prepare_color" ||
+                stage=="pre" || stage=="pre_tile" || stage=="pre_reuse" || stage=="pre_reuse_tile" || stage=="prepare_color" ||
                 stage=="post" || stage=="post_tile" ||
                 stage=="post_full" || stage=="post_full_tile" ||
                 stage=="post_reuse" || stage=="post_reuse_tile";
@@ -1466,6 +1468,15 @@ private:
         if(name=="cbRCAS") return {slot.constants,kRcas};
         if(name=="rw_spd_global_atomic_atomic") return {b.view->spdAtomic,0};
         [NSException raise:@"FSR411Binding" format:@"Unknown buffer %s",name.c_str()]; return {nil,0};
+    }
+    bool lite_pre_tile_fits(const Session &s,const Fsr4InputPrepared &p) const {
+        if (!s.preTileSide) return false;
+        const char *forced = std::getenv("FSR4_LITE_PRE_TILE");
+        if (forced && *forced ? *forced == '0' : ![device_ supportsFamily:static_cast<MTLGPUFamily>(1010)]) return false;
+        // See pre_opt.pre_tile: both footprints fit a single 16x16 tile.
+        const float maxInvScale = float(s.preTileSide - 3u) / 18.f;
+        return float(p.rw)/p.alignedUW <= maxInvScale && float(p.rh)/p.alignedUH <= maxInvScale &&
+               std::abs(p.jitter[0]) <= 1.f && std::abs(p.jitter[1]) <= 1.f;
     }
     // The FSR 4.1.2 tiled POST covers every colour tap only while
     // ceil(32 * inv_scale) + 6 fits its tile (tools/fsr412/optimization.py);
@@ -1485,7 +1496,7 @@ private:
     void dispatch(id __strong &enc,bool m4,FrameSlot &slot,const Session &s,const std::string &name,MTLSize groups,const Bindings &b,bool publish=true) {
         if(slot.stageProfiler) {
             const std::string profiled =
-                name=="pre_reuse" ? "pre" :
+                (name=="pre_tile" || name=="pre_reuse" || name=="pre_reuse_tile") ? "pre" :
                 (name=="post_tile" || name=="post_full" || name=="post_full_tile" ||
                  name=="post_reuse" || name=="post_reuse_tile") ? "post" : name;
             slot.stageProfiler->begin_stage(enc, profiled);

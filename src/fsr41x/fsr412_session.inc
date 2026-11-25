@@ -146,6 +146,13 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
         s->kernels.emplace(stage,std::move(k));
     }
     for(const auto &name:order)if(!s->kernels.count(name)) {error="incomplete FSR 4.1.2 graph: "+name;return nullptr;}
+    for (NSString *stage in @[@"pre_tile", @"pre_reuse_tile"]) {
+        NSDictionary *tile = entries[stage];
+        if (!tile) continue;
+        const unsigned side = [tile[@"tile_side"] unsignedIntValue];
+        if (!s->preparedColor || side != 16) {error="invalid FSR 4.1.2 tiled PRE";return nullptr;}
+        s->preTileSide = side;
+    }
     if(NSDictionary *tile=entries[@"post_tile"] ?: entries[@"post_full_tile"] ?: entries[@"post_reuse_tile"]) {
         // The tiled POST reads every colour tap through one threadgroup tile.
         const unsigned side=[tile[@"tile_side"] unsignedIntValue];
