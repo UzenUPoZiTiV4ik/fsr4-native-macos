@@ -5,9 +5,9 @@ Works as a standalone tool and inside games via CrossOver (DLSS → FSR 4).
 
 ## Repository map
 
-- Runtime and MetalFX hook. Core FSR 4.1.1 runtime interfaces live in [src/fsr411_runtime.h](src/fsr411_runtime.h), FSR 4.1.2 session management lives in [src/fsr412_session.inc](src/fsr412_session.inc), the MetalFX interception layer is [hook/fsr4_metalfx.m](hook/fsr4_metalfx.m), and CrossOver bottle integration is handled by [tools/crossover/crossover_fsr4.py](tools/crossover/crossover_fsr4.py).
-- Weight importers and pinned graphs. Adjusted `int8-lite-lossy` and `lossy2` profiles pin the `dll-2026-11-22` release through [tools/fsr412/nov22_weights.py](tools/fsr412/nov22_weights.py) and [tools/fsr411/lossy2.py](tools/fsr411/lossy2.py), while the opt-in `int8-lite-lossy-original` route pins the November 1 graph and matching weights via [tools/fsr412/compile_original.py](tools/fsr412/compile_original.py) in separate caches.
-- Build, tests, and release notes. [Makefile](Makefile) defines build and verification targets including `make test` and `make test-fsr412-lossy`, and [docs/releases/v3.3.md](docs/releases/v3.3.md) tracks the current weight pins and macOS 27 hook changes.
+- `src/` is split by concern: shared device/backend/input helpers in `src/common/`, the live-game hook layer and panel in `src/live/`, the legacy FSR 4.0.2 runtime in `src/fsr402/`, the FSR 4.1.1/4.1.2 runtimes in `src/fsr41x/` (Metal kernels in `src/fsr41x/shaders/`), the experimental ANR frame-generation runtime in `src/anr/`, the Netal input layer in `src/netal/`, and the standalone CLI binaries in `src/cli/`. Core FSR 4.1.1 runtime interfaces live in [src/fsr41x/fsr411_runtime.h](src/fsr41x/fsr411_runtime.h), FSR 4.1.2 session management in [src/fsr41x/fsr412_session.inc](src/fsr41x/fsr412_session.inc), and the MetalFX interception layer in [hook/fsr4_metalfx.m](hook/fsr4_metalfx.m).
+- `tools/` is grouped per model and task: `tools/fsr402/`, `tools/fsr411/` and `tools/fsr412/` hold the per-model importers, compilers and weight pipelines, `tools/common/` the shared parsers, plus `tools/netal/`, `tools/anr/`, `tools/crossover/` (bottle integration via [tools/crossover/crossover_fsr4.py](tools/crossover/crossover_fsr4.py)), `tools/installer/`, `tools/bench/` and `tools/diagnostics/`. Weight importers and pinned graphs: the adjusted `int8-lite-lossy` and `lossy2` profiles pin the `dll-2026-11-22` release through [tools/fsr412/nov22_weights.py](tools/fsr412/nov22_weights.py) and [tools/fsr411/lossy2.py](tools/fsr411/lossy2.py).
+- `tests/` mirrors the same split: `tests/core/`, `tests/fsr402/`, `tests/fsr411/`, `tests/fsr412/`, `tests/anr/`, `tests/netal/`, `tests/crossover/`, `tests/bench/`, `tests/installer/` and `tests/common/`. [Makefile](Makefile) defines build and verification targets including `make test` and `make test-fsr412-lossy`, and [docs/releases/v3.3.md](docs/releases/v3.3.md) tracks the current weight pins and macOS 27 hook changes.
 - Generated directories. `build/` stores compiled binaries, shader caches, and imported external weights, whereas `dist/crossover/` contains the live hook, settings and backups for source installs. Release ZIPs and DMGs go under `dist/release/`.
 
 ## M5 performance: 1080p and 1440p (v3.0)
@@ -43,7 +43,6 @@ SIMD column, not the INT8 SIMD architecture of the other rows.
 | Lossy + `--temporal-quality 1` | 4.62 | 7.16 | 8.93 | 13.32 |
 | Lossy + `--temporal-quality 2` | 4.14 | 6.79 | 7.98 | 12.50 |
 | Lite Lossy Tiled (512, CLI-only) | 3.73 | 5.18 | 7.02 | 9.41 |
-| Lite Lossy Original (CLI-only) | 8.64 | 9.16 | 10.87 | 11.85 |
 
 Input/output: **1280x720 -> 1920x1080** and **1706x960 -> 2560x1440**.
 Auto-exposure on, RCAS off, identical deterministic synthetic motion/noise
@@ -112,7 +111,7 @@ own D3DMetal and restores the original binary. Step-by-step guide:
 ```sh
 xcodebuild -downloadComponent MetalToolchain
 make -B
-python3 tools/fsr412_import_model.py --dll /path/to/amdvkffx64.dll --with-shaders
+python3 tools/fsr412/import_model.py --dll /path/to/amdvkffx64.dll --with-shaders
 python3 tools/crossover/crossover_fsr4.py install --panel --fsr-version 4.1.2 --profile int8-lite
 ```
 
@@ -155,7 +154,7 @@ python3 tools/crossover/crossover_fsr4.py restore --bottle "/path/to/cxbottle.co
 More: [CrossOver details](docs/CROSSOVER.md).
 
 FSR 4.1.2 INT8 Lite is imported from the supplied AMD driver DLL with
-`python3 tools/fsr412_import_model.py --dll /path/to/amdvkffx64.dll --with-shaders`.
+`python3 tools/fsr412/import_model.py --dll /path/to/amdvkffx64.dll --with-shaders`.
 The importer validates the DLL and 27,392-byte Lite initializers without
 loading the Windows binary. The 4.1.2 graph uses an isolated `fsr412_` cache.
 Its optimized output is byte-identical to the DLL's Lite shaders translated
@@ -189,12 +188,6 @@ and CLI-only; it is not offered by the panel.
 and persistent-change repairs; `2` uses optional fast Wave32 notes.
 Defaults are unchanged. [Implementation, tradeoffs, timings and tests](docs/FSR412_LOSSY.md).
 
-`--profile int8-lite-lossy-original` is a different, opt-in route: it runs the
-November 1 release's own PRE/BORDER/POST shaders (`make original-lossy-weights`) from a verified external bundle
-(`tools/fsr412/compile_original.py`) with exact native INT8 neural stages, and
-matches the original-shader oracle byte for byte. It is slower than the adjusted
-Lite Lossy path and is not a default.
-
 ## Experimental ANR frame generation
 
 An independent ANR runtime can replace the **MetalFX FG that D3DMetal uses
@@ -213,7 +206,6 @@ make build-fsr411-tests
 make test-fsr411-gpu
 make test-fsr412-optimization
 make test-fsr412-lossy      # normal/partial, native/scalar/SIMD, Metal 3/4
-make test-fsr412-original   # opt-in original-graph route versus the original-shader oracle
 make test-fsr411-mpp-fast  # GPU-probed M5 kernels and forced fallback
 make test-fsr-pre-m5      # forced SIMD and exact Winograd
 ```

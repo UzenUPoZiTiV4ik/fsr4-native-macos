@@ -2,7 +2,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <MetalFX/MetalFX.h>
-#include "fsr4_live.h"
+#include "../../src/live/fsr4_live.h"
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>

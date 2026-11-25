@@ -5,7 +5,7 @@
 #pragma once
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
-#include "../../src/fsr411_model.h"
+#include "../../src/fsr41x/fsr411_model.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>

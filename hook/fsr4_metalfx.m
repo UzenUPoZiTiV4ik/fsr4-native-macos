@@ -16,7 +16,7 @@
 #import <stdarg.h>
 #import <string.h>
 #import <unistd.h>
-#import "fsr4_live.h"
+#import "../src/live/fsr4_live.h"
 
 // A newer hook may be loaded beside an older encoder. Never read a V2-sized
 // frame through the V1 entry point or silently discard an active subrect.

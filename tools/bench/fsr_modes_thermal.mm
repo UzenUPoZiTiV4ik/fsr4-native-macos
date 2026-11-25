@@ -2,8 +2,8 @@
 // Steady-state whole-frame model comparison. Native models use the same
 // Runtime::encode as the CLI; optional 4.0.2 uses the production live encoder.
 // No Windows DLL, game, GPU counters or capture copies run in timed buffers.
-#include "../../src/fsr412_runtime.h"
-#include "../../src/fsr4_live.h"
+#include "../../src/fsr41x/fsr412_runtime.h"
+#include "../../src/live/fsr4_live.h"
 #include "bench_gpu.h"
 #include <chrono>
 #include <fcntl.h>
@@ -119,7 +119,6 @@ int main(int argc, char **argv) { @autoreleasepool { try {
     fixOptions.backend=requestedBackend; fixOptions.allowCompile=allowCompile; fix.options=fixOptions;
     add("int8-lite-lossy", "FSR 4.1.2 Lite Lossy", fsr411::Profile::Int8LiteLossy, true);
     add("int8-lite-lossy-tiled", "Lite Lossy Tiled (512, CLI only)", fsr411::Profile::Int8LiteLossy, true).options.neuralTileSize=512;
-    add("int8-lite-lossy-original", "Lite Lossy Original (CLI only)", fsr411::Profile::Int8LiteLossy, true).options.originalLossy=true;
     add("exact", "Exact IEEE reference (CLI only)", fsr411::Profile::Exact, false);
     add("lossy", "Legacy Lossy (CLI only)", fsr411::Profile::Lossy, false);
     add("lossy2-temporal1", "Lossy + Temporal quality 1 (CLI only)", fsr411::Profile::Lossy2, false, 1);

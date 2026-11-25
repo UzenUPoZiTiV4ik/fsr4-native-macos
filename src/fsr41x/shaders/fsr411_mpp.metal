@@ -1,0 +1,828 @@
+// SPDX-License-Identifier: MIT
+// Native M5 FSR 4.1.1 integer ConvNext blocks. Integer matrix products use
+// Metal Performance Primitives; epilogues preserve the 4.1.1 round-even,
+// int32 bias and int16-before-int8 tail semantics. Fixed pass metadata can
+// be specialized at pipeline creation without changing the parameter ABI.
+//
+// The weights come only from the verified 4.1.1 import, packed by
+// tools/fsr411/gen_fsr411_native.py. There is no v07 model fallback in this file.
+// Compile with -std=metal4.0, -I src, and FSR411_MAXW/FSR411_MAXH for the tier.
+#include <metal_stdlib>
+#include <metal_tensor>
+#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
+#include "fsr411_model.h"
+
+using namespace metal;
+using namespace mpp::tensor_ops;
+
+#ifndef FSR411_MAXW
+#define FSR411_MAXW 960
+#endif
+#ifndef FSR411_MAXH
+#define FSR411_MAXH 540
+#endif
+#ifndef FSR411_VECTOR_QUANTIZE
+#define FSR411_VECTOR_QUANTIZE 1
+#endif
+
+// FSR411_SPECIALIZE, FSR411_PARAMS_ADDRESS and FSR411_LOCAL_PARAMS come from
+// fsr411_model.h.
+
+namespace fsr411_gpu {
+
+__attribute__((always_inline)) inline int4 load_bias(device const uchar *weights, uint offset, uint channel) {
+    return offset == fsr411::kNoOffset ? int4(0) :
+        *(device const int4 *)(weights + offset + channel * sizeof(int));
+}
+
+__attribute__((always_inline)) inline int4 load_acc(threadgroup int *acc, uint offset) {
+    return *(threadgroup int4 *)(acc + offset);
+}
+
+__attribute__((always_inline)) inline uint quantize(int4 acc, int4 bias, int4 residual, fsr411::Epilogue q) {
+#if FSR411_VECTOR_QUANTIZE
+    // Keep wrapping operations unsigned. Metal's signed right shift is
+    // arithmetic, so it directly implements the sign fill in finish().
+    // The half-way increment uses the pre-rounded integer, including at
+    // int32 endpoints; narrowing still happens before the int8 clamp.
+    uint4 bits = ((as_type<uint4>(acc) + as_type<uint4>(bias)) << q.accumulatorShift)
+               + (as_type<uint4>(residual) << q.residualShift);
+    int4 value = as_type<int4>(bits);
+    if (q.flags & fsr411::kReluBeforeRound) value = max(value, int4(0));
+    if (q.rightShift) {
+        bits = as_type<uint4>(value);
+        const uint halfStep = 1u << (q.rightShift - 1u);
+        const uint4 increment = (q.flags & fsr411::kRoundHalfUp)
+            ? uint4(halfStep) : uint4(halfStep - 1u) + ((bits >> q.rightShift) & 1u);
+        value = as_type<int4>(bits + increment) >> q.rightShift;
+    }
+    if (q.flags & fsr411::kNarrowInt16)
+        value = as_type<int4>(as_type<uint4>(value) << 16u) >> 16u;
+    return as_type<uint>(char4(clamp(value, int4(-128), int4(127))));
+#else
+    int4 result;
+#pragma unroll
+    for (uint c = 0; c < 4; ++c)
+        result[c] = fsr411::finish(acc[c], bias[c], residual[c], q);
+    return as_type<uint>(char4(result));
+#endif
+}
+
+template <bool RELU>
+__attribute__((always_inline)) inline uint quantize_cnb_intermediate(int4 acc, int4 bias, fsr411::Epilogue q) {
+    constexpr uint flags = RELU ? fsr411::kReluBeforeRound : 0u;
+    q.flags &= ~fsr411::kFirstTapBias; // bias selection is done before arithmetic
+    // Every imported intermediate has no accumulator shift and no int16
+    // narrowing. Keep a generic fallback for other ABI-valid epilogues.
+    if (!q.accumulatorShift && q.flags == flags)
+        return quantize(acc, bias, int4(0), fsr411::Epilogue{0, 0, q.rightShift, flags});
+    if (!q.accumulatorShift && q.flags == (flags | fsr411::kRoundHalfUp))
+        return quantize(acc, bias, int4(0), fsr411::Epilogue{0, 0, q.rightShift, flags | fsr411::kRoundHalfUp});
+    return quantize(acc, bias, int4(0), q);
+}
+
+// Fixed NHWC tiles retain the storage reduction already proven on M5: the
+// expansion reads all a1 before a2 replaces it. Both matrix products complete
+// before the next stage writes the shared activation allocation.
+template <int TW, int TH, int SG = 4>
+__attribute__((always_inline)) inline void conv3x3(device uchar *scratch, device uchar *weights,
+                    FSR411_PARAMS_ADDRESS fsr411::PassParams &p, threadgroup int *acc, uint2 group, uint bank = 0) {
+    auto input = tensor<device int8_t, dextents<int32_t, 4>, tensor_inline>(
+        (device int8_t *)(scratch + fsr411::tensor_address(p.input, 0, 0, bank * 16u)),
+        dextents<int32_t, 4>(16, int(p.input.width), int(p.input.height), 1),
+        array<int, 4>{1, int(p.input.strideX), int(p.input.strideY), int(p.input.strideY * p.input.height)});
+    auto weight = tensor<device int8_t, extents<int32_t, 16, 16, 3, 3>, tensor_inline>(
+        (device int8_t *)(weights + p.weights[0] + bank * 9u * 16u * 16u), extents<int32_t, 16, 16, 3, 3>());
+    auto output = tensor<threadgroup int, extents<int32_t, 16, TW, TH, 1>, tensor_inline>(
+        acc, extents<int32_t, 16, TW, TH, 1>());
+    constexpr auto descriptor = convolution2d_descriptor(
+        int4(16, TW, TH, 1), int4(16, FSR411_MAXW, FSR411_MAXH, 1), int2(3),
+        convolution2d_activation_layout::nhwc, convolution2d_weights_layout::hwio,
+        int2(1), int2(1), 1, false, convolution2d_descriptor::mode::multiply);
+    convolution2d<descriptor, execution_simdgroups<SG>> op;
+    op.set_offsets(int2(group * uint2(TW, TH)));
+    op.run(input, weight, output);
+}
+
+template <int T, int N, int K, bool SPLIT_ROWS = false, int SG = 4>
+__attribute__((always_inline)) inline void pointwise(threadgroup int8_t *activations, device int8_t *weights,
+                      threadgroup int *acc, uint tid) {
+    // DS16 and ordinary FNB32 benefit from four independent row slices.
+    // Other blocks retain the full-threadgroup operation. Caller barriers
+    // still make all output rows visible before the common epilogue.
+    if constexpr (SPLIT_ROWS) {
+        // The Apple10 native ABI uses four SIMD32 groups (128 threads).
+        static_assert(fsr411::kThreads == 128, "Row splitting requires four SIMD32 groups");
+        static_assert(T % 4 == 0, "Each SIMD group needs an equal row slice");
+        constexpr int ROWS = T / 4;
+        const uint row = (tid / 32u) * ROWS;
+        auto a = tensor<threadgroup int8_t, extents<int32_t, K, ROWS>, tensor_inline>(activations + row * K, extents<int32_t, K, ROWS>());
+        auto b = tensor<device int8_t, extents<int32_t, N, K>, tensor_inline>(weights, extents<int32_t, N, K>());
+        auto c = tensor<threadgroup int, extents<int32_t, N, ROWS>, tensor_inline>(acc + row * N, extents<int32_t, N, ROWS>());
+        constexpr auto descriptor = matmul2d_descriptor(ROWS, N, K, false, false, false, matmul2d_descriptor::mode::multiply);
+        matmul2d<descriptor, execution_simdgroup> op;
+        op.run(a, b, c);
+    } else {
+        auto a = tensor<threadgroup int8_t, extents<int32_t, K, T>, tensor_inline>(activations, extents<int32_t, K, T>());
+        auto b = tensor<device int8_t, extents<int32_t, N, K>, tensor_inline>(weights, extents<int32_t, N, K>());
+        auto c = tensor<threadgroup int, extents<int32_t, N, T>, tensor_inline>(acc, extents<int32_t, N, T>());
+        constexpr auto descriptor = matmul2d_descriptor(T, N, K, false, false, false, matmul2d_descriptor::mode::multiply);
+        matmul2d<descriptor, execution_simdgroups<SG>> op;
+        op.run(a, b, c);
+    }
+}
+
+} // namespace fsr411_gpu
+
+// Logical passes 1, 2, 12 and the auxiliary POST CNB. Host supplies the exact
+// per-pass integer shifts and independent source/target tensor offsets from
+// the generated manifest; POST uses a separately appended scratch region.
+// Bindings: 0 scratch, 1 packed 4.1.1 weights+biases, 2 PassParams (212 bytes).
+// Dispatch uses the selected entry point's tile and SIMD32 group count.
+namespace fsr411_gpu {
+template <uint TW, uint TH, uint SG>
+__attribute__((always_inline)) inline void cnb(
+    device uchar *scratch, device uchar *weights,
+    FSR411_PARAMS_ADDRESS fsr411::PassParams &p, threadgroup uint *activation,
+    threadgroup int *acc, uint2 group, uint tid) {
+    static_assert(SG == 1 || SG == 2 || SG == 4, "CNB needs one, two or four SIMD32 groups");
+    constexpr uint T = TW * TH;
+    auto a = (threadgroup int8_t *)activation;
+
+    fsr411_gpu::conv3x3<TW, TH, SG>(scratch, weights, p, acc, group);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    {
+        const uint channel = (tid & 3u) * 4u;
+        for (uint i = tid; i < T * 4u; i += (SG * 32u)) {
+            const uint pixel = i / 4u;
+            const uint x = group.x * TW + pixel % TW, y = group.y * TH + pixel / TW;
+            const int4 bias = fsr411_gpu::load_bias(weights, fsr411::first_tap_bias_offset(p,x,y), channel);
+            activation[i] = fsr411_gpu::quantize_cnb_intermediate<false>(fsr411_gpu::load_acc(acc, pixel * 16u + channel), bias, p.q[0]);
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    fsr411_gpu::pointwise<T, 32, 16, false, SG>(a, (device int8_t *)(weights + p.weights[1]), acc, tid);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    {
+        const uint channel = (tid & 7u) * 4u;
+        const int4 bias = fsr411_gpu::load_bias(weights, p.biases[1], channel);
+        for (uint i = tid; i < T * 8u; i += (SG * 32u)) {
+            const uint pixel = i / 8u;
+            activation[i] = fsr411_gpu::quantize_cnb_intermediate<true>(fsr411_gpu::load_acc(acc, pixel * 32u + channel), bias, p.q[1]);
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    fsr411_gpu::pointwise<T, 16, 32, false, SG>(a, (device int8_t *)(weights + p.weights[2]), acc, tid);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint channel = (tid & 3u) * 4u;
+    const int4 bias = fsr411_gpu::load_bias(weights, p.biases[2], channel);
+    for (uint i = tid; i < T * 4u; i += (SG * 32u)) {
+        const uint pixel = i / 4u;
+        const uint x = group.x * TW + pixel % TW, y = group.y * TH + pixel / TW;
+        if (x >= p.output.width || y >= p.output.height) continue;
+        int4 residual(0);
+        if (x < p.input.width && y < p.input.height)
+            residual = int4(as_type<char4>(*(device uint *)(scratch + fsr411::tensor_address(p.input, x, y, channel))));
+        const uint value = fsr411_gpu::quantize(fsr411_gpu::load_acc(acc, pixel * 16u + channel),
+                                               bias, residual, (channel < 8u ? p.q[2] : p.q[3]));
+        *(device uint *)(scratch + fsr411::tensor_address(p.output, x, y, channel)) = value;
+    }
+}
+} // namespace fsr411_gpu
+
+#define FSR411_CNB(NAME, TW, TH, SG) \
+kernel void NAME(device uchar *scratch [[buffer(0)]], device uchar *weights [[buffer(1)]], \
+                 constant fsr411::PassParams &raw [[buffer(2)]], \
+                 uint2 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) { \
+    FSR411_LOCAL_PARAMS; \
+    threadgroup uint activation[(TW) * (TH) * 32 / 4]; \
+    threadgroup int4 accumulator[(TW) * (TH) * 32 / 4]; \
+    fsr411_gpu::cnb<TW, TH, SG>(scratch, weights, p, activation, \
+        (threadgroup int *)accumulator, group, tid); \
+}
+// Preserve the original entry name for cached 32x4/128-thread manifests.
+FSR411_CNB(fsr411_cnb, 32, 4, 4)
+// Smaller tiles and matching SIMD scopes reduce CNB storage and synchronization scope.
+FSR411_CNB(fsr411_cnb_32x1_sg1, 32, 1, 1)
+#undef FSR411_CNB
+
+namespace fsr411_gpu {
+template <uint CIN, uint COUT, uint T>
+__attribute__((always_inline)) inline void downsample(device uchar *scratch, device uchar *weights,
+                        FSR411_PARAMS_ADDRESS fsr411::PassParams &p, threadgroup int8_t *a,
+                        threadgroup int *acc, uint2 group, uint tid) {
+    constexpr uint K = 4u * CIN, CH = CIN / 16u;
+    for (uint i = tid; i < T * 4u * CH; i += fsr411::kThreads) {
+        const uint pixel = i / (4u * CH), tap = (i / CH) % 4u, channel = (i % CH) * 16u;
+        const uint x = 2u * (group.x * T + pixel) + (tap & 1u), y = 2u * group.y + (tap >> 1u);
+        uint4 value(0);
+        if (x < p.input.width && y < p.input.height)
+            value = *(device uint4 *)(scratch + fsr411::tensor_address(p.input, x, y, channel));
+        *(threadgroup uint4 *)(a + pixel * K + tap * CIN + channel) = value;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    pointwise<T, COUT, K, CIN == 16u && COUT == 32u && T == 64u>(
+        a, (device int8_t *)(weights + p.weights[0]), acc, tid);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint channel = (tid % (COUT / 4u)) * 4u;
+    const int4 bias = load_bias(weights, p.biases[0], channel);
+    for (uint i = tid; i < T * (COUT / 4u); i += fsr411::kThreads) {
+        const uint pixel = i / (COUT / 4u), x = group.x * T + pixel, y = group.y;
+        if (x >= p.output.width || y >= p.output.height) continue;
+        const uint value = quantize(load_acc(acc, pixel * COUT + channel), bias, int4(0), (channel < COUT / 2u ? p.q[4] : p.q[5]));
+        *(device uint *)(scratch + fsr411::tensor_address(p.output, x, y, channel)) = value;
+    }
+}
+} // namespace fsr411_gpu
+
+#define FSR411_DOWNSAMPLE(NAME, CIN, COUT, T) \
+kernel void NAME(device uchar *scratch [[buffer(0)]], device uchar *weights [[buffer(1)]], \
+                 constant fsr411::PassParams &raw [[buffer(2)]], \
+                 uint2 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) { \
+    FSR411_LOCAL_PARAMS; \
+    threadgroup uint4 activation[(T) * 4 * (CIN) / 16]; \
+    threadgroup int4 accumulator[(T) * (COUT) / 4]; \
+    fsr411_gpu::downsample<CIN, COUT, T>(scratch, weights, p, (threadgroup int8_t *)activation, \
+                                        (threadgroup int *)accumulator, group, tid); \
+}
+FSR411_DOWNSAMPLE(fsr411_ds16, 16, 32, 64)
+FSR411_DOWNSAMPLE(fsr411_ds32, 32, 64, 32)
+#undef FSR411_DOWNSAMPLE
+
+namespace fsr411_gpu {
+__attribute__((always_inline)) inline int4 read_pixel(device uchar *scratch, fsr411::Tensor tensor, uint x, uint y, uint channel) {
+    if (x >= tensor.width || y >= tensor.height) return int4(0);
+    return int4(as_type<char4>(*(device uint *)(scratch + fsr411::tensor_address(tensor, x, y, channel))));
+}
+
+template <uint NF, uint TW, uint TH, bool SPLIT_ROWS, uint SG = 4>
+__attribute__((always_inline)) inline void fnb_core(device uchar *scratch, device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p,
+                      threadgroup int8_t *a, threadgroup int *acc, uint2 group, uint tid) {
+    constexpr uint T = TW * TH;
+    for (uint bank = 0; bank < NF / 32u; ++bank) {
+        conv3x3<TW, TH, SG>(scratch, weights, p, acc, group, bank);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        const uint channel = (tid & 3u) * 4u;
+        const int4 bias = load_bias(weights, p.biases[0], bank * 16u + channel);
+        for (uint i = tid; i < T * 4u; i += (SG * 32u)) {
+            const uint pixel = i / 4u;
+            *(threadgroup uint *)(a + pixel * NF + bank * 16u + channel) =
+                quantize(load_acc(acc, pixel * 16u + channel), bias, int4(0), p.q[0]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    for (uint i = tid; i < T * (NF / 8u); i += (SG * 32u)) {
+        const uint pixel = i / (NF / 8u), channel = NF / 2u + (i % (NF / 8u)) * 4u;
+        const uint x = group.x * TW + pixel % TW, y = group.y * TH + pixel / TW;
+        const int4 value = read_pixel(scratch, p.input, x, y, channel);
+        *(threadgroup uint *)(a + pixel * NF + channel) = as_type<uint>(char4(value));
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    pointwise<T, 2u * NF, NF, SPLIT_ROWS, SG>(a, (device int8_t *)(weights + p.weights[1]), acc, tid);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const uint channel = (tid % (NF / 2u)) * 4u;
+    const int4 bias = load_bias(weights, p.biases[1], channel);
+    for (uint i = tid; i < T * (NF / 2u); i += (SG * 32u)) {
+        const uint pixel = i / (NF / 2u);
+        *(threadgroup uint *)(a + pixel * 2u * NF + channel) =
+            quantize(load_acc(acc, pixel * 2u * NF + channel), bias, int4(0), p.q[1]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    pointwise<T, NF, 2u * NF, SPLIT_ROWS, SG>(a, (device int8_t *)(weights + p.weights[2]), acc, tid);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+}
+
+template <uint NF, uint TW, uint TH, bool UPSAMPLE, uint SG = 4>
+__attribute__((always_inline)) inline void fnb(device uchar *scratch, device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p,
+                 threadgroup int8_t *a, threadgroup int *acc, uint2 group, uint tid) {
+    constexpr uint T = TW * TH;
+    constexpr bool SPLIT_ROWS = NF == 32u && T == 64u && !UPSAMPLE && SG == 4u;
+    fnb_core<NF, TW, TH, SPLIT_ROWS, SG>(scratch, weights, p, a, acc, group, tid);
+    const uint channel = (tid % (NF / 4u)) * 4u;
+    const int4 bias = load_bias(weights, p.biases[2], channel);
+    for (uint i = tid; i < T * (NF / 4u); i += (SG * 32u)) {
+        const uint pixel = i / (NF / 4u), x = group.x * TW + pixel % TW, y = group.y * TH + pixel / TW;
+        const int4 residual = read_pixel(scratch, p.input, x, y, channel);
+        const uint value = quantize(load_acc(acc, pixel * NF + channel), bias, residual, (channel < NF / 2u ? p.q[2] : p.q[3]));
+        if (UPSAMPLE) *(threadgroup uint *)(a + pixel * NF + channel) = value;
+        else if (x < p.output.width && y < p.output.height)
+            *(device uint *)(scratch + fsr411::tensor_address(p.output, x, y, channel)) = value;
+    }
+    if (!UPSAMPLE) return;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // Four taps are adjacent output columns of one larger GEMM. The shared
+    // activation buffer can be reused: input scratch is separate from output,
+    // and residuals are reread from that immutable input plane.
+    constexpr uint OUT = NF / 2u;
+    pointwise<T, 4u * OUT, NF, false, SG>(a, (device int8_t *)(weights + p.weights[3]), acc, tid);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint i = tid; i < T * OUT; i += (SG * 32u)) {
+        const uint pixel = i / OUT, tap = (i % OUT) / (OUT / 4u), c = (i % (OUT / 4u)) * 4u;
+        const uint ix = group.x * TW + pixel % TW, iy = group.y * TH + pixel / TW;
+        const uint x = ix * 2u + (tap & 1u), y = iy * 2u + (tap >> 1u);
+        if (ix >= p.input.width || iy >= p.input.height || x >= p.output.width || y >= p.output.height) continue;
+        const int4 b = load_bias(weights, p.biases[3], c);
+        const int4 residual = read_pixel(scratch, p.skip, x, y, c);
+        const uint value = quantize(load_acc(acc, pixel * 4u * OUT + tap * OUT + c), b, residual, (c < OUT / 2u ? p.q[4] : p.q[5]));
+        *(device uint *)(scratch + fsr411::tensor_address(p.output, x, y, c)) = value;
+    }
+}
+} // namespace fsr411_gpu
+
+#define FSR411_FNB(NAME, NF, TW, TH, UPSAMPLE, SG) \
+kernel void NAME(device uchar *scratch [[buffer(0)]], device uchar *weights [[buffer(1)]], \
+                 constant fsr411::PassParams &raw [[buffer(2)]], \
+                 uint2 group [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]]) { \
+    FSR411_LOCAL_PARAMS; \
+    threadgroup uint activation[(TW) * (TH) * 2 * (NF) / 4]; \
+    threadgroup int4 accumulator[(TW) * (TH) * 2 * (NF) / 4]; \
+    fsr411_gpu::fnb<NF, TW, TH, UPSAMPLE, SG>(scratch, weights, p, (threadgroup int8_t *)activation, \
+                                        (threadgroup int *)accumulator, group, tid); \
+}
+// Preserve the original entry points for manifests built before tile tuning.
+FSR411_FNB(fsr411_fnb32, 32, 32, 2, false, 4)
+FSR411_FNB(fsr411_fnb64, 64, 32, 1, false, 4)
+FSR411_FNB(fsr411_ct32, 32, 32, 2, true, 4)
+FSR411_FNB(fsr411_ct64, 64, 32, 1, true, 4)
+// These shapes need 10 KiB of threadgroup storage instead of 20 KiB. The
+// generator selects them only for the blocks that benefit on Apple10.
+FSR411_FNB(fsr411_fnb64_16x1, 64, 16, 1, false, 4)
+FSR411_FNB(fsr411_ct64_16x1, 64, 16, 1, true, 4)
+FSR411_FNB(fsr411_ct32_32x1, 32, 32, 1, true, 4)
+// NF32 blocks use 5 KiB of threadgroup storage and one SIMD32 group.
+// Dedicated names preserve every previously cached tile/thread contract.
+FSR411_FNB(fsr411_fnb32_16x1_sg1, 32, 16, 1, false, 1)
+FSR411_FNB(fsr411_ct32_16x1_sg1, 32, 16, 1, true, 1)
+#undef FSR411_FNB
+
+// Register-resident CNB/FNB32/CT32 chains, one SIMD32 group. Each stage's
+// cooperative destination feeds the next matrix product's left operand
+// without threadgroup storage. The element ownership of cooperative tensors
+// is implementation-defined, so every entry first verifies the layouts it
+// relies on (simd_all) and otherwise runs the established SG1 kernel. The
+// result is byte-identical either way. Native tests can force the fallback.
+#ifndef FSR411_CHAIN_FORCE_FALLBACK
+#define FSR411_CHAIN_FORCE_FALLBACK 0
+#endif
+
+// Helpers shared by the cooperative chains: fragment layout checks for the
+// bias-quartet ownership the vector quantizer relies on, requantization into
+// a destination operand, and the final epilogue store to scratch.
+namespace fsr411_coop {
+template <uint I, class Tensor>
+__attribute__((always_inline)) inline bool quartet_element(thread Tensor &value) {
+    const auto c = value.get_multidimensional_index(I);
+    bool matches = value.is_valid_element(I);
+    if constexpr ((I & 3u) == 0u) {
+        matches = matches && (c[0] & 3) == 0;
+    } else {
+        const auto first = value.get_multidimensional_index(I & ~3u);
+        matches = matches && c[0] == first[0] + int(I & 3u) && c[1] == first[1];
+    }
+    return matches;
+}
+
+template <uint I, uint COUNT, class Source, class Destination>
+__attribute__((always_inline)) inline bool matching_elements(thread Source &src, thread Destination &dst) {
+    const auto s = src.get_multidimensional_index(I);
+    const auto d = dst.get_multidimensional_index(I);
+    bool matches = quartet_element<I>(src) && dst.is_valid_element(I)
+        && s[0] == d[0] && s[1] == d[1];
+    if constexpr (I + 1u < COUNT)
+        matches = matching_elements<I + 1u, COUNT>(src, dst) && matches;
+    return matches;
+}
+
+template <uint COUNT, class Source, class Destination>
+__attribute__((always_inline)) inline bool matching_layout(thread Source &src, thread Destination &dst) {
+    bool matches = src.get_capacity() == COUNT && dst.get_capacity() == COUNT;
+    if (matches) matches = matching_elements<0, COUNT>(src, dst);
+    return simd_all(matches);
+}
+
+template <uint I, uint COUNT, bool RELU, class Source, class Destination>
+__attribute__((always_inline)) inline void quantize_into(thread Source &src, thread Destination &dst,
+    device uchar *weights, uint bias_offset, fsr411::Epilogue q, uint target_offset = 0, uint bias_channel = 0) {
+    const auto c = src.get_multidimensional_index(I);
+    const int4 accumulator(src[I], src[I + 1u], src[I + 2u], src[I + 3u]);
+    const int4 bias = fsr411_gpu::load_bias(weights, bias_offset, uint(c[0]) + bias_channel);
+    const char4 value = as_type<char4>(fsr411_gpu::quantize_cnb_intermediate<RELU>(accumulator, bias, q));
+    dst[target_offset + I] = value.x;
+    dst[target_offset + I + 1u] = value.y;
+    dst[target_offset + I + 2u] = value.z;
+    dst[target_offset + I + 3u] = value.w;
+    if constexpr (I + 4u < COUNT)
+        quantize_into<I + 4u, COUNT, RELU>(src, dst, weights, bias_offset, q, target_offset, bias_channel);
+}
+
+template <uint I, bool UPSAMPLE, uint TW, uint TH, uint NF, class Result>
+__attribute__((always_inline)) inline void store_scalar(thread Result &result, device uchar *scratch,
+    device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    if (result.is_valid_element(I)) {
+        const auto c = result.get_multidimensional_index(I);
+        const uint raw_channel = uint(c[0]), ix = group.x * TW + uint(c[1]) % TW, iy = group.y * TH + uint(c[1]) / TW;
+        const uint channel = UPSAMPLE ? raw_channel % (NF / 2u) : raw_channel;
+        const uint tap = raw_channel / (NF / 2u);
+        const uint x = UPSAMPLE ? ix * 2u + (tap & 1u) : ix;
+        const uint y = UPSAMPLE ? iy * 2u + (tap >> 1u) : iy;
+        if (raw_channel >= (UPSAMPLE ? 2u * NF : NF) || x >= p.output.width || y >= p.output.height) return;
+        if (UPSAMPLE && (ix >= p.input.width || iy >= p.input.height)) return;
+        const uint bias_offset = UPSAMPLE ? p.biases[3] : p.biases[2];
+        const int bias = bias_offset == fsr411::kNoOffset ? 0 : *(device int *)(weights + bias_offset + channel * 4u);
+        const fsr411::Tensor residual_tensor = UPSAMPLE ? p.skip : p.input;
+        int residual = 0;
+        if (x < residual_tensor.width && y < residual_tensor.height)
+            residual = *(device char *)(scratch + fsr411::tensor_address(residual_tensor, x, y, channel));
+        const fsr411::Epilogue q = UPSAMPLE ? (channel < NF / 4u ? p.q[4] : p.q[5]) : (channel < NF / 2u ? p.q[2] : p.q[3]);
+        const int value = fsr411::finish(result[I], bias, residual, q);
+        *(device char *)(scratch + fsr411::tensor_address(p.output, x, y, channel)) = char(value);
+    }
+}
+
+template <uint I, uint COUNT, bool UPSAMPLE, uint TW, uint TH, uint NF, class Result>
+__attribute__((always_inline)) inline void store_result(thread Result &result, device uchar *scratch,
+    device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    const auto c0 = result.get_multidimensional_index(I);
+    const auto c1 = result.get_multidimensional_index(I + 1u);
+    const auto c2 = result.get_multidimensional_index(I + 2u);
+    const auto c3 = result.get_multidimensional_index(I + 3u);
+    const bool quartet = result.is_valid_element(I) && result.is_valid_element(I + 1u)
+        && result.is_valid_element(I + 2u) && result.is_valid_element(I + 3u)
+        && (c0[0] & 3) == 0 && c1[0] == c0[0] + 1 && c2[0] == c0[0] + 2 && c3[0] == c0[0] + 3
+        && c1[1] == c0[1] && c2[1] == c0[1] && c3[1] == c0[1];
+    if (quartet) {
+        const uint raw_channel = uint(c0[0]), ix = group.x * TW + uint(c0[1]) % TW, iy = group.y * TH + uint(c0[1]) / TW;
+        const uint channel = UPSAMPLE ? raw_channel % (NF / 2u) : raw_channel;
+        const uint tap = raw_channel / (NF / 2u);
+        const uint x = UPSAMPLE ? ix * 2u + (tap & 1u) : ix;
+        const uint y = UPSAMPLE ? iy * 2u + (tap >> 1u) : iy;
+        if (raw_channel < (UPSAMPLE ? 2u * NF : NF) && x < p.output.width && y < p.output.height
+            && (!UPSAMPLE || (ix < p.input.width && iy < p.input.height))) {
+            const int4 accumulator(result[I], result[I + 1u], result[I + 2u], result[I + 3u]);
+            const int4 bias = fsr411_gpu::load_bias(weights, UPSAMPLE ? p.biases[3] : p.biases[2], channel);
+            const int4 residual = fsr411_gpu::read_pixel(scratch, UPSAMPLE ? p.skip : p.input, x, y, channel);
+            const fsr411::Epilogue q = UPSAMPLE ? (channel < NF / 4u ? p.q[4] : p.q[5]) : (channel < NF / 2u ? p.q[2] : p.q[3]);
+            const uint value = fsr411_gpu::quantize(accumulator, bias, residual, q);
+            *(device uint *)(scratch + fsr411::tensor_address(p.output, x, y, channel)) = value;
+        }
+    } else {
+        store_scalar<I, UPSAMPLE, TW, TH, NF>(result, scratch, weights, p, group);
+        store_scalar<I + 1u, UPSAMPLE, TW, TH, NF>(result, scratch, weights, p, group);
+        store_scalar<I + 2u, UPSAMPLE, TW, TH, NF>(result, scratch, weights, p, group);
+        store_scalar<I + 3u, UPSAMPLE, TW, TH, NF>(result, scratch, weights, p, group);
+    }
+    if constexpr (I + 4u < COUNT)
+        store_result<I + 4u, COUNT, UPSAMPLE, TW, TH, NF>(result, scratch, weights, p, group);
+}
+} // namespace fsr411_coop
+
+namespace fsr411_chain {
+// Convolution destinations index [channel][flat pixel][row]; the shared
+// element check covers the plain matmul layout used by the other chains.
+template <uint I, uint COUNT, bool CONV, uint TW, class Source, class Destination>
+__attribute__((always_inline)) inline bool matching_elements(thread Source &src, thread Destination &dst) {
+    if constexpr (!CONV) return fsr411_coop::matching_elements<I, COUNT>(src, dst);
+    else {
+        const auto s = src.get_multidimensional_index(I);
+        const auto d = dst.get_multidimensional_index(I);
+        bool matches = src.is_valid_element(I) && dst.is_valid_element(I)
+            && s[0] == d[0] && s[1] + int(TW) * s[2] == d[1] && s[3] == 0
+            && fsr411_coop::quartet_element<I>(src);
+        if constexpr ((I & 3u) != 0) {
+            const auto first = src.get_multidimensional_index(I & ~3u);
+            matches = matches && s[2] == first[2] && s[3] == first[3];
+        }
+        if constexpr (I + 1u < COUNT)
+            matches = matching_elements<I + 1u, COUNT, CONV, TW>(src, dst) && matches;
+        return matches;
+    }
+}
+
+template <uint COUNT, bool CONV, uint TW, class Source, class Destination>
+__attribute__((always_inline)) inline bool matching_layout(thread Source &src, thread Destination &dst) {
+    bool matches = !FSR411_CHAIN_FORCE_FALLBACK && src.get_capacity() == COUNT && dst.get_capacity() == COUNT;
+    if (matches) matches = matching_elements<0, COUNT, CONV, TW>(src, dst);
+    return simd_all(matches);
+}
+
+template <uint I, uint COUNT, uint TW, uint TH, class Source, class Destination>
+__attribute__((always_inline)) inline void quantize_first_into(thread Source &src, thread Destination &dst,
+    device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    const auto c = src.get_multidimensional_index(I);
+    const uint x = group.x * TW + uint(c[1]), y = group.y * TH + uint(c[2]);
+    const int4 accumulator(src[I],src[I+1u],src[I+2u],src[I+3u]);
+    const int4 bias = fsr411_gpu::load_bias(weights,fsr411::first_tap_bias_offset(p,x,y),uint(c[0]));
+    const char4 value = as_type<char4>(fsr411_gpu::quantize_cnb_intermediate<false>(accumulator,bias,p.q[0]));
+    dst[I]=value.x;dst[I+1u]=value.y;dst[I+2u]=value.z;dst[I+3u]=value.w;
+    if constexpr (I+4u<COUNT) quantize_first_into<I+4u,COUNT,TW,TH>(src,dst,weights,p,group);
+}
+
+template <uint TW = 32, uint TH = 1>
+__attribute__((always_inline)) inline bool cnb(device uchar *scratch, device uchar *weights,
+    FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    constexpr uint T = TW * TH;
+    constexpr auto expansion_descriptor = matmul2d_descriptor(T, 32, 16, false, false, false, matmul2d_descriptor::mode::multiply);
+    constexpr auto projection_descriptor = matmul2d_descriptor(T, 16, 32, false, false, false, matmul2d_descriptor::mode::multiply);
+    matmul2d<expansion_descriptor, execution_simdgroup> expansion;
+    matmul2d<projection_descriptor, execution_simdgroup> projection;
+    auto projection_input = projection.template get_left_input_cooperative_tensor<int8_t, int8_t, int>();
+    {
+        auto expansion_input = expansion.template get_left_input_cooperative_tensor<int8_t, int8_t, int>();
+        {
+            auto input = tensor<device int8_t, dextents<int,4>, tensor_inline>(
+                (device int8_t *)(scratch + fsr411::tensor_address(p.input, 0, 0, 0)),
+                dextents<int,4>(16, int(p.input.width), int(p.input.height), 1),
+                array<int,4>{1, int(p.input.strideX), int(p.input.strideY), int(p.input.strideY * p.input.height)});
+            auto weight = tensor<device int8_t, extents<int,16,16,3,3>, tensor_inline>(
+                (device int8_t *)(weights + p.weights[0]), extents<int,16,16,3,3>());
+            constexpr auto descriptor = convolution2d_descriptor(
+                int4(16,TW,TH,1), int4(16,FSR411_MAXW,FSR411_MAXH,1), int2(3),
+                convolution2d_activation_layout::nhwc, convolution2d_weights_layout::hwio,
+                int2(1), int2(1), 1, false, convolution2d_descriptor::mode::multiply);
+            convolution2d<descriptor, execution_simdgroup> convolution;
+            auto result = convolution.template get_destination_cooperative_tensor<decltype(input), decltype(weight), int>();
+            if (!matching_layout<T / 2u, true, TW>(result, expansion_input)) return false;
+            convolution.set_offsets(int2(group * uint2(TW,TH)));
+            convolution.run(input, weight, result);
+            quantize_first_into<0,T / 2u,TW,TH>(result,expansion_input,weights,p,group);
+        }
+        auto weight = tensor<device int8_t, extents<int,32,16>, tensor_inline>(
+            (device int8_t *)(weights + p.weights[1]), extents<int,32,16>());
+        auto result = expansion.template get_destination_cooperative_tensor<decltype(expansion_input), decltype(weight), int>();
+        if (!matching_layout<T, false, TW>(result, projection_input)) return false;
+        expansion.run(expansion_input, weight, result);
+        fsr411_coop::quantize_into<0, T, true>(result, projection_input, weights, p.biases[1], p.q[1]);
+    }
+    auto weight = tensor<device int8_t, extents<int,16,32>, tensor_inline>(
+        (device int8_t *)(weights + p.weights[2]), extents<int,16,32>());
+    auto result = projection.template get_destination_cooperative_tensor<decltype(projection_input), decltype(weight), int>();
+    if (!simd_all(result.get_capacity() == T / 2u)) return false;
+    projection.run(projection_input, weight, result);
+    fsr411_coop::store_result<0,T / 2u,false,TW,TH,16u>(result, scratch, weights, p, group);
+    return true;
+}
+} // namespace fsr411_chain
+
+// Fallback entries: the chain itself uses no threadgroup storage; on a failed
+// layout check the established SG1 kernel runs on these shared buffers.
+#define FSR411_COOP_CHAIN(NAME, CHAIN, FALLBACK) \
+kernel void NAME(device uchar *scratch [[buffer(0)]], device uchar *weights [[buffer(1)]], \
+    constant fsr411::PassParams &raw [[buffer(2)]], uint2 group [[threadgroup_position_in_grid]], \
+    uint tid [[thread_index_in_threadgroup]]) { \
+    FSR411_LOCAL_PARAMS; \
+    threadgroup uint activation[256]; \
+    threadgroup int4 accumulator[256]; \
+    if (!(CHAIN)) FALLBACK; \
+}
+FSR411_COOP_CHAIN(fsr411_cnb_coop_chain_32x1,
+    (fsr411_chain::cnb(scratch, weights, p, group)),
+    (fsr411_gpu::cnb<32,1,1>(scratch, weights, p, activation, (threadgroup int *)accumulator, group, tid)))
+
+// FNB32/CT32 tile 16x1: conv3x3 bank, bypass channels, expansion, projection
+// and, for CT, the transpose convolution stay in cooperative tensors.
+namespace fsr411_fnb_chain {
+template <uint I, uint COUNT, uint TW, uint TH, uint NF, class Source, class Destination>
+__attribute__((always_inline)) inline bool concat_element(thread Source &src, thread Destination &dst, uint bank) {
+    const auto s = src.get_multidimensional_index(I);
+    const uint target = bank * COUNT + I;
+    const auto d = dst.get_multidimensional_index(target);
+    bool matches = src.is_valid_element(I) && dst.is_valid_element(target)
+        && s[0] >= 0 && s[0] < 16 && s[1] >= 0 && s[1] < int(TW)
+        && s[2] >= 0 && s[2] < int(TH) && s[3] == 0
+        && d[0] == s[0] + int(bank * 16u) && d[1] == s[1] + int(TW) * s[2];
+    if constexpr ((I & 3u) == 0u) matches = matches && (s[0] & 3) == 0;
+    else {
+        const auto first = src.get_multidimensional_index(I & ~3u);
+        matches = matches && s[0] == first[0] + int(I & 3u) && s[1] == first[1]
+            && s[2] == first[2] && s[3] == first[3];
+    }
+    if constexpr (I + 1u < COUNT) matches = concat_element<I + 1u,COUNT,TW,TH,NF>(src,dst,bank) && matches;
+    return matches;
+}
+
+template <uint I, uint COUNT, uint NF, uint T, class Tensor>
+__attribute__((always_inline)) inline bool bypass_element(thread Tensor &value) {
+    const auto c = value.get_multidimensional_index(I);
+    bool matches = fsr411_coop::quartet_element<I>(value) && c[0] >= int(NF / 2u) && c[0] < int(NF)
+        && c[1] >= 0 && c[1] < int(T);
+    if constexpr (I + 1u < COUNT) matches = bypass_element<I + 1u,COUNT,NF,T>(value) && matches;
+    return matches;
+}
+
+template <uint NF, uint TW, uint TH, class Source, class Destination>
+__attribute__((always_inline)) inline bool concat_layout(thread Source &src, thread Destination &dst, uint bank) {
+    constexpr uint T = TW * TH, COUNT = T / 2u, TOTAL = T * NF / 32u;
+    bool matches = !FSR411_CHAIN_FORCE_FALLBACK && src.get_capacity() == COUNT && dst.get_capacity() == TOTAL;
+    if (matches) matches = concat_element<0,COUNT,TW,TH,NF>(src,dst,bank)
+        && bypass_element<TOTAL / 2u,TOTAL,NF,T>(dst);
+    return simd_all(matches);
+}
+
+template <uint I, uint TW, uint TH, uint NF, class Destination>
+__attribute__((always_inline)) inline void load_bypass(thread Destination &dst, device uchar *scratch,
+    FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    const auto c = dst.get_multidimensional_index(I);
+    const uint channel = uint(c[0]), x = group.x * TW + uint(c[1]) % TW, y = group.y * TH + uint(c[1]) / TW;
+    const char4 value = char4(fsr411_gpu::read_pixel(scratch, p.input, x, y, channel));
+    dst[I] = value.x;
+    dst[I + 1u] = value.y;
+    dst[I + 2u] = value.z;
+    dst[I + 3u] = value.w;
+    if constexpr (I + 4u < TW * TH * NF / 32u) load_bypass<I + 4u, TW, TH, NF>(dst, scratch, p, group);
+}
+
+template <uint I, uint TW, uint TH, uint NF, class Source, class Destination>
+__attribute__((always_inline)) inline void residual_into(thread Source &src, thread Destination &dst,
+    device uchar *scratch, device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    const auto c = src.get_multidimensional_index(I);
+    const uint channel = uint(c[0]), x = group.x * TW + uint(c[1]) % TW, y = group.y * TH + uint(c[1]) / TW;
+    const int4 accumulator(src[I], src[I + 1u], src[I + 2u], src[I + 3u]);
+    const int4 bias = fsr411_gpu::load_bias(weights, p.biases[2], channel);
+    const int4 residual = fsr411_gpu::read_pixel(scratch, p.input, x, y, channel);
+    const char4 value = as_type<char4>(fsr411_gpu::quantize(accumulator, bias, residual, channel < NF / 2u ? p.q[2] : p.q[3]));
+    dst[I] = value.x;
+    dst[I + 1u] = value.y;
+    dst[I + 2u] = value.z;
+    dst[I + 3u] = value.w;
+    if constexpr (I + 4u < TW * TH * NF / 32u) residual_into<I + 4u, TW, TH, NF>(src, dst, scratch, weights, p, group);
+}
+
+template <bool UPSAMPLE, uint TW = 16, uint TH = 1, uint NF = 32>
+__attribute__((always_inline)) inline bool fnb(device uchar *scratch, device uchar *weights,
+    FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    static_assert(NF == 32u || NF == 64u, "Only imported NF32/NF64 blocks are supported");
+    constexpr uint T = TW * TH, C = T * NF / 32u;
+    constexpr auto expansion_descriptor = matmul2d_descriptor(T, 2u * NF, NF, false, false, false, matmul2d_descriptor::mode::multiply);
+    constexpr auto projection_descriptor = matmul2d_descriptor(T, NF, 2u * NF, false, false, false, matmul2d_descriptor::mode::multiply);
+    matmul2d<expansion_descriptor, execution_simdgroup> expansion;
+    matmul2d<projection_descriptor, execution_simdgroup> projection;
+    auto projection_input = projection.template get_left_input_cooperative_tensor<int8_t, int8_t, int>();
+    {
+        auto expansion_input = expansion.template get_left_input_cooperative_tensor<int8_t, int8_t, int>();
+
+#pragma unroll
+        for (uint bank = 0; bank < NF / 32u; ++bank) {
+            auto input = tensor<device int8_t, dextents<int,4>, tensor_inline>(
+                (device int8_t *)(scratch + fsr411::tensor_address(p.input, 0, 0, bank * 16u)),
+                dextents<int,4>(16, int(p.input.width), int(p.input.height), 1),
+                array<int,4>{1, int(p.input.strideX), int(p.input.strideY), int(p.input.strideY * p.input.height)});
+            auto weight = tensor<device int8_t, extents<int,16,16,3,3>, tensor_inline>(
+                (device int8_t *)(weights + p.weights[0] + bank * 9u * 16u * 16u), extents<int,16,16,3,3>());
+            constexpr auto descriptor = convolution2d_descriptor(
+                int4(16,TW,TH,1), int4(16,FSR411_MAXW,FSR411_MAXH,1), int2(3),
+                convolution2d_activation_layout::nhwc, convolution2d_weights_layout::hwio,
+                int2(1), int2(1), 1, false, convolution2d_descriptor::mode::multiply);
+            convolution2d<descriptor, execution_simdgroup> convolution;
+            auto result = convolution.template get_destination_cooperative_tensor<decltype(input), decltype(weight), int>();
+            if (!concat_layout<NF,TW,TH>(result, expansion_input, bank)) return false;
+            convolution.set_offsets(int2(group * uint2(TW,TH)));
+            convolution.run(input, weight, result);
+            fsr411_coop::quantize_into<0, T / 2u, false>(result, expansion_input, weights, p.biases[0], p.q[0], bank * T / 2u, bank * 16u);
+        }
+        load_bypass<C / 2u,TW,TH,NF>(expansion_input, scratch, p, group);
+        auto weight = tensor<device int8_t, extents<int,2u * NF,NF>, tensor_inline>(
+            (device int8_t *)(weights + p.weights[1]), extents<int,2u * NF,NF>());
+        auto result = expansion.template get_destination_cooperative_tensor<decltype(expansion_input), decltype(weight), int>();
+        if (!fsr411_coop::matching_layout<2u * C>(result, projection_input)) return false;
+        expansion.run(expansion_input, weight, result);
+        fsr411_coop::quantize_into<0, 2u * C, true>(result, projection_input, weights, p.biases[1], p.q[1]);
+    }
+    auto weight = tensor<device int8_t, extents<int,NF,2u * NF>, tensor_inline>(
+        (device int8_t *)(weights + p.weights[2]), extents<int,NF,2u * NF>());
+    auto result = projection.template get_destination_cooperative_tensor<decltype(projection_input), decltype(weight), int>();
+    if constexpr (UPSAMPLE) {
+        constexpr auto descriptor = matmul2d_descriptor(T, 2u * NF, NF, false, false, false, matmul2d_descriptor::mode::multiply);
+        matmul2d<descriptor, execution_simdgroup> transpose;
+        auto transpose_input = transpose.template get_left_input_cooperative_tensor<int8_t, int8_t, int>();
+        if (!fsr411_coop::matching_layout<C>(result, transpose_input)) return false;
+        projection.run(projection_input, weight, result);
+        residual_into<0,TW,TH,NF>(result, transpose_input, scratch, weights, p, group);
+        auto transpose_weight = tensor<device int8_t, extents<int,2u * NF,NF>, tensor_inline>(
+            (device int8_t *)(weights + p.weights[3]), extents<int,2u * NF,NF>());
+        auto transpose_result = transpose.template get_destination_cooperative_tensor<decltype(transpose_input), decltype(transpose_weight), int>();
+        if (!simd_all(transpose_result.get_capacity() == 2u * C)) return false;
+        transpose.run(transpose_input, transpose_weight, transpose_result);
+        fsr411_coop::store_result<0,2u * C,true,TW,TH,NF>(transpose_result, scratch, weights, p, group);
+    } else {
+        if (!simd_all(result.get_capacity() == C)) return false;
+        projection.run(projection_input, weight, result);
+        fsr411_coop::store_result<0,C,false,TW,TH,NF>(result, scratch, weights, p, group);
+    }
+    return true;
+}
+} // namespace fsr411_fnb_chain
+
+FSR411_COOP_CHAIN(fsr411_fnb32_coop_chain_16x1,
+    (fsr411_fnb_chain::fnb<false>(scratch, weights, p, group)),
+    (fsr411_gpu::fnb<32,16,1,false,1>(scratch, weights, p, (threadgroup int8_t *)activation, (threadgroup int *)accumulator, group, tid)))
+FSR411_COOP_CHAIN(fsr411_ct32_coop_chain_16x1,
+    (fsr411_fnb_chain::fnb<true>(scratch, weights, p, group)),
+    (fsr411_gpu::fnb<32,16,1,true,1>(scratch, weights, p, (threadgroup int8_t *)activation, (threadgroup int *)accumulator, group, tid)))
+
+// Register-resident stride-2 convolutions. Each SIMD owns a small output
+// tile and gathers its four INT8 taps directly into the matmul left operand.
+// No activation/accumulator threadgroup buffers or barriers are needed.
+namespace fsr411_ds_chain {
+template <uint I, uint COUNT, class Tensor>
+__attribute__((always_inline)) inline bool quartet_layout(thread Tensor &value) {
+    bool matches = fsr411_coop::quartet_element<I>(value);
+    if constexpr (I + 1u < COUNT) matches = quartet_layout<I + 1u, COUNT>(value) && matches;
+    return matches;
+}
+
+template <uint COUNT, class Tensor>
+__attribute__((always_inline)) inline bool valid_layout(thread Tensor &value) {
+    bool matches = !FSR411_CHAIN_FORCE_FALLBACK && value.get_capacity() == COUNT;
+    if (matches) matches = quartet_layout<0, COUNT>(value);
+    return simd_all(matches);
+}
+
+template <uint I, uint COUNT, uint CIN, uint TW, uint TH, class Tensor>
+__attribute__((always_inline)) inline void load_input(thread Tensor &value, device uchar *scratch,
+    FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    const auto c = value.get_multidimensional_index(I);
+    const uint tap = uint(c[0]) / CIN, channel = uint(c[0]) % CIN, pixel = uint(c[1]);
+    const uint x = 2u * (group.x * TW + pixel % TW) + (tap & 1u);
+    const uint y = 2u * (group.y * TH + pixel / TW) + (tap >> 1u);
+    const char4 v = char4(fsr411_gpu::read_pixel(scratch, p.input, x, y, channel));
+    value[I] = v.x; value[I + 1u] = v.y; value[I + 2u] = v.z; value[I + 3u] = v.w;
+    if constexpr (I + 4u < COUNT) load_input<I + 4u, COUNT, CIN, TW, TH>(value, scratch, p, group);
+}
+
+template <uint I, uint COUNT, uint COUT, uint TW, uint TH, class Tensor>
+__attribute__((always_inline)) inline void store_result(thread Tensor &value, device uchar *scratch,
+    device uchar *weights, FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    const auto c = value.get_multidimensional_index(I);
+    const uint channel = uint(c[0]), pixel = uint(c[1]);
+    const uint x = group.x * TW + pixel % TW, y = group.y * TH + pixel / TW;
+    if (x < p.output.width && y < p.output.height) {
+        const int4 acc(value[I], value[I + 1u], value[I + 2u], value[I + 3u]);
+        const int4 bias = fsr411_gpu::load_bias(weights, p.biases[0], channel);
+        const uint packed = fsr411_gpu::quantize(acc, bias, int4(0), channel < COUT / 2u ? p.q[4] : p.q[5]);
+        *(device uint *)(scratch + fsr411::tensor_address(p.output, x, y, channel)) = packed;
+    }
+    if constexpr (I + 4u < COUNT) store_result<I + 4u, COUNT, COUT, TW, TH>(value, scratch, weights, p, group);
+}
+
+template <uint CIN, uint COUT, uint TW, uint TH = 1>
+__attribute__((always_inline)) inline bool downsample(device uchar *scratch, device uchar *weights,
+    FSR411_PARAMS_ADDRESS fsr411::PassParams &p, uint2 group) {
+    constexpr uint T = TW * TH, K = 4u * CIN;
+    constexpr auto descriptor = matmul2d_descriptor(T, COUT, K, false, false, false, matmul2d_descriptor::mode::multiply);
+    matmul2d<descriptor, execution_simdgroup> op;
+    auto input = op.template get_left_input_cooperative_tensor<int8_t, int8_t, int>();
+    auto weight = tensor<device int8_t, extents<int,COUT,K>, tensor_inline>(
+        (device int8_t *)(weights + p.weights[0]), extents<int,COUT,K>());
+    auto result = op.template get_destination_cooperative_tensor<decltype(input), decltype(weight), int>();
+    if (!valid_layout<T * K / 32u>(input) || !valid_layout<T * COUT / 32u>(result)) return false;
+    load_input<0,T * K / 32u,CIN,TW,TH>(input, scratch, p, group);
+    op.run(input, weight, result);
+    store_result<0,T * COUT / 32u,COUT,TW,TH>(result, scratch, weights, p, group);
+    return true;
+}
+} // namespace fsr411_ds_chain
+
+// These entry points deliberately have no shared-memory fallback. The host
+// must first run fsr411_mpp_chain_probe and select them only for layouts that
+// pass its SIMD-wide checks. Keep the established entry points above for old
+// caches, unverified devices/toolchains and the explicit opt-out.
+#define FSR411_COOP_FAST(NAME, ...) \
+kernel void NAME(device uchar *scratch [[buffer(0)]], device uchar *weights [[buffer(1)]], \
+    constant fsr411::PassParams &raw [[buffer(2)]], uint2 group [[threadgroup_position_in_grid]]) { \
+    FSR411_LOCAL_PARAMS; __VA_ARGS__; \
+}
+FSR411_COOP_FAST(fsr411_ds32_coop_fast_16x1, fsr411_ds_chain::downsample<32,64,16,1>(scratch, weights, p, group))
+FSR411_COOP_FAST(fsr411_cnb_coop_fast_32x1, fsr411_chain::cnb<32,1>(scratch, weights, p, group))
+FSR411_COOP_FAST(fsr411_fnb32_coop_fast_16x1, fsr411_fnb_chain::fnb<false,16,1,32>(scratch, weights, p, group))
+FSR411_COOP_FAST(fsr411_ct32_coop_fast_16x1, fsr411_fnb_chain::fnb<true,16,1,32>(scratch, weights, p, group))
+FSR411_COOP_FAST(fsr411_fnb64_coop_fast_16x1, fsr411_fnb_chain::fnb<false,16,1,64>(scratch, weights, p, group))
+FSR411_COOP_FAST(fsr411_ct64_coop_fast_16x1, fsr411_fnb_chain::fnb<true,16,1,64>(scratch, weights, p, group))
+#undef FSR411_COOP_FAST
+#undef FSR411_COOP_CHAIN
+
+// One SIMD group executes the same layout checks as the real chains, with
+// zero dummy weights and a 1x1 input. Zero output dimensions suppress stores.
+// The caller supplies 16384 initialized bytes at buffer(1), enough for every
+// matrix read; the probe does not access any real model or temporal state.
+constant fsr411::PassParams fsr411_mpp_probe_parameters = {
+    {0,64,64,1,1,64,0}, {}, {}, {0,0,0,0},
+    {fsr411::kNoOffset,fsr411::kNoOffset,fsr411::kNoOffset,fsr411::kNoOffset}, {}
+};
+kernel void fsr411_mpp_chain_probe(device uint *features [[buffer(0)]], device uchar *dummy [[buffer(1)]],
+    uint lane [[thread_index_in_simdgroup]]) {
+#if FSR411_SPECIALIZE
+    const fsr411::PassParams p = fsr411_mpp_probe_parameters;
+#else
+    constant fsr411::PassParams &p = fsr411_mpp_probe_parameters;
+#endif
+    const bool cnb = fsr411_chain::cnb(dummy, dummy, p, uint2(0));
+    const bool fnb32 = fsr411_fnb_chain::fnb<false>(dummy, dummy, p, uint2(0));
+    const bool ct32 = fsr411_fnb_chain::fnb<true>(dummy, dummy, p, uint2(0));
+    const bool fnb64 = fsr411_fnb_chain::fnb<false,16,1,64>(dummy, dummy, p, uint2(0));
+    const bool ct64 = fsr411_fnb_chain::fnb<true,16,1,64>(dummy, dummy, p, uint2(0));
+    const bool ds32 = fsr411_ds_chain::downsample<32,64,16>(dummy, dummy, p, uint2(0));
+    if (!lane) features[0] = (cnb ? fsr411::kMppChainCnb : 0u)
+        | (fnb32 ? fsr411::kMppChainFnb32 : 0u) | (ct32 ? fsr411::kMppChainCt32 : 0u)
+        | (fnb64 ? fsr411::kMppChainFnb64 : 0u) | (ct64 ? fsr411::kMppChainCt64 : 0u)
+        | (ds32 ? fsr411::kMppChainDs32 : 0u);
+}

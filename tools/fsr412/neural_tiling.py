@@ -12,9 +12,11 @@ import hashlib
 import re
 from pathlib import Path
 try:
-    from upstream_oracle import balanced_end
+    from common.hlsl_parse import balanced_end
 except ImportError:
-    from fsr412.upstream_oracle import balanced_end
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from common.hlsl_parse import balanced_end
 
 ROOT=Path(__file__).resolve().parents[2]
 REVISION=1
@@ -32,7 +34,7 @@ def apply_neural_tiling(source: str,header: str|None=None) -> str:
     include='#include "fsr411_model.h"'
     if source.count(include)!=1:
         raise ValueError('unknown native integer Metal source')
-    header=(ROOT/'src/fsr412_neural_tile.h').read_text() if header is None else header
+    header=(ROOT/'src/fsr41x/fsr412_neural_tile.h').read_text() if header is None else header
     header=header.replace('#pragma once\n','').replace(include+'\n','')
     if 'struct Control' not in header or 'inline bool active(' not in header:
         raise ValueError('unknown tile constant ABI')

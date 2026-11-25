@@ -4,8 +4,8 @@
 // Timings are isolated neural passes, not full-frame/game latency.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
-#include "../../src/fsr411_model.h"
-#include "../../src/fsr411_simd_weights.h"
+#include "../../src/fsr41x/fsr411_model.h"
+#include "../../src/fsr41x/fsr411_simd_weights.h"
 #include "bench_gpu.h"
 #include <algorithm>
 #include <cstdio>
@@ -18,8 +18,8 @@ using namespace bench;
 
 static id<MTLLibrary> library(id<MTLDevice> dev, NSString *root, unsigned mb16, unsigned mb32, unsigned mb64) {
     NSError *error = nil;
-    NSString *source = [NSString stringWithContentsOfFile:[root stringByAppendingPathComponent:@"src/fsr411_simd.metal"] encoding:NSUTF8StringEncoding error:&error];
-    NSString *header = [NSString stringWithContentsOfFile:[root stringByAppendingPathComponent:@"src/fsr411_model.h"] encoding:NSUTF8StringEncoding error:&error];
+    NSString *source = [NSString stringWithContentsOfFile:[root stringByAppendingPathComponent:@"src/fsr41x/shaders/fsr411_simd.metal"] encoding:NSUTF8StringEncoding error:&error];
+    NSString *header = [NSString stringWithContentsOfFile:[root stringByAppendingPathComponent:@"src/fsr41x/fsr411_model.h"] encoding:NSUTF8StringEncoding error:&error];
     require(source && header, "missing shader source/header");
     source = [source stringByReplacingOccurrencesOfString:@"#include \"fsr411_model.h\"" withString:header];
     auto options = [MTLCompileOptions new]; options.languageVersion = MTLLanguageVersion3_0;

@@ -36,7 +36,7 @@ EXCLUDE_PREFIXES = (
 def included(path: str) -> bool:
     # Keep the source-only optional initialization/seam/UI probes, unlike
     # the development test suites and their recordings.
-    if path in ("tests/anr_live_test.mm", "tests/anr_ui_test.mm", "tests/anr_motion_test.mm", "tests/netal_probe.mm"):
+    if path in ("tests/anr/anr_live_test.mm", "tests/anr/anr_ui_test.mm", "tests/anr/anr_motion_test.mm", "tests/netal/netal_probe.mm"):
         return True
     return not path.startswith(EXCLUDE_PREFIXES)
 

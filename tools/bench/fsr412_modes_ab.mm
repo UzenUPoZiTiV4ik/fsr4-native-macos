@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Real GPU parity/cadence tests and interleaved mode timing. No game/DLL execution.
-#include "../../src/fsr412_runtime.h"
+#include "../../src/fsr41x/fsr412_runtime.h"
 #include "bench_gpu.h"
 #include <numeric>
 #include <stdexcept>
@@ -18,7 +18,7 @@ struct Mode {
 int main(int argc,char **argv) {@autoreleasepool {try {
     require(argc>=2,"usage: fsr412_modes_ab ROOT [--bench N] [--size RW RH UW UH] [--mtl4] [--legacy] [--ultra] [--report FILE]");
     std::string root=argv[1],report="build/lite-lossy-review/modes-ab.json";
-    unsigned rounds=2,rw=128,rh=80,uw=256,uh=160;bool benchmark=false,metal4=false,legacy=false,ultra=false,original=false,autoExposure=false,newLook=false;
+    unsigned rounds=2,rw=128,rh=80,uw=256,uh=160;bool benchmark=false,metal4=false,legacy=false,ultra=false,autoExposure=false,newLook=false;
     for(int i=2;i<argc;++i) {
         const std::string a=argv[i];
         if(a=="--bench" && i+1<argc) {benchmark=true;rounds=std::stoul(argv[++i]);}
@@ -27,7 +27,6 @@ int main(int argc,char **argv) {@autoreleasepool {try {
         else if(a=="--mtl4")metal4=true;
         else if(a=="--legacy")legacy=true;
         else if(a=="--ultra")ultra=true;
-        else if(a=="--original")original=true;
         else if(a=="--auto-exposure")autoExposure=true;
         else if(a=="--new-look")newLook=true;
         else throw std::runtime_error("unknown option: "+a);
@@ -50,7 +49,6 @@ int main(int argc,char **argv) {@autoreleasepool {try {
         add("lite-lossy",fsr411::Profile::Int8LiteLossy,true);
         if(newLook) {add("new-look",fsr411::Profile::Int8LiteLossy,true);modes.back()->options.newLook=true;}
         add("lite-lossy-tiled",fsr411::Profile::Int8LiteLossy,true,512);
-        if(original) {add("lite-lossy-original",fsr411::Profile::Int8LiteLossy,true);modes.back()->options.originalLossy=true;}
         if(legacy) {
             add("lossy2",fsr411::Profile::Lossy2,false);
             add("lossy2-quality",fsr411::Profile::Lossy2,false,0,1);

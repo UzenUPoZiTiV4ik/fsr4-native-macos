@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("anr_nrx_prepare", ROOT / "tools/diagnostics/anr_nrx.py")
+SPEC = importlib.util.spec_from_file_location("anr_nrx_prepare", Path(__file__).resolve().with_name("anr_nrx.py"))
 nrx = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(nrx)
 CHECKPOINT = "e09deb7012c96c172e49e72eb0b747b4611a8b6e3f14e5f5563189c580772ac1"

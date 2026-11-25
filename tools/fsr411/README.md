@@ -1,38 +1,33 @@
-# FSR 4.1.1 model import
+# FSR 4.1.1 model pipeline
 
-`import_model.py` reads the exact official AMD SDK 2.3.0 provider as bytes.
-It validates its SHA-256 and Git blob ID, extracts the common and Ultra
-Performance INT8 initializers, and inventories original INT8 DXIL shaders. It never loads or
-executes the DLL and needs no Windows environment.
+The pinned FSR 4.1.1 model data this repository builds on was produced by
+vendor import and recovery scripts (`import_model.py`, `vendor_sources.py`,
+`recover_ultraperformance.py`, `verify_lossy_reference.py`) that have since
+been **removed** from the tree. Their verified outputs — the common and Ultra
+Performance INT8 initializers, weight tables, the original-shader inventory
+and the manifests under `third_party/fsr411/` — are what the remaining
+pipeline consumes. Those scripts read the official AMD SDK 2.3.0 provider
+and the pinned MIT reimplementation purely as bytes, validated SHA-256 and
+Git blob identities, and never loaded or executed the Windows DLL. The
+import receipt recorded all 426 source occurrences; identical permutations
+yield **285 unique original shaders**. Ultra Performance recovery used
+native DXC as a disassembler over the verified original containers.
+
+Unit tests for this pipeline live in `tests/fsr411/`:
 
 ```sh
-python3 tools/fsr411/import_model.py --download --with-shaders
-python3 tools/fsr411/import_model.py --verify --with-shaders
-python3 -m unittest discover -s tools/fsr411 -p 'test_*.py'
+python3 -m unittest discover -s tests/fsr411 -p 'test_*.py'
 ```
 
-Use `--dll /path/to/amd_fidelityfx_upscaler_dx12.dll` instead of `--download`
-to use a local official copy. `--output` selects an alternate destination.
-The optional original shader files are placed in the ignored `oracle/`
-directory. The receipt records all 426 source occurrences; identical
-permutations yield **285 unique original shaders**.
-
-`vendor_sources.py` restores the exact HLSL sources and notices from the
-pinned MIT reimplementation commit, checking every source file's SHA-256:
+`compile_fsr411.py` builds the real FSR 4.1.1 INT8 graph for Metal with a
+content-addressed cache: 27 ordered stages (including thirteen padding
+stages), plus AE and RCAS, with model selection independent of the
+render/output scale ratio. `fsr411_msl.py`, `portability.py`, `lossy.py`,
+`lossy2.py`, `lossy_shaders.py` and `post_optimization.py` are its
+transform stages.
 
 ```sh
-python3 tools/fsr411/vendor_sources.py --checkout /path/to/fsr4-int8-reverse-engineering
-# Or retrieve the same pinned files directly:
-python3 tools/fsr411/vendor_sources.py --download
-```
-
-`recover_ultraperformance.py` reconstructs the separate Ultra Performance
-weight tables, quantization parameters and POST coefficients from those
-verified original containers using native DXC as a disassembler:
-
-```sh
-python3 tools/fsr411/recover_ultraperformance.py
-python3 tools/fsr411/recover_ultraperformance.py --verify
+python3 tools/fsr411/compile_fsr411.py --help
 ```
 
 The common HLSL stays unchanged. Generated overlays and their original
@@ -42,8 +37,8 @@ are shared by the models. The native generator explicitly selects the
 appropriate weights and source overlays:
 
 ```sh
-python3 tools/gen_fsr411_native.py --preset normal --profile lossy --tier 1080 --outdir build/fsr411-native-lossy
-python3 tools/gen_fsr411_native.py --preset ultraperformance --profile exact --tier 1080 --outdir build/fsr411-up-exact
+python3 tools/fsr411/gen_fsr411_native.py --preset normal --profile lossy --tier 1080 --outdir build/fsr411-native-lossy
+python3 tools/fsr411/gen_fsr411_native.py --preset ultraperformance --profile exact --tier 1080 --outdir build/fsr411-up-exact
 ```
 
 `lossy.py` independently implements the coefficient policy of
@@ -85,14 +80,8 @@ The common and Ultra Performance, exact and lossy variants compile for all
 three tiers, with all four color spaces covered. Geometry and source
 contracts are tested; GPU equivalence and speed require separate checks.
 
-`verify_lossy_reference.py` optionally compares all baked tables against
-the published DLL **as data**, with a pinned hash and native disassembly.
-It vendors no reference shader code. The recorded result is
-`third_party/fsr411/lossy_model_manifest.json`:
-
-```sh
-python3 tools/fsr411/verify_lossy_reference.py --dll /path/to/extracted/test-lossy/amd_fidelityfx_upscaler_dx12.dll --verify
-```
+The lossy verification result recorded by the removed reference checker
+remains at `third_party/fsr411/lossy_model_manifest.json`.
 
 `portability.py` fixes display-resolution MV bounds and replaces dummy
 out-of-view buffer writes with actual conditional stores. Apply it to the
@@ -111,9 +100,9 @@ The focused AE probe compiles all variants with `-fno-fast-math` and
 `-ffp-contract=off`, and then checks current and previous exposure directly:
 
 ```sh
-python3 tests/run_fsr411_autoexposure.py
+python3 tests/fsr411/runners/run_fsr411_autoexposure.py
 # Build the probe without GPU execution:
-python3 tests/run_fsr411_autoexposure.py --compile-only
+python3 tests/fsr411/runners/run_fsr411_autoexposure.py --compile-only
 ```
 
 On the development Apple GPU, all 54 varying-input frame comparisons

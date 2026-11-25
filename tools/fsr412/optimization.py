@@ -6,9 +6,12 @@ imported model. Transforms reject unknown source shapes instead of guessing.
 from __future__ import annotations
 import re
 try:
-    from upstream_oracle import balanced_end
+    from common.hlsl_parse import balanced_end
 except ImportError:
-    from fsr412.upstream_oracle import balanced_end
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from common.hlsl_parse import balanced_end
 
 REVISION = 3
 

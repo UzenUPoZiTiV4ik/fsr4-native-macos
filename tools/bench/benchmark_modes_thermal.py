@@ -22,7 +22,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 SIZES = {"1080p": (1280, 720, 1920, 1080), "1440p": (1706, 960, 2560, 1440)}
 NAMES = {"exact-fast", "lossy2", "int8-lite", "int8-lite-pixfix", "int8-lite-lossy",
-         "int8-lite-lossy-tiled", "int8-lite-lossy-original", "exact", "lossy",
+         "int8-lite-lossy-tiled", "exact", "lossy",
          "lossy2-temporal1", "lossy2-temporal2"}
 
 
@@ -94,7 +94,7 @@ def validate_run(run, size, rounds, frames, legacy, simd=False):
         if row["name"] == "int8-lite-lossy-tiled":
             if counts != [0, 0, rounds*frames]:
                 raise ValueError("tiled did not use partial inference on every measured frame")
-        elif row["name"] in {"lossy", "lossy2", "lossy2-temporal1", "lossy2-temporal2", "int8-lite-lossy", "int8-lite-lossy-original"}:
+        elif row["name"] in {"lossy", "lossy2", "lossy2-temporal1", "lossy2-temporal2", "int8-lite-lossy"}:
             if counts != [rounds*frames//2, rounds*frames//2, 0]:
                 raise ValueError("eligible whole-frame model did not use 50:50 full/reuse cadence")
         elif counts != [rounds*frames, 0, 0]:

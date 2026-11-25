@@ -57,9 +57,12 @@ import math
 import re
 
 try:
-    from upstream_oracle import balanced_end, argument_list
+    from common.hlsl_parse import balanced_end, argument_list
 except ImportError:
-    from fsr412.upstream_oracle import balanced_end, argument_list
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from common.hlsl_parse import balanced_end, argument_list
 
 REVISION = 1
 CACHE_BYTES_PER_PIXEL = 32

@@ -5,7 +5,7 @@
 // interleaved frame by frame (ABBA order), so power/clock changes affect both.
 // Also checks that A and B produce byte-identical output, history and state.
 // usage: fsr411_simd_ab ROOT [--rounds N] [--size RW RH UW UH] [--models lite,exact,lossy2]
-#include "../../src/fsr412_runtime.h"
+#include "../../src/fsr41x/fsr412_runtime.h"
 #include "bench_gpu.h"
 #include <algorithm>
 #include <cstdio>

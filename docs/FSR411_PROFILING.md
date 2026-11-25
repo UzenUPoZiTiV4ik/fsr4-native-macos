@@ -80,5 +80,5 @@ buffer с допуском на калибровку: максимум 0,1 мс 
 выходных пикселей, расписание Lossy и согласованность timestamps:
 
 ```sh
-python3 tests/run_fsr411_cli.py --stage-profiling
+python3 tests/fsr411/runners/run_fsr411_cli.py --stage-profiling
 ```

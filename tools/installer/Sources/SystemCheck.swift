@@ -259,7 +259,7 @@ enum SystemCheck {
     }
 }
 
-/// The Mac's chip and which FSR backend it gets (see src/fsr4_device.h).
+/// The Mac's chip and which FSR backend it gets (see src/common/fsr4_device.h).
 enum Chip {
     static var name: String {
         var size = 0

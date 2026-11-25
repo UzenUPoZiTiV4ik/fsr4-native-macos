@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Compile all FSR4 INT8 shader variants needed for the default test
-# configurations, via tools/compile_variant.py (DXC->SPV patch->SPIRV-Cross->MSL).
+# configurations, via tools/fsr402/compile_variant.py (DXC->SPV patch->SPIRV-Cross->MSL).
 #
 #   ./build_shaders.sh                    # all 6 presets x 1080 (default flags)
 #   ./build_shaders.sh --all              # all presets x {1080,2160,4320}
@@ -39,7 +39,7 @@ for p in $PRESETS; do
     [ -n "$FILTER_PRESET" ] && [ "$p" != "$FILTER_PRESET" ] && continue
     for r in $RESES; do
         echo "== $p @ $r =="
-        python3 tools/compile_variant.py --root "$PWD" --preset "$p" \
+        python3 tools/fsr402/compile_variant.py --root "$PWD" --preset "$p" \
             --res "$r" --res-idx "$(res_idx "$r")" \
             --depth-inverted 0 --low-res-mv 1 --jittered-mv 0 \
             --colorspace 0 --auto-exposure 0 --debug-view 0 --rcas 0 \

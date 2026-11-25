@@ -128,10 +128,10 @@ do {
     let root = scratch.appendingPathComponent("Application Support/fsr4-native-macos")
     let v1 = BundledPayload(info: PayloadInfo(version: "v1", commit: "aaa"), archive: makeArchive([
         "tools/crossover/crossover_fsr4.py": "print('v1')\n",
-        "src/old.metal": "old\n",
+        "shaders/old.metal": "old\n",
     ]))
     check((try? Payload.ensure(root: root, payload: v1)) == true, "fresh root is unpacked")
-    check(exists(Payload.script(in: root)) && exists(root.appendingPathComponent("src/old.metal")), "v1 files")
+    check(exists(Payload.script(in: root)) && exists(root.appendingPathComponent("shaders/old.metal")), "v1 files")
     check(Payload.installed(at: root) == v1.info, "marker records v1")
     check((try? Payload.ensure(root: root, payload: v1)) == false, "same version is not unpacked again")
 
@@ -139,11 +139,11 @@ do {
     write("log\n", root.appendingPathComponent("dist/crossover/hook.log"))
     let v2 = BundledPayload(info: PayloadInfo(version: "v2", commit: "bbb"), archive: makeArchive([
         "tools/crossover/crossover_fsr4.py": "print('v2')\n",
-        "src/new.metal": "new\n",
+        "shaders/new.metal": "new\n",
     ]))
     check((try? Payload.ensure(root: root, payload: v2)) == true, "new version is unpacked")
-    check(!exists(root.appendingPathComponent("src/old.metal")), "files of the old version are removed")
-    check(exists(root.appendingPathComponent("src/new.metal")), "new files")
+    check(!exists(root.appendingPathComponent("shaders/old.metal")), "files of the old version are removed")
+    check(exists(root.appendingPathComponent("shaders/new.metal")), "new files")
     check(exists(root.appendingPathComponent("build/shader.metallib")), "shader cache is kept")
     check(exists(root.appendingPathComponent("dist/crossover/hook.log")), "dist is kept")
     check((try? String(contentsOf: Payload.script(in: root), encoding: .utf8)) == "print('v2')\n", "script updated")
@@ -199,7 +199,7 @@ do {
 
 // MARK: Step names and requirements
 
-check(InstallerModel.describe("python3 /x/tools/compile_fsr411.py --root /x") != nil, "shader step")
+check(InstallerModel.describe("python3 /x/tools/fsr411/compile_fsr411.py --root /x") != nil, "shader step")
 check(InstallerModel.describe("codesign -f -s - /x/dist/crossover/D3DMetal.framework/Versions/A/D3DMetal") != nil, "D3DMetal step")
 check(InstallerModel.describe("arch -x86_64 /x/dist/crossover/live_test /x/testcases/t /x/ref") != nil, "live test step")
 check(InstallerModel.describe("unrelated") == nil, "unknown command has no step")

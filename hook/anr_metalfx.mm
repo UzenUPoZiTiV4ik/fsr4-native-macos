@@ -7,8 +7,8 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
-#include "anr_live.h"
-#include "fsr4_fg_settings.h"
+#include "../src/anr/anr_live.h"
+#include "../src/common/fsr4_fg_settings.h"
 #include <atomic>
 #include <mutex>
 #include <stdio.h>

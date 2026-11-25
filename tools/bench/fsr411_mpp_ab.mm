@@ -6,7 +6,7 @@
 // Metal 4 is validation-only (no unsupported classic timestamp substitution).
 // usage: fsr411_mpp_ab ROOT [--before-root ROOT] [--rounds N] [--size RW RH UW UH]
 //        [--models lite,exact,lossy2] [--verify-every-frame] [--mtl4] [--report FILE]
-#include "../../src/fsr412_runtime.h"
+#include "../../src/fsr41x/fsr412_runtime.h"
 #include "bench_gpu.h"
 #include <algorithm>
 #include <cstdio>

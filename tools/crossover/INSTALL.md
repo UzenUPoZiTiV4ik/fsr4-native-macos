@@ -3,7 +3,7 @@
 Replaces DLSS in Windows games running under CrossOver with AMD FSR 4.1.2
 (INT8 Lite model on Metal). The game keeps its DLSS option; the hook swaps
 the MetalFX upscaler that D3DMetal uses for DLSS. Русская инструкция:
-[docs/GUIDE.md](docs/GUIDE.md).
+[docs/GUIDE.md](../../docs/GUIDE.md).
 
 **Easier:** the FSR4 Installer app (`FSR4-Installer-<version>.dmg` on the
 [releases page](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/releases/latest))

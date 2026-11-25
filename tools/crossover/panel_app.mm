@@ -15,7 +15,7 @@
 #include <map>
 #include <cmath>
 #include <mach-o/dyld.h>
-#include "../../src/fsr4_fg_settings.h"
+#include "../../src/common/fsr4_fg_settings.h"
 
 struct Status {
     bool ok = false, active = false;

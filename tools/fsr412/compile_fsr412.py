@@ -17,7 +17,7 @@ from fsr412.optimization import (REVISION, POST_TILE_SIDE, input_color_cache, co
                                  ct2d_float_dot, post_color_tile)
 from fsr412.model_data import initializer_for, patch_post_tail, load_lossy_initializer, patch_post_biases_by_tap
 from fsr412.new_look import REVISION as NEW_LOOK_REVISION
-from fsr412.upstream_oracle import balanced_end, argument_list
+from common.hlsl_parse import balanced_end, argument_list
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "tools" / "fsr412" / "shader_catalog.json"
@@ -74,7 +74,7 @@ def support_bundle(root, builddir, colorspace, auto_exposure):
                 return path.parent, manifest
         except (OSError, ValueError, KeyError):
             continue
-    command = [sys.executable, root / "tools/compile_fsr411.py", "--root", root,
+    command = [sys.executable, root / "tools/fsr411/compile_fsr411.py", "--root", root,
                "--builddir", builddir, "--res", "1080", "--colorspace", str(colorspace),
                "--auto-exposure",str(auto_exposure),
                "--optimize", "1", "--profile", "exact-fast", "--only", *names]
@@ -240,7 +240,7 @@ def main():
     digest=hashlib.sha256(json.dumps(vars(a),sort_keys=True).encode())
     extra=[init,Path(__file__).with_name("model_data.py")]
     if a.lossy:extra += [Path(__file__).with_name("lossy_shaders.py"),Path(__file__).with_name("lossy_weights.py"),
-        root/"build/fsr412_lossy/import.json",root/"src/fsr412_neural_tile.h",Path(__file__).with_name("neural_tiling.py")]
+        root/"build/fsr412_lossy/import.json",root/"src/fsr41x/fsr412_neural_tile.h",Path(__file__).with_name("neural_tiling.py")]
     if a.new_look:extra.append(Path(__file__).with_name("new_look.py"))
     for path in [Path(__file__),Path(__file__).with_name("optimization.py"),CATALOG,*extra,
                  *[source_for(row) for row in selected.values()],

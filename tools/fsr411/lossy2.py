@@ -11,7 +11,7 @@ imported MIT sources. The weights are GPL-2.0-or-later data and are not
 vendored: tools/fsr411/fetch_lossy2_weights.py recovers them once from the
 pinned release DLL (tools/fsr411/lossy412_weights.py) into build/.
 
-Layouts are the exact inverses of the decoders in tools/gen_fsr411_native.py
+Layouts are the exact inverses of the decoders in tools/fsr411/gen_fsr411_native.py
 (parse_cnb/parse_fnb), which are themselves validated against AMD's shaders.
 """
 

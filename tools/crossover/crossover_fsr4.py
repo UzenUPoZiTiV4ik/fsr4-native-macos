@@ -26,14 +26,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / "dist" / "crossover"
 HOOK_SRC = ROOT / "hook" / "fsr4_metalfx.m"
-LIVE_SRC = ROOT / "src" / "fsr4_live.mm"
-LIVE411_SRC = ROOT / "src" / "fsr411_live.mm"
-LIVE412_SRC = ROOT / "src" / "fsr412_live.mm"
-NETAL_SRC = ROOT / "src" / "netal_live.mm"
+LIVE_SRC = ROOT / "src" / "live" / "fsr4_live.mm"
+LIVE411_SRC = ROOT / "src" / "fsr41x" / "fsr411_live.mm"
+LIVE412_SRC = ROOT / "src" / "fsr41x" / "fsr412_live.mm"
+NETAL_SRC = ROOT / "src" / "netal" / "netal_live.mm"
 sys.path.insert(0, str(ROOT / "tools"))
-from netal_integration import prepare_sources, validate_runtime
+from netal.netal_integration import prepare_sources, validate_runtime
 from anr.manifest import validate_runtime as validate_anr_runtime
-PANEL_SRC = ROOT / "src" / "fsr4_panel.mm"          # hook side: status publish + app launch
+PANEL_SRC = ROOT / "src" / "live" / "fsr4_panel.mm"  # hook side: status publish + app launch
 PANEL_APP_SRC = ROOT / "tools" / "crossover" / "panel_app.mm"
 PANEL_APP = DIST / "FSR4 Panel.app"
 SMOKE_SRC = ROOT / "tools" / "crossover" / "smoke.m"
@@ -56,6 +56,9 @@ STANDARD_NAMES = ("CrossOver.app", "CrossOver Preview.app")
 BOTTLES = Path.home() / "Library/Application Support/CrossOver/Bottles"
 # Same deployment target as the Makefile: the live bridge uses Metal 4 APIs.
 MIN_MACOS = "26.0"
+SRC_INCLUDE_DIRS = [ROOT / "src", ROOT / "src/common", ROOT / "src/live", ROOT / "src/fsr402",
+                    ROOT / "src/fsr41x", ROOT / "src/anr", ROOT / "src/netal"]
+SRC_INC = [flag for include in SRC_INCLUDE_DIRS for flag in ("-I", str(include))]
 FSR402_WEIGHTS = ROOT / "third_party/fsr4/internal/shaders/fsr4_model_v07_i8_quality/initializers.bin"
 LOAD_PATH = b"@loader_path/libfsr4hook.dylib"
 LC_LOAD_DYLIB = 0xC
@@ -103,12 +106,12 @@ def build_hook(log_path: Path, netal_source=None) -> Path:
     DIST.mkdir(parents=True, exist_ok=True)
     out = DIST / "libfsr4hook.dylib"
     common = ["-O2", "-fobjc-arc", "-arch", "x86_64", f"-mmacosx-version-min={MIN_MACOS}",
-              "-isysroot", sdk(), "-I", str(ROOT / "src")]
+              "-isysroot", sdk(), *SRC_INC]
     objects = []
     for name, source in (("hook", HOOK_SRC), ("live", LIVE_SRC), ("live411", LIVE411_SRC),
                          ("live412", LIVE412_SRC), ("panel", PANEL_SRC),
                          ("anr_hook", ROOT / "hook/anr_metalfx.mm"),
-                         ("anr_live", ROOT / "src/anr_live.mm"), ("anr_runtime", ROOT / "src/anr_runtime.mm")):
+                         ("anr_live", ROOT / "src/anr/anr_live.mm"), ("anr_runtime", ROOT / "src/anr/anr_runtime.mm")):
         object_path = str(DIST / (name + ".o"))
         # fsr4_metalfx.m is Objective-C; the live bridges are Objective-C++.
         compiler = "clang" if name == "hook" else "clang++"
@@ -120,7 +123,7 @@ def build_hook(log_path: Path, netal_source=None) -> Path:
     # UI v2 adds noise-aware recomposition and sampled statistics (ABI 36 bytes).
     helper = ROOT / "build/anr_helpers_ui_v2.metallib"
     helper.parent.mkdir(parents=True, exist_ok=True)
-    run(["xcrun", "metal", "-std=metal3.0", "-O2", "-c", str(ROOT / "src/anr_helpers.metal"),
+    run(["xcrun", "metal", "-std=metal3.0", "-O2", "-c", str(ROOT / "src/anr/anr_helpers.metal"),
          "-o", str(ROOT / "build/anr_helpers_ui_v2.air")])
     run(["xcrun", "metallib", str(ROOT / "build/anr_helpers_ui_v2.air"), "-o", str(helper)])
     netal_objects = [str(DIST / "netal.o")]
@@ -164,7 +167,7 @@ def build_hook_test(name: str, source: Path) -> Path:
     run([("clang++" if cpp else "clang"), "-O2", "-fobjc-arc",
          *(["-std=c++17"] if cpp else []),
          "-arch", "x86_64", f"-mmacosx-version-min={MIN_MACOS}", "-isysroot", sdk(),
-         "-I", str(ROOT / "src"), str(source), str(DIST / "libfsr4hook.dylib"),
+         *SRC_INC, str(source), str(DIST / "libfsr4hook.dylib"),
          "-framework", "Foundation", "-framework", "Metal", "-framework", "MetalFX",
          "-Wl,-rpath", str(DIST), "-o", str(out)])
     return out
@@ -179,7 +182,7 @@ def build_live() -> Path:
 
 
 def build_anr_live() -> Path:
-    return build_hook_test("anr_live_test", ROOT / "tests/anr_live_test.mm")
+    return build_hook_test("anr_live_test", ROOT / "tests/anr/anr_live_test.mm")
 
 
 def preserve_panel_preferences(conf: Path):
@@ -1009,7 +1012,7 @@ def cmd_install(args):
     run(["arch", "-x86_64", str(live),
          str(ROOT / "testcases" / "testcase_quality_720to1080"), str(ref)], env=reference_env)
     if args.profile == "netal":
-        run([sys.executable, str(ROOT / "tools/netal_probe.py"), "--source", str(netal_source),
+        run([sys.executable, str(ROOT / "tools/netal/netal_probe.py"), "--source", str(netal_source),
              "--runtime", str(netal_runtime), "--arch", "x86_64"], cwd=ROOT)
         print("Netal session initialized; game image quality is not validated by the FSR fixture")
     if netal_source and netal_runtime:
