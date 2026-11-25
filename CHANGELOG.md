@@ -1,5 +1,26 @@
 # Releases
 
+## v4.0 (2026-11-25)
+
+Faster Lite Lossy reuse, wider exact Winograd, probe-verified MPP fast paths,
+and a subsystem-folder restructure that drops about a quarter of the codebase.
+No model, weight or hook-ABI changes. [Release notes](docs/releases/v4.0.md).
+
+- Lite Lossy compacts its reuse cache from 32 to 16 bytes per pixel, splits
+  POST into specialized full/reuse kernels, deduplicates the temporal-filter
+  colour taps and routes the PRE 2x2 quad with three shuffles (4 channels per
+  lane instead of 16). Measured M5 frame time: -21.7% at 1080p, -34.8% at
+  1440p, -40.0% at 4K; 4K Lite Lossy is now faster than ordinary Lite.
+- Exact Winograd F(2x2,3x3) extends to CT32 and the NF64/CT64 banks on the
+  SIMD backend: Exact-Fast is 13-14% faster, Lite 9-10% faster there.
+- MPP gains probe-verified `*_coop_fast_*` kernels without per-tile checks or
+  barriers plus two wider chain shapes: 6-9% faster across Lite, Exact and
+  Lossy2 on M5.
+- src/, tools/ and tests/ reorganize into subsystem folders; legacy research
+  probes, orphaned benchmarks and the upstream-oracle cluster are removed.
+- Cache revisions reject stale bundles (`lossy3` -> `lossy4`); shaders rebuild
+  on first launch per resolution. External weight commands are unchanged.
+
 ## v3.3 (2026-11-22)
 
 Refresh both optional Lossy weight imports to the November 22 upstream release. Fix the macOS 27 depth getter in the CrossOver hook. The original-shader oracle keeps its separate November 1 weights. [Release notes](docs/releases/v3.3.md).
