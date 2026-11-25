@@ -77,6 +77,8 @@ int main(int argc, char **argv) {
             const unsigned reqW = argc > 8 ? (unsigned)std::stoul(argv[8]) : 1920u;
             const unsigned reqH = argc > 9 ? (unsigned)std::stoul(argv[9]) : 1080u;
             const bool mode3x = getenv("ANR_3X") && !strcmp(getenv("ANR_3X"), "1");
+            // Split encoding exposes pair/phase timestamps; frame mode measures the live scheduler.
+            const bool frameMode = getenv("ANR_FRAME") && !strcmp(getenv("ANR_FRAME"), "1");
             const bool doProfile = getenv("ANR_PROFILE") && !strcmp(getenv("ANR_PROFILE"), "1");
 
             require(frames >= 1 && frames <= 512, "frame count outside 1..512");
@@ -152,34 +154,41 @@ int main(int argc, char **argv) {
                 begin();
                 const auto start = std::chrono::steady_clock::now();
                 [command writeTimestampIntoHeap:counters atIndex:0];
-                require(runtime.encode_pair(command, color, depth, motion, frame1.bytes, frame1.length, error), error);
-                [command writeTimestampIntoHeap:counters atIndex:1];
-                if (mode3x) {
-                    require(runtime.encode_interpolation(command, 1.0 / 3.0, output, error), error);
-                    [command writeTimestampIntoHeap:counters atIndex:2];
-                    require(runtime.encode_interpolation(command, 2.0 / 3.0, output2, error), error);
-                    [command writeTimestampIntoHeap:counters atIndex:3];
+                if (frameMode) {
+                    const double phases[] = {mode3x ? 1.0 / 3.0 : phase, 2.0 / 3.0};
+                    id<MTLTexture> targets[] = {output, output2};
+                    require(runtime.encode_frame(command, color, depth, motion, frame1.bytes, frame1.length,
+                                                 phases, targets, mode3x ? 2 : 1, error), error);
+                    [command writeTimestampIntoHeap:counters atIndex:1];
                 } else {
-                    require(runtime.encode_interpolation(command, phase, output, error), error);
-                    [command writeTimestampIntoHeap:counters atIndex:2];
+                    require(runtime.encode_pair(command, color, depth, motion, frame1.bytes, frame1.length, error), error);
+                    [command writeTimestampIntoHeap:counters atIndex:1];
+                    if (mode3x) {
+                        require(runtime.encode_interpolation(command, 1.0 / 3.0, output, error), error);
+                        [command writeTimestampIntoHeap:counters atIndex:2];
+                        require(runtime.encode_interpolation(command, 2.0 / 3.0, output2, error), error);
+                        [command writeTimestampIntoHeap:counters atIndex:3];
+                    } else {
+                        require(runtime.encode_interpolation(command, phase, output, error), error);
+                        [command writeTimestampIntoHeap:counters atIndex:2];
+                    }
                 }
                 finish();
                 const auto end = std::chrono::steady_clock::now();
-                const NSUInteger numStamps = mode3x ? 4 : 3;
+                const NSUInteger numStamps = frameMode ? 2 : (mode3x ? 4 : 3);
                 NSData *resolved = [counters resolveCounterRange:NSMakeRange(0, numStamps)];
                 require(resolved.length == numStamps * sizeof(MTL4TimestampHeapEntry), "invalid GPU timestamp result");
                 const auto *stamp = (const MTL4TimestampHeapEntry *)resolved.bytes;
-                require(stamp[0].timestamp < stamp[1].timestamp && stamp[1].timestamp < stamp[2].timestamp,
-                        "unordered GPU timestamps");
+                for (NSUInteger j = 1; j < numStamps; ++j) {
+                    require(stamp[j - 1].timestamp < stamp[j].timestamp, "unordered GPU timestamps");
+                }
                 if (i >= 0) {
                     times.push_back(std::chrono::duration<double, std::milli>(end - start).count());
-                    pairTimes.push_back(double(stamp[1].timestamp - stamp[0].timestamp));
-                    phaseTimes.push_back(double(stamp[2].timestamp - stamp[1].timestamp));
-                    if (mode3x) {
-                        phase2Times.push_back(double(stamp[3].timestamp - stamp[2].timestamp));
-                        gpuTimes.push_back(double(stamp[3].timestamp - stamp[0].timestamp));
-                    } else {
-                        gpuTimes.push_back(double(stamp[2].timestamp - stamp[0].timestamp));
+                    gpuTimes.push_back(double(stamp[numStamps - 1].timestamp - stamp[0].timestamp));
+                    if (!frameMode) {
+                        pairTimes.push_back(double(stamp[1].timestamp - stamp[0].timestamp));
+                        phaseTimes.push_back(double(stamp[2].timestamp - stamp[1].timestamp));
+                        if (mode3x) phase2Times.push_back(double(stamp[3].timestamp - stamp[2].timestamp));
                     }
                 }
             }
@@ -266,14 +275,15 @@ int main(int argc, char **argv) {
                 @"testkit_executable_used": @NO,
                 @"game_integration_verified": @NO,
                 @"gpu_median_ms": @(median(gpuTimes)),
-                @"pair_gpu_median_ms": @(median(pairTimes)),
-                @"phase_gpu_median_ms": @(median(phaseTimes)),
+                @"combined_frame": @(frameMode),
                 @"warmups": @8,
                 @"gpu_tick_ns": @(gpuTickMs * 1e6),
                 @"coalesced": @(!coalesced || strcmp(coalesced, "0")),
             } mutableCopy];
-            if (mode3x) {
-                report[@"phase2_gpu_median_ms"] = @(median(phase2Times));
+            if (!frameMode) {
+                report[@"pair_gpu_median_ms"] = @(median(pairTimes));
+                report[@"phase_gpu_median_ms"] = @(median(phaseTimes));
+                if (mode3x) report[@"phase2_gpu_median_ms"] = @(median(phase2Times));
             }
 
             if (argc > 6 && strlen(argv[6]) > 0 && strcmp(argv[6], "-") != 0) {
@@ -304,6 +314,12 @@ int main(int argc, char **argv) {
             NSString *outputPath = [NSString stringWithUTF8String:out.c_str()];
             require([generated writeToFile:[outputPath stringByAppendingPathComponent:@"out.bin"] atomically:YES],
                     "cannot save output");
+            if (mode3x) {
+                [output2 getBytes:generated.mutableBytes bytesPerRow:w * 4 fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
+                report[@"output2_sha256"] = sha256_ns(generated);
+                require([generated writeToFile:[outputPath stringByAppendingPathComponent:@"out2.bin"] atomically:YES],
+                        "cannot save second output");
+            }
             NSData *json = [NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil];
             require([json writeToFile:[outputPath stringByAppendingPathComponent:@"run.json"] atomically:YES],
                     "cannot save report");
