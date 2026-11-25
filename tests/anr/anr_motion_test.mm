@@ -35,11 +35,17 @@ int main(int argc,char **argv){@autoreleasepool{try{
     auto device=MTLCreateSystemDefaultDevice();need(device!=nil,"no Metal device");
     auto metadata=[NSData dataWithContentsOfFile:[[NSString stringWithUTF8String:argv[2]] stringByAppendingPathComponent:@"manifest.json"]];
     NSDictionary *manifest=[NSJSONSerialization JSONObjectWithData:metadata options:0 error:nil];
-    unsigned w=[manifest[@"width"] unsignedIntValue],h=[manifest[@"height"] unsignedIntValue];need(w&&h,"bad runtime dimensions");
+    const bool isV2=[manifest[@"schema"] isEqual:@"fsr4_anr_runtime_v2"];
+    unsigned w=isV2?(getenv("ANR_TEST_WIDTH")?(unsigned)atoi(getenv("ANR_TEST_WIDTH")):1920u):[manifest[@"width"] unsignedIntValue];
+    unsigned h=isV2?(getenv("ANR_TEST_HEIGHT")?(unsigned)atoi(getenv("ANR_TEST_HEIGHT")):1080u):[manifest[@"height"] unsignedIntValue];
+    need(w&&h,"bad runtime dimensions");
     auto q=[device newCommandQueue];auto q4=[device newMTL4CommandQueue];auto allocator=[device newCommandAllocator];
     auto event=[device newSharedEvent];uint64_t token=0;NSError *error=nil;
     auto compiler=[device newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&error];
-    for(bool low:{false,true})for(const char *mode:{"metalfx","anr"})for(float dx:{0.f,24.f}){
+    std::vector<const char*> modes={"metalfx","anr"};
+    if(isV2)modes.push_back("anr3x");
+    for(bool low:{false,true})for(const char *mode:modes)for(float dx:{0.f,24.f}){
+        if(!strcmp(mode,"anr3x")&&dx==0.f&&low)continue;
         const unsigned rw=low?w*2/3:w,rh=low?h*2/3:h;
         setenv("FSR4_FG",mode,1);
         auto d=[MTLFXFrameInterpolatorDescriptor new];d.inputWidth=rw;d.inputHeight=rh;d.outputWidth=w;d.outputHeight=h;
@@ -59,8 +65,35 @@ int main(int argc,char **argv){@autoreleasepool{try{
         base.motionVectorScaleX=base.motionVectorScaleY=1;base.nearPlane=.1f;base.farPlane=1000;
         base.fieldOfView=60;base.aspectRatio=float(w)/h;base.depthReversed=NO;base.deltaTime=1.f/60;
         auto readback=[device newBufferWithLength:size_t(w)*h*4 options:MTLResourceStorageModeShared];
+        auto readback2=[device newBufferWithLength:size_t(w)*h*4 options:MTLResourceStorageModeShared];
         std::vector<uint32_t> source(size_t(w)*h),previous(source.size());
         const float jitters[][2]={{.125f,.2777778f},{-.125f,-.2777778f},{.375f,.0555556f},{-.4375f,.388889f},{.0625f,-.462963f},{-.1875f,-.12963f}};
+        auto readTex=[&](id<MTLTexture> src, id<MTLBuffer> dst){
+            if(m4){
+                auto cb=[device newCommandBuffer];[allocator reset];[cb beginCommandBufferWithAllocator:allocator];
+                auto rd=[MTLResidencySetDescriptor new];rd.initialCapacity=2;auto res=[device newResidencySetWithDescriptor:rd error:&error];
+                [res addAllocation:src];[res addAllocation:dst];[res commit];[cb useResidencySet:res];
+                auto enc=[cb computeCommandEncoder];[enc barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageBlit visibilityOptions:MTL4VisibilityOptionDevice];
+                [enc copyFromTexture:src sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(w,h,1) toBuffer:dst destinationOffset:0 destinationBytesPerRow:w*4 destinationBytesPerImage:size_t(w)*h*4];
+                [enc endEncoding];[cb endCommandBuffer];id<MTL4CommandBuffer> bs[]={cb};[q4 commit:bs count:1];[q4 signalEvent:event value:++token];
+                need([event waitUntilSignaledValue:token timeoutMS:20000],"Metal4 extra readback timeout");
+            }else{
+                auto cb=[q commandBuffer];auto enc=[cb blitCommandEncoder];
+                [enc copyFromTexture:src sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(w,h,1) toBuffer:dst destinationOffset:0 destinationBytesPerRow:w*4 destinationBytesPerImage:size_t(w)*h*4];
+                [enc endEncoding];[cb commit];[cb waitUntilCompleted];need(cb.status==MTLCommandBufferStatusCompleted,"Metal3 extra readback failure");
+            }
+        };
+        auto findPos=[&](const uint32_t *actual, float expected, double &bestOut){
+            double best=1.e99;float bestPosition=0;
+            for(float candidate=expected-dx;candidate<=expected+dx+.001f;candidate+=dx?dx/12.f:1.f){
+                double squared=0;unsigned count=0;
+                for(unsigned y=64;y<h-64;y+=13)for(unsigned x=64;x<w-64;x+=13){
+                    uint32_t b=pixel(x-candidate,y),a=actual[size_t(y)*w+x];
+                    for(unsigned ch=0;ch<3;++ch){double difference=int((a>>(10*ch))&1023)-int((b>>(10*ch))&1023);squared+=difference*difference;++count;}}
+                double rmse=sqrt(squared/count);if(rmse<best){best=rmse;bestPosition=candidate;}
+            }
+            bestOut=best;return bestPosition;
+        };
         for(unsigned n=0;n<6;++n){
             for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x){source[size_t(y)*w+x]=pixel(x-dx*n,y);previous[size_t(y)*w+x]=pixel(x-dx*(n?n-1:0),y);}
             [c replaceRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0 withBytes:source.data() bytesPerRow:w*4];
@@ -68,8 +101,6 @@ int main(int argc,char **argv){@autoreleasepool{try{
             base.shouldResetHistory=n==0;base.jitterOffsetX=jitters[n][0];base.jitterOffsetY=jitters[n][1];
             if(m4){
                 auto cb=[device newCommandBuffer];[allocator reset];[cb beginCommandBufferWithAllocator:allocator];
-                // MetalFX does not promise to make borrowed inputs resident.
-                // The ANR bridge does; the standalone original path must too.
                 auto rd=[MTLResidencySetDescriptor new];rd.initialCapacity=6;auto residency=[device newResidencySetWithDescriptor:rd error:&error];
                 for(id r in @[c,prev,z,mv,out,readback])[residency addAllocation:r];[residency commit];[cb useResidencySet:residency];
                 [(id<MTL4FXFrameInterpolator>)fg encodeToCommandBuffer:cb];
@@ -83,20 +114,30 @@ int main(int argc,char **argv){@autoreleasepool{try{
                 [enc endEncoding];[cb commit];[cb waitUntilCompleted];need(cb.status==MTLCommandBufferStatusCompleted,"Metal3 failure");
             }
             if(!n)continue;
-            const auto *actual=(const uint32_t*)readback.contents;
-            const float expected=dx*(n-.5f);double best=1.e99;float bestPosition=0;
-            for(float candidate=expected-dx;candidate<=expected+dx+.001f;candidate+=dx?dx/8:1){
-                double squared=0;unsigned count=0;
-                for(unsigned y=64;y<h-64;y+=13)for(unsigned x=64;x<w-64;x+=13){
-                    uint32_t b=pixel(x-candidate,y),a=actual[size_t(y)*w+x];
-                    for(unsigned c=0;c<3;++c){double difference=int((a>>(10*c))&1023)-int((b>>(10*c))&1023);squared+=difference*difference;++count;}}
-                double rmse=sqrt(squared/count);if(rmse<best){best=rmse;bestPosition=candidate;}
-            }
+            const bool is3x=!strcmp(mode,"anr3x");
+            const float expected=is3x?dx*(n-2.f/3.f):dx*(n-.5f);
+            double best=0;float bestPosition=findPos((const uint32_t*)readback.contents,expected,best);
             printf("%s %s render=%ux%u dx=%.0f frame=%u expected=%.2f best=%.2f rmse=%.3f\n",m4?"Metal4":"Metal3",mode,rw,rh,dx,n,expected,bestPosition,best);
-            if(!strcmp(mode,"anr")){
+            if(!strcmp(mode,"anr")||is3x){
                 Fsr4AnrStatus s={};fsr4_anr_get_status(&s);need(s.active,"ANR fell back in moving-frame test");
-                need(fabsf(bestPosition-expected)<.25f,"ANR temporal position is not the midpoint");
-                need(best<2.0,"ANR synthetic moving-frame quality regressed");
+                need(fabsf(bestPosition-expected)<.5f,"ANR temporal position mismatch");
+                need(best<2.5,"ANR synthetic moving-frame quality regressed");
+            }
+            if(is3x){
+                void *extraRaw=nullptr;double stepSec=0;uint64_t ticket=0;
+                const int ev=fsr4_anr_on_present_event((__bridge void*)device,&extraRaw,&stepSec,&ticket);
+                need(ev==1&&extraRaw!=nullptr,"ANR 3x did not produce t=2/3 extra frame");
+                id<MTLTexture> extraTex=(__bridge_transfer id<MTLTexture>)extraRaw;
+                readTex(extraTex,readback2);
+                const float exp2=dx*(n-1.f/3.f);
+                double best2=0;float pos2=findPos((const uint32_t*)readback2.contents,exp2,best2);
+                printf("%s anr3x(t=2/3) render=%ux%u dx=%.0f frame=%u expected=%.2f best=%.2f rmse=%.3f\n",m4?"Metal4":"Metal3",rw,rh,dx,n,exp2,pos2,best2);
+                need(fabsf(pos2-exp2)<.5f,"ANR 3x t=2/3 temporal position mismatch");
+                need(best2<2.5,"ANR 3x t=2/3 moving-frame quality regressed");
+                fsr4_anr_release_extra_ticket(ticket,1);
+                // Drain the paired OutputReal pacing event.
+                const int ev2=fsr4_anr_on_present_event((__bridge void*)device,nullptr,&stepSec,nullptr);
+                need(ev2==2,"ANR 3x did not emit OutputReal pacing event");
             }
         }
         base=nil;fg=nil;

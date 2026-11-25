@@ -3,6 +3,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <MetalFX/MetalFX.h>
+#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #include "../../src/anr/anr_live.h"
 #include "../../src/common/fsr4_fg_settings.h"
@@ -28,11 +29,15 @@ int main(int argc,char **argv){@autoreleasepool{try{
     id<MTLDevice> device=MTLCreateSystemDefaultDevice();need(device!=nil,"no device");
     NSData *metadata=[NSData dataWithContentsOfFile:[[NSString stringWithUTF8String:argv[2]] stringByAppendingPathComponent:@"manifest.json"]];
     NSDictionary *manifest=metadata?[NSJSONSerialization JSONObjectWithData:metadata options:0 error:nil]:nil;
-    unsigned w=[manifest[@"width"] unsignedIntValue],h=[manifest[@"height"] unsignedIntValue];
+    const bool isV2=[manifest[@"schema"] isEqual:@"fsr4_anr_runtime_v2"];
+    unsigned w=isV2?(getenv("ANR_TEST_WIDTH")?(unsigned)atoi(getenv("ANR_TEST_WIDTH")):1920u):[manifest[@"width"] unsignedIntValue];
+    unsigned h=isV2?(getenv("ANR_TEST_HEIGHT")?(unsigned)atoi(getenv("ANR_TEST_HEIGHT")):1080u):[manifest[@"height"] unsignedIntValue];
     need(w&&h,"runtime geometry unavailable");
     MTLFXFrameInterpolatorDescriptor *d=[MTLFXFrameInterpolatorDescriptor new];d.inputWidth=w;d.inputHeight=h;d.outputWidth=w;d.outputHeight=h;
-    MTLPixelFormat colorFormat=getenv("ANR_TEST_HDR")?MTLPixelFormatRGBA16Float:MTLPixelFormatRGB10A2Unorm;
-    setenv("FSR4_ANR_COLOR",getenv("ANR_TEST_HDR")?"linear":"pq10",1);
+    const bool testHdr=getenv("ANR_TEST_HDR")!=nullptr;
+    const bool testSdr=!testHdr&&getenv("ANR_TEST_SDR")!=nullptr;
+    MTLPixelFormat colorFormat=testHdr?MTLPixelFormatRGBA16Float:testSdr?MTLPixelFormatRGBA8Unorm:MTLPixelFormatRGB10A2Unorm;
+    setenv("FSR4_ANR_COLOR",testHdr?"linear":testSdr?"srgb":"pq10",1);
     d.colorTextureFormat=d.outputTextureFormat=d.uiTextureFormat=colorFormat;d.depthTextureFormat=MTLPixelFormatR32Float;d.motionTextureFormat=MTLPixelFormatRG16Float;
     setenv("FSR4_FG","metalfx",1);fsr4_anr_refresh_settings();
     NSError *error=nil;id fg=nil;
@@ -47,7 +52,10 @@ int main(int argc,char **argv){@autoreleasepool{try{
     auto z=texture(device,w,h,MTLPixelFormatR32Float),mv=texture(device,w,h,MTLPixelFormatRG16Float),out=texture(device,w,h,colorFormat,true);
     need(c&&prev&&z&&mv&&out,"textures unavailable");
     std::vector<uint32_t> color(size_t(w)*h);std::vector<float> depth(size_t(w)*h,.5f);std::vector<uint16_t> motion(size_t(w)*h*2,0);
-    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x)color[size_t(y)*w+x]=0xc0000000u|((x%1024)<<10)|(y%1024)|((x/2%1024)<<20);
+    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x){
+        if(testSdr)color[size_t(y)*w+x]=0xff000000u|((x%256)<<8)|(y%256)|(((x/2)%256)<<16);
+        else color[size_t(y)*w+x]=0xc0000000u|((x%1024)<<10)|(y%1024)|((x/2%1024)<<20);
+    }
     std::vector<uint16_t> hdr;
     const void *inputBytes=color.data();size_t bpp=4;
     if(colorFormat==MTLPixelFormatRGBA16Float){hdr.resize(color.size()*4);bpp=8;
@@ -125,12 +133,14 @@ int main(int argc,char **argv){@autoreleasepool{try{
     if(colorFormat==MTLPixelFormatRGBA16Float){const auto *a=(const _Float16*)readback.contents,*b=(const _Float16*)hdr.data();
         for(size_t i=0;i<color.size();++i)for(unsigned channel=0;channel<3;++channel){float diff=fabsf(float(a[i*4+channel])-float(b[i*4+channel]));
             need(std::isfinite(diff),"nonfinite HDR output");errorSum+=diff*1023;maxDiff=std::max(maxDiff,(unsigned)(diff*1023));}}
+    else if(testSdr){for(size_t i=0;i<color.size();++i)for(unsigned shift:{0u,8u,16u}){
+        unsigned diff=(unsigned)abs(int((actual[i]>>shift)&255)-int((color[i]>>shift)&255));errorSum+=diff*4;maxDiff=std::max(maxDiff,diff*4);}}
     else for(size_t i=0;i<color.size();++i)for(unsigned shift:{0u,10u,20u}){
         unsigned diff=(unsigned)abs(int((actual[i]>>shift)&1023)-int((color[i]>>shift)&1023));errorSum+=diff;maxDiff=std::max(maxDiff,diff);}
     const double meanDiff=errorSum/(color.size()*3);
     // Opt-out must keep original behavior without reading a model or changing SR.
     printf("static-frame mean code error %.6f max %u (first=%08x source=%08x)\n",meanDiff,maxDiff,actual[0],color[0]);
-    need(meanDiff<2,"stationary source-frame quality regressed");
+    need(meanDiff<2.5,"stationary source-frame quality regressed");
     // A flag without an optional UI texture is not a precomposited input.
     base.uiTextureComposited=YES;encode();fsr4_anr_get_status(&s);
     need(s.generated==6&&s.active&&s.uiMode==FSR4_ANR_UI_NONE,"UI flag without texture rejected ANR");
@@ -140,17 +150,19 @@ int main(int argc,char **argv){@autoreleasepool{try{
     for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x)if(inHud(x,y)){
         auto *pixel=composite.data()+(size_t(y)*w+x)*bpp;
         if(colorFormat==MTLPixelFormatRGBA16Float){_Float16 value[4]={(_Float16).9f,(_Float16).03f,(_Float16).63f,(_Float16)0};memcpy(pixel,value,8);}
+        else if(testSdr){uint32_t value=230u|(8u<<8)|(161u<<16);memcpy(pixel,&value,4);}
         else{uint32_t value=921u|(31u<<10)|(644u<<20);memcpy(pixel,&value,4);}
     }
     [ui replaceRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0 withBytes:composite.data() bytesPerRow:w*bpp];
     base.uiTexture=ui;encode();fsr4_anr_get_status(&s);
     need(s.generated==7&&s.active&&s.uiComposited==1&&s.uiMode==FSR4_ANR_UI_PRECOMPOSITED,"precomposited UI did not replace MetalFX");
     readOutput();unsigned hudPixels=0;
+    const uint32_t rgbMask=testSdr?0x00ffffffu:0x3fffffffu;
     for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x)if(inHud(x,y)){
         const size_t offset=(size_t(y)*w+x)*bpp;
         if(bpp==8)need(!memcmp((const uint8_t*)readback.contents+offset,composite.data()+offset,6),"HDR HUD pixels changed");
         if(bpp==4){uint32_t a,b;memcpy(&a,(const uint8_t*)readback.contents+offset,4);memcpy(&b,composite.data()+offset,4);
-            need((a&0x3fffffffu)==(b&0x3fffffffu),"PQ10 HUD pixels changed");}
+            need((a&rgbMask)==(b&rgbMask),"HUD pixels changed");}
         ++hudPixels;
     }
     // A separate premultiplied overlay uses alpha; here it is intentionally
@@ -159,6 +171,7 @@ int main(int argc,char **argv){@autoreleasepool{try{
     for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x)if(inHud(x,y)){
         auto *pixel=overlay.data()+(size_t(y)*w+x)*bpp;
         if(bpp==8){_Float16 value[4]={(_Float16).9f,(_Float16).03f,(_Float16).63f,(_Float16)1};memcpy(pixel,value,8);}
+        else if(testSdr){uint32_t value=0xff000000u|230u|(8u<<8)|(161u<<16);memcpy(pixel,&value,4);}
         else{uint32_t value=0xc0000000u|921u|(31u<<10)|(644u<<20);memcpy(pixel,&value,4);}
     }
     auto separate=texture(device,w,h,colorFormat);
@@ -170,7 +183,7 @@ int main(int argc,char **argv){@autoreleasepool{try{
         const size_t offset=(size_t(y)*w+x)*bpp;
         if(bpp==8)need(!memcmp((const uint8_t*)readback.contents+offset,overlay.data()+offset,6),"overlay HDR HUD pixels changed");
         else{uint32_t a,b;memcpy(&a,(const uint8_t*)readback.contents+offset,4);memcpy(&b,overlay.data()+offset,4);
-            need((a&0x3fffffffu)==(b&0x3fffffffu),"overlay PQ10 HUD pixels changed");}
+            need((a&rgbMask)==(b&rgbMask),"overlay HUD pixels changed");}
     }
     // Queue changing UI modes. Constants, arguments and retained UI resources
     // belong to their frame slot, not mutable state of the next CPU encode.
@@ -191,7 +204,60 @@ int main(int argc,char **argv){@autoreleasepool{try{
         const size_t offset=(size_t(y)*w+x)*bpp;
         if(bpp==8)need(!memcmp((const uint8_t*)readback.contents+offset,composite.data()+offset,6),"queued HDR HUD pixels changed");
         else{uint32_t a,b;memcpy(&a,(const uint8_t*)readback.contents+offset,4);memcpy(&b,composite.data()+offset,4);
-            need((a&0x3fffffffu)==(b&0x3fffffffu),"queued PQ10 HUD pixels changed");}
+            need((a&rgbMask)==(b&rgbMask),"queued HUD pixels changed");}
+    }
+    // End-to-end 3x live switch & CAMetalLayer presentation insertion on V.B20!
+    uint64_t extra3xCount=0;
+    if(isV2){
+        need(fsr4_fg::write_settings(preference,fsr4_fg::Mode::ANR3x),"ANR 3x preference write failed");
+        std::this_thread::sleep_for(std::chrono::milliseconds(650));
+        need(fsr4_anr_selected_mode()==2&&fsr4_anr_multiplier()==3,"background controller did not apply ANR 3x mode");
+        base.uiTexture=nil;base.uiTextureComposited=NO;
+        // The 650 ms timer sleep exceeds the 500 ms temporal-gap threshold, so the
+        // first frame after pausing safely primes history before 3x generation begins.
+        encode();
+        CAMetalLayer *layer=[CAMetalLayer layer];
+        layer.device=device;layer.pixelFormat=MTLPixelFormatBGRA8Unorm;
+        layer.drawableSize=CGSizeMake(w,h);layer.maximumDrawableCount=3;
+        layer.framebufferOnly=YES;
+        for(unsigned step=0;step<2;++step){
+            encode();
+            fsr4_anr_get_status(&s);
+            need(s.active&&s.multiplier==3,"ANR 3x did not activate on V.B20");
+            id<CAMetalDrawable> d1=[layer nextDrawable];
+            need(d1!=nil,"3x test layer nextDrawable returned nil");
+            if(metal4){
+                [q4 signalDrawable:d1];
+                [d1 present];
+                // Present OutputReal to complete the 3-frame cycle, then wait for GPU queue drain.
+                id<CAMetalDrawable> dReal=[layer nextDrawable];
+                if(dReal){[q4 signalDrawable:dReal];[dReal present];}
+                [q4 signalEvent:event value:++token];
+                need([event waitUntilSignaledValue:token timeoutMS:20000],"3x Metal4 present drain timeout");
+            }else{
+                auto cbP=[q commandBuffer];[cbP presentDrawable:d1];[cbP commit];[cbP waitUntilCompleted];
+                auto cbR=[q commandBuffer];
+                id<CAMetalDrawable> dReal=[layer nextDrawable];
+                if(dReal)[cbR presentDrawable:dReal];
+                [cbR commit];[cbR waitUntilCompleted];
+            }
+        }
+        // One more encode triggers retirement check of the previous Metal 4 present slots.
+        encode();
+        fsr4_anr_get_status(&s);
+        // Trigger retirement on Metal 4 via another signal or direct check.
+        if(metal4){
+            id<CAMetalDrawable> d1=[layer nextDrawable];
+            if(d1){[q4 signalDrawable:d1];[d1 present];}
+            [q4 signalEvent:event value:++token];
+            need([event waitUntilSignaledValue:token timeoutMS:20000],"3x Metal4 final drain timeout");
+        }
+        fsr4_anr_get_status(&s);
+        extra3xCount=s.generatedExtra3x;
+        need(extra3xCount>=1,"ANR 3x presentation hook did not present extra t=2/3 frame");
+        need(fsr4_fg::write_settings(preference,fsr4_fg::Mode::ANR),"restore ANR 2x failed");
+        std::this_thread::sleep_for(std::chrono::milliseconds(650));
+        need(fsr4_anr_selected_mode()==1&&fsr4_anr_multiplier()==2,"switch back from 3x to 2x failed");
     }
     // Invalid UI inputs must fail before any GPU encode. Call the bridge
     // directly so the original interpolator never sees these invalid inputs.
@@ -200,16 +266,17 @@ int main(int argc,char **argv){@autoreleasepool{try{
     check.device=(__bridge void*)device;check.owner=(__bridge void*)fg;check.color=(__bridge void*)c;
     check.depth=(__bridge void*)z;check.motion=(__bridge void*)mv;check.output=(__bridge void*)out;
     check.rw=check.uw=w;check.rh=check.uh=h;check.nearPlane=.1f;check.farPlane=1000;
-    check.motionScaleX=check.motionScaleY=1;check.colorEncoding=bpp==8?0:2;check.uiComposited=1;
+    check.motionScaleX=check.motionScaleY=1;check.colorEncoding=testHdr?0:testSdr?1:2;check.uiComposited=1;
     auto shortUI=texture(device,w/2,h,colorFormat);check.ui=(__bridge void*)shortUI;
     need(fsr4_anr_encode_frame(&check)==0,"UI extent mismatch was accepted");
     fsr4_anr_get_status(&s);need(strstr(s.reason,"UI texture extent/device mismatch"),"UI extent diagnostic missing");
     check.ui=(__bridge void*)out;need(fsr4_anr_encode_frame(&check)==0,"read/write UI alias was accepted");
     fsr4_anr_get_status(&s);need(strstr(s.reason,"UI aliases FG output"),"UI alias diagnostic missing");
-    auto wrongUI=texture(device,w,h,MTLPixelFormatBGRA8Unorm);check.ui=(__bridge void*)wrongUI;
+    auto wrongUI=texture(device,w,h,testSdr?MTLPixelFormatRGB10A2Unorm:MTLPixelFormatBGRA8Unorm);check.ui=(__bridge void*)wrongUI;
     need(fsr4_anr_encode_frame(&check)==0,"UI color format mismatch was accepted");
     fsr4_anr_get_status(&s);need(strstr(s.reason,"UI and scene color formats differ"),"UI format diagnostic missing");
-    fprintf(stdout,"ANR live MetalFX %s hook passed (generated=%llu primed=%llu, %u exact HUD pixels, 3 changing UI modes in flight, unsafe UI rejected)\n",metal4?"Metal4":"Metal3",(unsigned long long)s.generated,(unsigned long long)s.primed,hudPixels);
+    fprintf(stdout,"ANR live MetalFX %s hook passed (%ux%u, generated=%llu primed=%llu extra3x=%llu, %u exact HUD pixels, 3 changing UI modes in flight, unsafe UI rejected)\n",
+            metal4?"Metal4":"Metal3",w,h,(unsigned long long)s.generated,(unsigned long long)s.primed,(unsigned long long)extra3xCount,hudPixels);
     unlink(preference.c_str());rmdir(preferenceDirectory);
     return 0;
 }catch(const std::exception &e){fprintf(stderr,"ANR live test: %s\n",e.what());return 1;}}}

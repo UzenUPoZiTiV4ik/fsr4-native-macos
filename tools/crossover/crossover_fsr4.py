@@ -160,15 +160,18 @@ def build_hook(log_path: Path, netal_source=None) -> Path:
     return out
 
 
-def build_hook_test(name: str, source: Path) -> Path:
+def build_hook_test(name: str, source: Path, extra_frameworks=()) -> Path:
     """A small check binary that links the just-built hook and runs under Rosetta."""
     out = DIST / name
     cpp = source.suffix == ".mm"
+    fw = ["-framework", "Foundation", "-framework", "Metal", "-framework", "MetalFX"]
+    for item in extra_frameworks:
+        fw += ["-framework", item]
     run([("clang++" if cpp else "clang"), "-O2", "-fobjc-arc",
          *(["-std=c++17"] if cpp else []),
          "-arch", "x86_64", f"-mmacosx-version-min={MIN_MACOS}", "-isysroot", sdk(),
          *SRC_INC, str(source), str(DIST / "libfsr4hook.dylib"),
-         "-framework", "Foundation", "-framework", "Metal", "-framework", "MetalFX",
+         *fw,
          "-Wl,-rpath", str(DIST), "-o", str(out)])
     return out
 
@@ -182,7 +185,7 @@ def build_live() -> Path:
 
 
 def build_anr_live() -> Path:
-    return build_hook_test("anr_live_test", ROOT / "tests/anr/anr_live_test.mm")
+    return build_hook_test("anr_live_test", ROOT / "tests/anr/anr_live_test.mm", extra_frameworks=("QuartzCore",))
 
 
 def preserve_panel_preferences(conf: Path):
@@ -208,7 +211,7 @@ def preserve_panel_preferences(conf: Path):
 
 
 def select_frame_generation(mode):
-    if mode not in ("metalfx", "anr"):
+    if mode not in ("metalfx", "anr", "anr3x"):
         raise ValueError("unknown frame generation mode")
     DIST.mkdir(parents=True, exist_ok=True)
     path = DIST / "fg-settings.conf"
@@ -235,18 +238,19 @@ def check_anr_runtime(value):
 
 def cmd_frame_generation(args):
     runtime = None
+    is_anr = args.mode in ("anr", "anr3x")
     netal_source = getattr(args, "netal_source", "") or os.environ.get("FSR4_NETAL_SOURCE")
     netal_runtime = getattr(args, "netal_runtime", "") or os.environ.get(NETAL_RUNTIME_KEY)
-    if args.mode == "anr" and netal_source:
+    if is_anr and netal_source:
         netal_runtime = prepare_netal(netal_source, netal_runtime)
-    elif args.mode == "anr" and netal_runtime:
+    elif is_anr and netal_runtime:
         raise SystemExit("--netal-runtime requires --netal-source")
-    if args.mode == "anr":
+    if is_anr:
         runtime = check_anr_runtime(args.anr_runtime)
     bottle = resolve_bottle(args.bottle) if args.bottle else default_bottle(crossover=args.crossover)
     # Do not change the SR profile or panel preferences. Install the combined
     # hook and update only FG/root/framework keys in the selected bottle.
-    if args.mode == "anr":
+    if is_anr:
         framework = find_framework(args.crossover)
         hook = build_hook(DIST / "hook.log", netal_source=netal_source)
         binary = copy_framework(hook, framework)
@@ -258,7 +262,7 @@ def cmd_frame_generation(args):
         for api in ("classic", "metal4"):
             run(["arch", "-x86_64", str(test), str(ROOT), str(test_runtime), api])
         values = {KEY: str(binary), ROOT_KEY: str(ROOT), LOG_KEY: str(DIST / "hook.log"),
-                  FG_KEY: "anr", ANR_RUNTIME_KEY: str(runtime), METALFX_KEY: "1"}
+                  FG_KEY: args.mode, ANR_RUNTIME_KEY: str(runtime), METALFX_KEY: "1"}
         if netal_source:
             if netal_runtime:
                 values[NETAL_RUNTIME_KEY] = str(netal_runtime)
@@ -931,9 +935,9 @@ def cmd_install(args):
     netal_runtime = getattr(args, "netal_runtime", "") or os.environ.get(NETAL_RUNTIME_KEY)
     fg = getattr(args, "frame_generation", "metalfx")
     anr_runtime = getattr(args, "anr_runtime", "") or os.environ.get(ANR_RUNTIME_KEY)
-    if fg == "anr":
+    if fg in ("anr", "anr3x"):
         if not anr_runtime:
-            raise SystemExit("--frame-generation anr requires --anr-runtime (prepared model, not the test kit)")
+            raise SystemExit(f"--frame-generation {fg} requires --anr-runtime (prepared model, not the test kit)")
         anr_runtime = check_anr_runtime(anr_runtime)
     if netal_runtime and not netal_source:
         raise SystemExit("--netal-runtime requires --netal-source (or FSR4_NETAL_SOURCE)")
@@ -979,7 +983,7 @@ def cmd_install(args):
     # Validate the selected FG engine during dylib initialization, not only
     # native MetalFX. ANR must be safe before any scaler/frame is created.
     env[FG_KEY] = fg
-    if fg == "anr":
+    if fg in ("anr", "anr3x"):
         env[ANR_RUNTIME_KEY] = str(anr_runtime)
     env["FSR4_FG_SETTINGS"] = "none"
     env["FSR4_ANR_STATUS_DISABLED"] = "1"
@@ -1046,7 +1050,7 @@ def cmd_install(args):
             values[FRAMEWORK_KEY] = str(installed)
         else:
             values[KEY] = str(binary)
-        if fg == "anr":
+        if fg in ("anr", "anr3x"):
             values[ANR_RUNTIME_KEY] = str(anr_runtime)
         if args.fsr_version in ("4.1.1", "4.1.2"):
             values[PROFILE_KEY] = args.profile
@@ -1129,8 +1133,8 @@ def main():
                    help="initial panel mode: FSR variants or experimental Netal DLSS SR")
     i.add_argument("--netal-source", default="", help="pinned local Netal checkout to link SR (no upstream hook)")
     i.add_argument("--netal-runtime", default="", help="complete local netal.sr.runtime.v2 Preset K bundle; no model download")
-    i.add_argument("--frame-generation", choices=("metalfx", "anr"), default="metalfx",
-                   help="replace the MetalFX FG used for DLSS FG with experimental ANR")
+    i.add_argument("--frame-generation", choices=("metalfx", "anr", "anr3x"), default="metalfx",
+                   help="replace MetalFX FG used for DLSS FG with experimental ANR (2x: anr, 3x: anr3x)")
     i.add_argument("--anr-runtime", default="", help="prepared ANR Metal runtime or resolution-profile directory")
     i.add_argument("--panel", action="store_true",
                    help="also set FSR4_PANEL=1 in the bottle (status/sharpness panel)")
@@ -1141,7 +1145,7 @@ def main():
                         "(default: the only bottle with fsr4-mac keys)")
     r.set_defaults(func=cmd_restore)
     fg = sub.add_parser("frame-generation", help="switch FG without changing the upscaler profile")
-    fg.add_argument("mode", choices=("anr", "metalfx"))
+    fg.add_argument("mode", choices=("anr", "anr3x", "metalfx"))
     fg.add_argument("--anr-runtime", default="", help="prepared ANR runtime or profile directory")
     fg.add_argument("--bottle", default="", help="bottle name or full cxbottle.conf path")
     fg.add_argument("--crossover", default="", help="CrossOver app to copy D3DMetal from")

@@ -110,17 +110,18 @@ int main() { @autoreleasepool { try {
     }
     unsetenv("FSR4_FG");unsetenv("FSR4_FG_SETTINGS");
     require([frame_generation_warning() containsString:@"!"]&&[frame_generation_warning() containsString:@"Experimental feature"],"FG warning missing");
-    for(auto mode:{fsr4_fg::Mode::MetalFX,fsr4_fg::Mode::ANR}){
+    for(auto mode:{fsr4_fg::Mode::MetalFX,fsr4_fg::Mode::ANR,fsr4_fg::Mode::ANR3x}){
         require(write_frame_generation(mode),"cannot save FG mode");
         require(read_frame_generation()==mode,"saved FG mode not reflected");
         float sharp,strength;bool rc,fix;int profile;read_settings(sharp,rc,profile,fix,strength);
         require(profile==8&&fabs(sharp-.6f)<1e-4&&!rc,"FG mode changed SR settings");
     }
     require(write_settings(.2f,true,7,false,.5f),"cannot save SR settings");
-    require(read_frame_generation()==fsr4_fg::Mode::ANR,"SR change discarded FG mode");
+    require(read_frame_generation()==fsr4_fg::Mode::ANR3x,"SR change discarded FG mode");
     for(const char *bad:{"", "mode=other\n", "mode=anr\nmode=metalfx\n", "mode=anr\ngarbage\n"})
         require(!fsr4_fg::parse_settings(bad).valid,"malformed FG settings accepted");
     require(fsr4_fg::parse_settings("# mode\nschema=fsr4.fg.settings.v1\nmode=metalfx\n").valid,"valid FG file rejected");
+    require(fsr4_fg::parse_settings("schema=fsr4.fg.settings.v1\nmode=anr3x\n").valid,"valid ANR 3x FG file rejected");
     require(!write_frame_generation(static_cast<fsr4_fg::Mode>(99)),"unknown FG mode saved");
     require(!read_new_look(),"new-look became a default");
     require(write_settings(.3f,true,7,false,.6f,1) && read_new_look(),"new-look setting not saved");

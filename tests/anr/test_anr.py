@@ -160,12 +160,22 @@ class AnrTest(unittest.TestCase):
             with patch.object(installer, "DIST", root):
                 installer.select_frame_generation("anr")
                 self.assertEqual((root / "fg-settings.conf").read_text(), "schema=fsr4.fg.settings.v1\nmode=anr\n")
+                installer.select_frame_generation("anr3x")
+                self.assertEqual((root / "fg-settings.conf").read_text(), "schema=fsr4.fg.settings.v1\nmode=anr3x\n")
                 installer.select_frame_generation("metalfx")
                 self.assertIn("mode=metalfx", (root / "fg-settings.conf").read_text())
                 self.assertIn("mode=anr", (root / "backups/fg-settings.conf").read_text())
                 with self.assertRaises(ValueError):
                     installer.select_frame_generation("other")
             self.assertEqual(panel.read_text(), original)
+
+    def test_installer_rejects_anr3x_without_runtime(self):
+        with patch("sys.argv", ["crossover_fsr4.py", "install", "--frame-generation", "anr3x"]), \
+             patch.dict("os.environ", {}, clear=True), patch.object(installer, "conf_set") as config, \
+             patch.object(installer, "build_hook") as build, self.assertRaisesRegex(SystemExit, "requires --anr-runtime"):
+            installer.main()
+        config.assert_not_called()
+        build.assert_not_called()
 
     def test_fg_preserves_existing_sharpness_profile(self):
         with tempfile.TemporaryDirectory() as directory:

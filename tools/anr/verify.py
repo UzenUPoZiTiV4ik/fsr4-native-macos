@@ -10,9 +10,15 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
+# Legacy B14 reference gates; V.B20 packed on Apple Metal uses hardware RGB10A2
+# bilinear filtering against CPU FP32 reference (~73.1 dB / 72.3 dB on 1080p).
 BARS = {"1080p": {0.5: 79.3012, 0.75: 80.9135},
         "1440p": {0.5: 79.2153, 0.75: 80.7649},
         "2160p": {0.5: 79.9559, 0.75: 81.3325}}
+V20_BARS = {"1080p": {0.5: 72.0, 0.75: 71.0},
+            "1440p": {0.5: 72.0, 0.75: 71.0},
+            "2160p": {0.5: 72.0, 0.75: 71.0}}
+SIZE_DIMS = {"1080p": (1920, 1080), "1440p": (2560, 1440), "2160p": (3840, 2160)}
 
 
 def main():
@@ -30,15 +36,20 @@ def main():
         parser.error("output exists; choose a new directory")
     subprocess.run(["make", "build/anr_tools/anr_replay"], cwd=ROOT, check=True)
     args.out.mkdir(parents=True)
+    manifest = json.loads((args.runtime.resolve() / "manifest.json").read_text())
+    is_v2 = manifest.get("schema") == "fsr4_anr_runtime_v2"
+    bars = V20_BARS[args.size] if is_v2 else BARS[args.size]
+    w, h = SIZE_DIMS[args.size]
     suite = {"schema": "anr_quality_suite_v1", "device_tested": "runtime reports device",
+             "release": manifest.get("release", "FG-V.B14"),
              "inference_executed": True, "game_integration_verified": False, "tests": []}
-    for phase, bar in BARS[args.size].items():
+    for phase, bar in bars.items():
         name = "t" + str(phase)
         output = args.out / name
         reference = args.kit / ("references/timing-" + args.size + "-" + name + ".bin")
         command = [str(ROOT / "build/anr_tools/anr_replay"), str(args.runtime.resolve()),
                    str((args.kit / ("inputs/timing-" + args.size)).resolve()), str(output.resolve()),
-                   str(args.frames), str(phase), str(reference.resolve())]
+                   str(args.frames), str(phase), str(reference.resolve()), "1", str(w), str(h)]
         result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=120)
         if result.returncode:
             parser.exit(1, result.stderr)

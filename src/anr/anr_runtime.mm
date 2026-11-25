@@ -2,351 +2,1579 @@
 #include "anr_runtime.h"
 #import <CommonCrypto/CommonDigest.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <set>
 #include <vector>
 
 namespace anr {
 namespace {
-std::string utf8(NSString *s) { return s ? std::string(s.UTF8String) : ""; }
-NSString *ns(const std::string &s) { return [NSString stringWithUTF8String:s.c_str()]; }
-NSData *load(NSString *root,NSString *relative) { return [NSData dataWithContentsOfFile:[root stringByAppendingPathComponent:relative]]; }
-// Every hashed asset is capped at 32MB by the manifest check, so one
-// CC_LONG-bounded SHA256 call covers all callers.
-std::string hash(NSData *data) {
-    unsigned char bytes[32];CC_SHA256(data.bytes,(CC_LONG)data.length,bytes);
-    static const char hex[]="0123456789abcdef";std::string result;
-    for(unsigned char byte:bytes){result+=hex[byte>>4];result+=hex[byte&15];}return result;
+
+std::string utf8(NSString *s) {
+    return s ? std::string(s.UTF8String) : "";
 }
+
+NSString *ns(const std::string &s) {
+    return [NSString stringWithUTF8String:s.c_str()];
+}
+
+NSData *load_file(NSString *root, NSString *relative) {
+    return [NSData dataWithContentsOfFile:[root stringByAppendingPathComponent:relative]];
+}
+
+// Every hashed asset is capped at 32MB by the manifest check.
+std::string sha256_hex(NSData *data) {
+    unsigned char bytes[32];
+    CC_SHA256(data.bytes, (CC_LONG)data.length, bytes);
+    static const char hex[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(64);
+    for (unsigned char byte : bytes) {
+        result += hex[byte >> 4];
+        result += hex[byte & 15];
+    }
+    return result;
+}
+
 bool safe_path(NSString *path) {
-    if(![path isKindOfClass:NSString.class] || !path.length || path.isAbsolutePath)return false;
-    for(NSString *part in [path componentsSeparatedByString:@"/"])
-        if(!part.length || [part isEqual:@"."] || [part isEqual:@".."])return false;
-    return [path rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"\\\0"]].location==NSNotFound;
+    if (![path isKindOfClass:NSString.class] || !path.length || path.isAbsolutePath) {
+        return false;
+    }
+    for (NSString *part in [path componentsSeparatedByString:@"/"]) {
+        if (!part.length || [part isEqual:@"."] || [part isEqual:@".."]) {
+            return false;
+        }
+    }
+    return [path rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"\\\0"]].location == NSNotFound;
 }
-std::mutex pipelineMutex;
-std::map<std::pair<uintptr_t,std::string>,id<MTLComputePipelineState>> pipelineCache;
-struct Binding {std::string name;unsigned index=0;bool uniform=false,sampler=false;};
-struct Kernel {id<MTLComputePipelineState> pipeline=nil;bool native=false;unsigned resources=0,samplers=0;std::vector<Binding> bindings;};
-struct Stage {
-    std::string kernel;MTLSize groups={},threads={};id<MTLBuffer> constants=nil,resources=nil,samplers=nil,root=nil;
-    id<MTL4ArgumentTable> arguments=nil;
-    uint64_t bufferRevision=0;
-    std::map<std::string,unsigned> buffers;
-    std::map<std::string,std::string> images;
+
+int64_t floordiv_i64(int64_t a, int64_t b) {
+    int64_t q = a / b;
+    int64_t r = a % b;
+    if (r != 0 && ((r < 0) != (b < 0))) {
+        --q;
+    }
+    return q;
+}
+
+const char *encoding_key(Encoding enc) {
+    switch (enc) {
+        case Encoding::SRGB8: return "srgb8";
+        case Encoding::SCRGB16: return "scrgb16";
+        case Encoding::PQ10:
+        default: return "pq10";
+    }
+}
+
+MTLPixelFormat pixel_format_from_name(NSString *name) {
+    if ([name isEqual:@"rgb10a2_unorm"]) return MTLPixelFormatRGB10A2Unorm;
+    if ([name isEqual:@"rgba8_unorm"]) return MTLPixelFormatRGBA8Unorm;
+    if ([name isEqual:@"rgba16f"]) return MTLPixelFormatRGBA16Float;
+    if ([name isEqual:@"r32_uint"]) return MTLPixelFormatR32Uint;
+    if ([name isEqual:@"r32f"]) return MTLPixelFormatR32Float;
+    if ([name isEqual:@"rg16f"]) return MTLPixelFormatRG16Float;
+    return MTLPixelFormatInvalid;
+}
+
+std::mutex g_pipelineMutex;
+std::map<std::pair<uintptr_t, std::string>, id<MTLComputePipelineState>> g_pipelineCache;
+std::map<std::pair<uintptr_t, std::string>, id<MTLLibrary>> g_libraryCache;
+
+enum class BindKind {
+    Uniform = 0,
+    Buffer = 1,
+    Texture = 2,
+    StorageTexture = 3,
+    Sampler = 4,
 };
-struct Descriptor {uint64_t address=0,resource=0,metadata=0;};
-static_assert(sizeof(Descriptor)==24,"Apple descriptor ABI");
-MTLSize extent(NSArray *v) { return MTLSizeMake([v[0] unsignedLongLongValue],[v[1] unsignedLongLongValue],[v[2] unsignedLongLongValue]); }
+
+struct Binding {
+    std::string name;
+    unsigned index = 0;
+    BindKind kind = BindKind::Buffer;
+    bool r32uint = false;
+    bool writable = true;
+};
+
+struct Kernel {
+    id<MTLComputePipelineState> pipeline = nil;
+    id<MTLArgumentEncoder> argEncoder = nil;
+    bool native = false;
+    unsigned resources = 0;
+    unsigned samplers = 0;
+    unsigned slotCount = 0;
+    unsigned uniformBytes = 0;
+    std::vector<Binding> bindings;
+};
+
+struct Stage {
+    std::string label;
+    std::string kernel;
+    MTLSize groups = {};
+    MTLSize threads = {};
+    id<MTLBuffer> constants = nil;
+    // v1 (B14) root descriptor table buffers:
+    id<MTLBuffer> resources = nil;
+    id<MTLBuffer> samplers = nil;
+    id<MTLBuffer> root = nil;
+    // v2 (B20) compact Tier-2 argument buffer:
+    id<MTLBuffer> argBuffer = nil;
+    id<MTL4ArgumentTable> arguments = nil;
+    uint64_t bufferRevision = 0;
+    std::map<std::string, unsigned> buffers;
+    std::map<std::string, std::string> images;
+    bool hasExternalImage = false;
+    bool needsBarrier = true;
+};
+
+struct Descriptor {
+    uint64_t address = 0;
+    uint64_t resource = 0;
+    uint64_t metadata = 0;
+};
+static_assert(sizeof(Descriptor) == 24, "Apple descriptor ABI");
+
+struct InternalTexture {
+    id<MTLTexture> main = nil;
+    id<MTLTexture> r32uintView = nil;
+};
+
+MTLSize extent_from_array(NSArray *v) {
+    return MTLSizeMake([v[0] unsignedLongLongValue], [v[1] unsignedLongLongValue], [v[2] unsignedLongLongValue]);
 }
+
+bool eval_exprs(NSArray *exprs, int64_t width, int64_t height, std::vector<int64_t> &out, std::string &error) {
+    out.clear();
+    out.reserve(exprs.count);
+    for (NSArray *e in exprs) {
+        if (![e isKindOfClass:NSArray.class] || !e.count) {
+            error = "ANR v2 malformed expr";
+            return false;
+        }
+        NSString *op = e[0];
+        auto at = [&](NSUInteger pos, int64_t &val) -> bool {
+            if (pos >= e.count) return false;
+            NSInteger idx = [e[pos] integerValue];
+            if (idx < 0 || (size_t)idx >= out.size()) return false;
+            val = out[(size_t)idx];
+            return true;
+        };
+        if ([op isEqual:@"W"]) {
+            out.push_back(width);
+        } else if ([op isEqual:@"H"]) {
+            out.push_back(height);
+        } else if ([op isEqual:@"const"]) {
+            if (e.count < 2) { error = "ANR v2 bad const expr"; return false; }
+            out.push_back([e[1] longLongValue]);
+        } else if ([op isEqual:@"neg"]) {
+            int64_t a = 0;
+            if (!at(1, a)) { error = "ANR v2 bad neg expr"; return false; }
+            out.push_back(-a);
+        } else if ([op isEqual:@"add"] || [op isEqual:@"sub"] || [op isEqual:@"mul"]
+                   || [op isEqual:@"floordiv"] || [op isEqual:@"max"]) {
+            int64_t a = 0, b = 0;
+            if (!at(1, a) || !at(2, b)) { error = "ANR v2 bad binary expr"; return false; }
+            if ([op isEqual:@"add"]) out.push_back(a + b);
+            else if ([op isEqual:@"sub"]) out.push_back(a - b);
+            else if ([op isEqual:@"mul"]) out.push_back(a * b);
+            else if ([op isEqual:@"floordiv"]) {
+                if (b == 0) { error = "ANR v2 division by zero"; return false; }
+                out.push_back(floordiv_i64(a, b));
+            } else {
+                out.push_back(std::max(a, b));
+            }
+        } else {
+            error = "ANR v2 unsupported expr op: " + utf8(op);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool resolve_int(id node, const std::vector<int64_t> &vals, int64_t &out) {
+    if ([node isKindOfClass:NSNumber.class]) {
+        out = [node longLongValue];
+        return true;
+    }
+    if ([node isKindOfClass:NSDictionary.class]) {
+        NSNumber *idx = node[@"x"];
+        if ([idx isKindOfClass:NSNumber.class]) {
+            const NSInteger i = idx.integerValue;
+            if (i >= 0 && (size_t)i < vals.size()) {
+                out = vals[(size_t)i];
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool resolve_double(id node, const std::vector<int64_t> &vals, double &out) {
+    if ([node isKindOfClass:NSNumber.class]) {
+        out = [node doubleValue];
+        return true;
+    }
+    int64_t iv = 0;
+    if (resolve_int(node, vals, iv)) {
+        out = (double)iv;
+        return true;
+    }
+    return false;
+}
+
+bool check_guards(NSArray *guards, const std::vector<int64_t> &vals) {
+    for (NSArray *g in guards) {
+        if (![g isKindOfClass:NSArray.class] || g.count != 4) return false;
+        NSString *op = g[0];
+        int64_t a = 0, b = 0;
+        if (!resolve_int(g[1], vals, a) || !resolve_int(g[2], vals, b)) return false;
+        const bool expect = [g[3] boolValue];
+        bool actual = false;
+        if ([op isEqual:@"lt"]) actual = a < b;
+        else if ([op isEqual:@"le"]) actual = a <= b;
+        else if ([op isEqual:@"gt"]) actual = a > b;
+        else if ([op isEqual:@"eq"]) actual = a == b;
+        else if ([op isEqual:@"ne"]) actual = a != b;
+        else return false;
+        if (actual != expect) return false;
+    }
+    return true;
+}
+
+} // namespace
 
 struct Runtime::Impl {
-    id<MTLDevice> device=nil;NSString *directory=nil;NSDictionary *manifest=nil;
-    unsigned width=0,height=0;bool initialized=false,coalesced=true;
-    uint64_t bufferRevision=1;unsigned frameSlot=0;
-    id<MTLBuffer> frameBuffers[4]={};
-    id<MTLResidencySet> borrowedSets[4]={};
-    id<MTLResidencySet> residency=nil;
-    id<MTLBuffer> empty=nil;id<MTLSamplerState> sampler=nil;
+    id<MTLDevice> device = nil;
+    NSString *directory = nil;
+    NSDictionary *manifest = nil;
+
+    bool initialized = false;
+    bool isV2 = false;
+    bool mppActive = false;
+    bool coalesced = true;
+    bool deviceInternalBarrier = false;
+    bool dagBarriers = true;
+    Encoding encoding = Encoding::PQ10;
+    std::string releaseName;
+    std::string backendName;
+    unsigned width = 0;
+    unsigned height = 0;
+    uint64_t bufferRevision = 1;
+    unsigned frameSlot = 0;
+
+    unsigned inputColor0 = 0, inputColor1 = 0, inputDepth0 = 0, inputDepth1 = 0, inputFrame = 0;
+    std::vector<unsigned> persistentBuffers;
+    std::vector<std::pair<unsigned, unsigned>> bufferSwaps;
+    std::vector<std::pair<std::string, std::string>> textureSwaps;
+
+    id<MTLBuffer> frameBuffers[4] = {};
+    id<MTLResidencySet> borrowedSets[4] = {};
+    std::array<uintptr_t, 5> borrowedKeys[4] = {};
+    id<MTLResidencySet> residency = nil;
+    id<MTLBuffer> empty = nil;
+    id<MTLSamplerState> sampler = nil;
+
     std::vector<id<MTLBuffer>> buffers;
-    std::map<std::string,Kernel> kernels;
-    std::map<std::string,std::vector<Stage>> stages[4];
-    NSArray *swaps=nil;
-    id<MTLTexture> inputColor=nil,inputDepth=nil,inputMotion=nil,output=nil;
-    // All CPU descriptor writes are made before the group encoder starts.
-    // Caller serialization protects the next group/frame from in-flight reuse.
-    bool fail(std::string &error,const std::string &why){error=why;return false;}
-    bool add(id<MTLAllocation> resource,std::string &error) {
-        if(!resource)return fail(error,"ANR resource allocation failed");
-        [residency addAllocation:resource];return true;
+    std::map<std::string, InternalTexture> internalTextures;
+    std::map<std::string, Kernel> kernels;
+    std::map<std::string, std::vector<Stage>> stages[4];
+    std::vector<id<MTLResource>> staticMetal3Resources;
+
+    id<MTLTexture> inputColor = nil, inputDepth = nil, inputMotion = nil, output = nil;
+
+    bool fail(std::string &error, const std::string &why) {
+        error = why;
+        return false;
     }
-    id<MTLBuffer> buffer(size_t bytes) {return [device newBufferWithLength:std::max(bytes,size_t(256)) options:MTLResourceStorageModeShared];}
-    bool prepare_stage(Stage &stage,std::string &error) {
-        auto found=kernels.find(stage.kernel);if(found==kernels.end())return fail(error,"ANR kernel missing: "+stage.kernel);
-        Kernel &kernel=found->second;
-        // Both imported native kernels and converted DXIL use a root pointer
-        // to a dense, 24-byte-per-resource table at Metal buffer bind point 2.
-        // nativeMetal.index is the original source argument index, NOT a Metal
-        // buffer slot. Table order is nativeMetal.bindings order (NRTable).
-        {
-            auto *entries=(Descriptor*)stage.resources.contents;
-            auto *samplerEntries=(Descriptor*)stage.samplers.contents;
-            for(const Binding &binding:kernel.bindings) {
-                if(binding.sampler){samplerEntries[binding.index]={sampler.gpuResourceID._impl,0,0};continue;}
-                Descriptor entry;
-                auto image=stage.images.find(binding.name);
-                if(image!=stage.images.end()) {
-                    id<MTLTexture> texture=nil;
-                    if(image->second=="color")texture=inputColor;
-                    else if(image->second=="depth")texture=inputDepth;
-                    else if(image->second=="motion")texture=inputMotion;
-                    else if(image->second=="output")texture=output;
-                    if(!texture)return fail(error,"ANR stage requires texture "+image->second);
-                    entry.resource=texture.gpuResourceID._impl;
-                } else {
-                    if(stage.bufferRevision==bufferRevision)continue;
-                    id<MTLBuffer> target=empty;
-                    if(binding.uniform)target=stage.constants;
-                    else {auto it=stage.buffers.find(binding.name);if(it!=stage.buffers.end())target=buffers.at(it->second);}
-                    entry.address=target.gpuAddress;entry.metadata=target.length;
-                }
-                entries[binding.index]=entry;
+
+    bool add_resident(id<MTLAllocation> resource, std::string &error) {
+        if (!resource) return fail(error, "ANR resource allocation failed");
+        [residency addAllocation:resource];
+        return true;
+    }
+
+    id<MTLBuffer> alloc_shared(size_t bytes) {
+        return [device newBufferWithLength:std::max(bytes, size_t(256))
+                                   options:MTLResourceStorageModeShared];
+    }
+
+    id<MTLBuffer> alloc_private(size_t bytes) {
+        const bool dumpMode = getenv("ANR_DUMP_BUFFERS") != nullptr;
+        const MTLResourceOptions opts = dumpMode
+            ? MTLResourceStorageModeShared
+            : (MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked);
+        return [device newBufferWithLength:std::max(bytes, size_t(256)) options:opts];
+    }
+
+    void update_borrowed_residency(id<MTLTexture> c, id<MTLTexture> d, id<MTLTexture> m,
+                                   id<MTLTexture> o0, id<MTLTexture> o1 = nil) {
+        std::array<uintptr_t, 5> next = {
+            (uintptr_t)(__bridge void *)c,
+            (uintptr_t)(__bridge void *)d,
+            (uintptr_t)(__bridge void *)m,
+            (uintptr_t)(__bridge void *)o0,
+            (uintptr_t)(__bridge void *)o1,
+        };
+        if (borrowedKeys[frameSlot] == next) {
+            return;
+        }
+        auto set = borrowedSets[frameSlot];
+        [set removeAllAllocations];
+        if (c) [set addAllocation:c];
+        if (d) [set addAllocation:d];
+        if (m) [set addAllocation:m];
+        if (o0) [set addAllocation:o0];
+        if (o1 && o1 != o0) [set addAllocation:o1];
+        [set commit];
+        borrowedKeys[frameSlot] = next;
+    }
+
+    id<MTLTexture> resolve_texture(const std::string &imageName, bool r32uint, std::string &error) {
+        if (imageName == "color") {
+            if (!inputColor) { fail(error, "ANR stage missing input color"); return nil; }
+            return inputColor;
+        }
+        if (imageName == "depth") {
+            if (!inputDepth) { fail(error, "ANR stage missing input depth"); return nil; }
+            return inputDepth;
+        }
+        if (imageName == "motion") {
+            if (!inputMotion) { fail(error, "ANR stage missing input motion"); return nil; }
+            return inputMotion;
+        }
+        if (imageName == "output") {
+            if (!output) { fail(error, "ANR stage missing output texture"); return nil; }
+            return output;
+        }
+        auto it = internalTextures.find(imageName);
+        if (it == internalTextures.end()) {
+            fail(error, "ANR stage unknown internal texture: " + imageName);
+            return nil;
+        }
+        if (r32uint) {
+            if (!it->second.r32uintView) {
+                fail(error, "ANR stage missing r32uint view for: " + imageName);
+                return nil;
             }
-            if(!stage.bufferRevision)[stage.arguments setAddress:stage.root.gpuAddress atIndex:2];
-            stage.bufferRevision=bufferRevision;
+            return it->second.r32uintView;
+        }
+        return it->second.main;
+    }
+
+    bool prepare_stage_v1(Stage &stage, std::string &error) {
+        auto found = kernels.find(stage.kernel);
+        if (found == kernels.end()) return fail(error, "ANR kernel missing: " + stage.kernel);
+        Kernel &kernel = found->second;
+        auto *entries = (Descriptor *)stage.resources.contents;
+        auto *samplerEntries = (Descriptor *)stage.samplers.contents;
+        const bool buffersUpToDate = stage.bufferRevision == bufferRevision;
+        if (buffersUpToDate && !stage.hasExternalImage) {
+            return true;
+        }
+        for (const Binding &binding : kernel.bindings) {
+            if (binding.kind == BindKind::Sampler) {
+                if (!buffersUpToDate) {
+                    samplerEntries[binding.index] = {sampler.gpuResourceID._impl, 0, 0};
+                }
+                continue;
+            }
+            auto image = stage.images.find(binding.name);
+            if (image != stage.images.end()) {
+                id<MTLTexture> tex = resolve_texture(image->second, false, error);
+                if (!tex) return false;
+                entries[binding.index] = {0, tex.gpuResourceID._impl, 0};
+            } else {
+                if (buffersUpToDate) continue;
+                id<MTLBuffer> target = empty;
+                if (binding.kind == BindKind::Uniform) {
+                    target = stage.constants;
+                } else {
+                    auto it = stage.buffers.find(binding.name);
+                    if (it != stage.buffers.end()) target = buffers.at(it->second);
+                }
+                entries[binding.index] = {target.gpuAddress, 0, target.length};
+            }
+        }
+        if (!stage.bufferRevision) {
+            [stage.arguments setAddress:stage.root.gpuAddress atIndex:2];
+        }
+        stage.bufferRevision = bufferRevision;
+        return true;
+    }
+
+    bool prepare_stage_v2(Stage &stage, std::string &error) {
+        auto found = kernels.find(stage.kernel);
+        if (found == kernels.end()) return fail(error, "ANR kernel missing: " + stage.kernel);
+        Kernel &kernel = found->second;
+        const bool buffersUpToDate = stage.bufferRevision == bufferRevision;
+        if (buffersUpToDate && !stage.hasExternalImage) {
+            return true;
+        }
+        [kernel.argEncoder setArgumentBuffer:stage.argBuffer offset:0];
+        for (const Binding &binding : kernel.bindings) {
+            if (binding.kind == BindKind::Sampler) {
+                if (!buffersUpToDate) {
+                    [kernel.argEncoder setSamplerState:sampler atIndex:binding.index];
+                }
+                continue;
+            }
+            if (binding.kind == BindKind::Uniform) {
+                if (!buffersUpToDate) {
+                    [kernel.argEncoder setBuffer:stage.constants offset:0 atIndex:binding.index];
+                }
+                continue;
+            }
+            if (binding.kind == BindKind::Texture || binding.kind == BindKind::StorageTexture) {
+                auto image = stage.images.find(binding.name);
+                if (image == stage.images.end()) {
+                    return fail(error, "ANR v2 unbound texture parameter: " + binding.name);
+                }
+                id<MTLTexture> tex = resolve_texture(image->second, binding.r32uint, error);
+                if (!tex) return false;
+                [kernel.argEncoder setTexture:tex atIndex:binding.index];
+                continue;
+            }
+            // Buffer binding.
+            if (buffersUpToDate) continue;
+            id<MTLBuffer> target = empty;
+            auto it = stage.buffers.find(binding.name);
+            if (it != stage.buffers.end()) {
+                target = buffers.at(it->second);
+            }
+            [kernel.argEncoder setBuffer:target offset:0 atIndex:binding.index];
+        }
+        if (!stage.bufferRevision) {
+            [stage.arguments setAddress:stage.argBuffer.gpuAddress atIndex:0];
+        }
+        stage.bufferRevision = bufferRevision;
+        return true;
+    }
+
+    bool encode_groups(id command, bool metal4,
+                       const std::vector<std::pair<std::vector<Stage> *, id<MTLTexture>>> &batches,
+                       std::string &error,
+                       id<MTL4CounterHeap> profileHeap = nil, unsigned profileBase = 0,
+                       std::vector<StageProfile> *profileOut = nullptr) {
+        if (metal4) {
+            [(id<MTL4CommandBuffer>)command useResidencySet:residency];
+            [(id<MTL4CommandBuffer>)command useResidencySet:borrowedSets[frameSlot]];
+        }
+
+        std::vector<id<MTLResource>> m3Resources;
+        if (!metal4) {
+            m3Resources = staticMetal3Resources;
+            for (const auto &batch : batches) {
+                for (Stage &stage : *batch.first) {
+                    m3Resources.push_back(stage.constants);
+                    if (isV2) {
+                        m3Resources.push_back(stage.argBuffer);
+                    } else {
+                        m3Resources.push_back(stage.resources);
+                        m3Resources.push_back(stage.samplers);
+                        m3Resources.push_back(stage.root);
+                    }
+                }
+                if (batch.second) m3Resources.push_back(batch.second);
+            }
+            if (inputColor) m3Resources.push_back(inputColor);
+            if (inputDepth) m3Resources.push_back(inputDepth);
+            if (inputMotion) m3Resources.push_back(inputMotion);
+        }
+
+        for (const auto &batch : batches) {
+            if (batch.second) output = batch.second;
+            for (Stage &stage : *batch.first) {
+                const bool ok = isV2 ? prepare_stage_v2(stage, error) : prepare_stage_v1(stage, error);
+                if (!ok) return false;
+            }
+        }
+
+        const bool profiling = metal4 && profileHeap != nil;
+        const MTL4VisibilityOptions intraVis = deviceInternalBarrier
+            ? MTL4VisibilityOptionDevice
+            : MTL4VisibilityOptionNone;
+        id encoder = nil;
+        bool firstInEncoder = true;
+        unsigned stageIdx = 0;
+
+        for (size_t bIdx = 0; bIdx < batches.size(); ++bIdx) {
+            auto &group = *batches[bIdx].first;
+            for (size_t sIdx = 0; sIdx < group.size(); ++sIdx) {
+                Stage &stage = group[sIdx];
+                if (profiling) {
+                    if (encoder) {
+                        [encoder endEncoding];
+                        encoder = nil;
+                    }
+                    [(id<MTL4CommandBuffer>)command writeTimestampIntoHeap:profileHeap atIndex:profileBase + stageIdx * 2];
+                }
+                if (!encoder) {
+                    if (metal4) {
+                        encoder = [(id<MTL4CommandBuffer>)command computeCommandEncoder];
+                    } else {
+                        encoder = [(id<MTLCommandBuffer>)command computeCommandEncoder];
+                    }
+                    if (!encoder) return fail(error, "ANR compute encoder allocation failed");
+                    if (metal4) {
+                        [(id<MTL4ComputeCommandEncoder>)encoder barrierAfterQueueStages:MTLStageAll
+                                                                           beforeStages:MTLStageDispatch
+                                                                      visibilityOptions:MTL4VisibilityOptionDevice];
+                    } else {
+                        [(id<MTLComputeCommandEncoder>)encoder useResources:m3Resources.data()
+                                                                      count:m3Resources.size()
+                                                                      usage:MTLResourceUsageRead | MTLResourceUsageWrite];
+                    }
+                    firstInEncoder = true;
+                }
+
+                // Always emit a barrier at batch boundary (pair -> phase, phase1 -> phase2)
+                // and whenever the stage dependency DAG indicates a hazard since the last barrier.
+                const bool needBar = !firstInEncoder && (sIdx == 0 || !dagBarriers || stage.needsBarrier);
+                Kernel &kernel = kernels.at(stage.kernel);
+                if (metal4) {
+                    auto enc = (id<MTL4ComputeCommandEncoder>)encoder;
+                    if (needBar) {
+                        [enc barrierAfterEncoderStages:MTLStageDispatch
+                                   beforeEncoderStages:MTLStageDispatch
+                                     visibilityOptions:intraVis];
+                    }
+                    [enc setComputePipelineState:kernel.pipeline];
+                    [enc setArgumentTable:stage.arguments];
+                    [enc dispatchThreadgroups:stage.groups threadsPerThreadgroup:stage.threads];
+                } else {
+                    auto enc = (id<MTLComputeCommandEncoder>)encoder;
+                    if (needBar) {
+                        [enc memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
+                    }
+                    [enc setComputePipelineState:kernel.pipeline];
+                    if (isV2) {
+                        [enc setBuffer:stage.argBuffer offset:0 atIndex:0];
+                    } else {
+                        [enc setBuffer:stage.root offset:0 atIndex:2];
+                    }
+                    [enc dispatchThreadgroups:stage.groups threadsPerThreadgroup:stage.threads];
+                }
+
+                if (profiling) {
+                    [encoder endEncoding];
+                    encoder = nil;
+                    [(id<MTL4CommandBuffer>)command writeTimestampIntoHeap:profileHeap atIndex:profileBase + stageIdx * 2 + 1];
+                    if (profileOut) {
+                        profileOut->push_back({stage.label, stage.kernel, 0.0});
+                    }
+                } else if (!coalesced) {
+                    [encoder endEncoding];
+                    encoder = nil;
+                }
+                firstInEncoder = false;
+                ++stageIdx;
+            }
+        }
+
+        if (encoder) {
+            [encoder endEncoding];
         }
         return true;
     }
-    bool encode_group(id command,bool metal4,std::vector<Stage> &group,std::string &error) {
-        for(Stage &stage:group)if(!prepare_stage(stage,error))return false;
-        if(metal4){[(id<MTL4CommandBuffer>)command useResidencySet:residency];
-            [(id<MTL4CommandBuffer>)command useResidencySet:borrowedSets[frameSlot]];}
-        NSMutableArray *used=[NSMutableArray array];
-        if(!metal4){
-            for(auto buffer:buffers)[used addObject:buffer];[used addObject:empty];
-            for(Stage &stage:group){[used addObjectsFromArray:@[stage.constants,stage.resources,stage.samplers,stage.root]];}
-            for(id texture in @[inputColor,inputDepth,inputMotion]) [used addObject:texture];
-            if(output)[used addObject:output];
+
+    bool encode_group(id command, bool metal4, std::vector<Stage> &group, std::string &error,
+                      id<MTL4CounterHeap> profileHeap = nil, unsigned profileBase = 0,
+                      std::vector<StageProfile> *profileOut = nullptr) {
+        std::vector<std::pair<std::vector<Stage> *, id<MTLTexture>>> batches = {{&group, output}};
+        return encode_groups(command, metal4, batches, error, profileHeap, profileBase, profileOut);
+    }
+
+    bool verify_inventory(NSDictionary *files, std::string &error) {
+        if (![files isKindOfClass:NSDictionary.class] || !files.count || files.count > 1000) {
+            return fail(error, "ANR runtime inventory missing");
         }
-        id encoder=nil;bool first=true;
-        for(Stage &stage:group){
-            if(!encoder){
-                if(metal4)encoder=[(id<MTL4CommandBuffer>)command computeCommandEncoder];
-                else encoder=[(id<MTLCommandBuffer>)command computeCommandEncoder];
-                if(!encoder)return fail(error,"ANR compute encoder allocation failed");
-                if(metal4)[(id<MTL4ComputeCommandEncoder>)encoder barrierAfterQueueStages:MTLStageAll
-                    beforeStages:MTLStageDispatch visibilityOptions:MTL4VisibilityOptionDevice];
-                else {
-                    std::vector<id<MTLResource>> resources;for(id value in used)resources.push_back(value);
-                    [(id<MTLComputeCommandEncoder>)encoder useResources:resources.data() count:resources.size()
-                        usage:MTLResourceUsageRead|MTLResourceUsageWrite];
+        for (NSString *name in files) {
+            if (!safe_path(name)) return fail(error, "ANR unsafe asset path");
+            NSString *path = [directory stringByAppendingPathComponent:name];
+            NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:path error:nil];
+            if (![attributes[NSFileType] isEqual:NSFileTypeRegular]) {
+                return fail(error, "ANR asset missing/nonregular: " + utf8(name));
+            }
+            NSDictionary *row = files[name];
+            if (![row isKindOfClass:NSDictionary.class]
+                || ![row[@"bytes"] isKindOfClass:NSNumber.class]
+                || [row[@"bytes"] unsignedLongLongValue] > 32u * 1024u * 1024u
+                || ![row[@"sha256"] isKindOfClass:NSString.class]) {
+                return fail(error, "ANR malformed inventory entry");
+            }
+            NSData *data = load_file(directory, name);
+            if (!data) return fail(error, "ANR unreadable asset");
+            if (data.length != [row[@"bytes"] unsignedLongLongValue] || sha256_hex(data) != utf8(row[@"sha256"])) {
+                return fail(error, "ANR asset identity mismatch: " + utf8(name));
+            }
+        }
+        return true;
+    }
+
+    bool stage_wanted(NSString *key, PhaseMode mode) const {
+        if ([key isEqual:@"pair"]) return true;
+        if (mode == PhaseMode::All) return true;
+        if (mode == PhaseMode::TwoX) return [key isEqual:@"phase:0.5:image"];
+        // ThreeX also keeps 0.5 ready so live 2x <-> 3x switches require no reload.
+        return [key isEqual:@"phase:0.5:image"]
+            || [key isEqual:@"phase:0.333333:image"]
+            || [key isEqual:@"phase:0.666667:image"];
+    }
+
+    bool init_v1(std::string &error, PhaseMode phaseMode) {
+        if (![manifest[@"checkpoint_id"] isEqual:@"e09deb7012c96c172e49e72eb0b747b4611a8b6e3f14e5f5563189c580772ac1"]) {
+            return fail(error, "ANR runtime manifest/checkpoint mismatch");
+        }
+        NSDictionary *files = manifest[@"files"];
+        if (!verify_inventory(files, error)) return false;
+
+        width = [manifest[@"width"] unsignedIntValue];
+        height = [manifest[@"height"] unsignedIntValue];
+        if (!((width == 1920 && height == 1080) || (width == 2560 && height == 1440) || (width == 3840 && height == 2160))) {
+            return fail(error, "ANR unsupported geometry");
+        }
+        releaseName = utf8(manifest[@"release"] ?: @"FG-V.B14");
+        backendName = utf8(manifest[@"backend"] ?: @"native");
+        encoding = Encoding::PQ10;
+
+        MTLResidencySetDescriptor *rd = [MTLResidencySetDescriptor new];
+        rd.initialCapacity = 1600;
+        NSError *metalError = nil;
+        residency = [device newResidencySetWithDescriptor:rd error:&metalError];
+        if (!residency) return fail(error, "ANR residency: " + utf8(metalError.localizedDescription));
+
+        NSData *weights = load_file(directory, @"weights.bin");
+        if (!weights || weights.length != 43520
+            || sha256_hex(weights) != "af6c2f200ddb7baeaf4d82b5515af6f077f67896b2a9d26163ef6ea23975acb5") {
+            return fail(error, "ANR unsupported model weights");
+        }
+        if (![manifest[@"buffers"] isKindOfClass:NSArray.class]
+            || [manifest[@"buffers"] count] < 80 || [manifest[@"buffers"] count] > 128) {
+            return fail(error, "ANR invalid buffer inventory");
+        }
+        buffers.resize([manifest[@"buffers"] count]);
+        for (NSDictionary *record in manifest[@"buffers"]) {
+            unsigned index = [record[@"index"] unsignedIntValue];
+            size_t bytes = [record[@"size"] unsignedLongLongValue];
+            if (index >= buffers.size() || buffers[index] || !bytes || bytes > (size_t(1) << 30)) {
+                return fail(error, "ANR buffer shape invalid");
+            }
+            buffers[index] = alloc_shared(bytes);
+            if (!add_resident(buffers[index], error)) return false;
+            std::memset(buffers[index].contents, 0, buffers[index].length);
+            if ([record[@"kind"] isEqual:@"weight"]) {
+                size_t offset = [record[@"data_offset"] unsignedLongLongValue];
+                if (offset > weights.length || bytes > weights.length - offset) {
+                    return fail(error, "ANR weight span invalid");
                 }
-                first=true;
+                std::memcpy(buffers[index].contents, (const uint8_t *)weights.bytes + offset, bytes);
+            } else if ([record[@"kind"] isEqual:@"persistent"]) {
+                persistentBuffers.push_back(index);
             }
-            Kernel &kernel=kernels.at(stage.kernel);
-            if(metal4){
-                auto enc=(id<MTL4ComputeCommandEncoder>)encoder;
-                if(!first)[enc barrierAfterEncoderStages:MTLStageDispatch beforeEncoderStages:MTLStageDispatch
-                    visibilityOptions:MTL4VisibilityOptionDevice];
-                [enc setComputePipelineState:kernel.pipeline];[enc setArgumentTable:stage.arguments];
-                [enc dispatchThreadgroups:stage.groups threadsPerThreadgroup:stage.threads];
-            }else{
-                auto enc=(id<MTLComputeCommandEncoder>)encoder;
-                if(!first)[enc memoryBarrierWithScope:MTLBarrierScopeBuffers|MTLBarrierScopeTextures];
-                [enc setComputePipelineState:kernel.pipeline];[enc setBuffer:stage.root offset:0 atIndex:2];
-                [enc dispatchThreadgroups:stage.groups threadsPerThreadgroup:stage.threads];
-            }
-            first=false;
-            if(!coalesced){[encoder endEncoding];encoder=nil;}
         }
-        if(encoder)[encoder endEncoding];
+        for (unsigned slot = 0; slot < 4; ++slot) {
+            frameBuffers[slot] = alloc_shared(204);
+            if (!add_resident(frameBuffers[slot], error)) return false;
+            MTLResidencySetDescriptor *bd = [MTLResidencySetDescriptor new];
+            bd.initialCapacity = 4;
+            borrowedSets[slot] = [device newResidencySetWithDescriptor:bd error:&metalError];
+            if (!borrowedSets[slot]) return fail(error, "ANR frame residency allocation failed");
+        }
+        empty = alloc_shared(256);
+        if (!add_resident(empty, error)) return false;
+        std::memset(empty.contents, 0, empty.length);
+
+        MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
+        sd.supportArgumentBuffers = YES;
+        sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear;
+        sampler = [device newSamplerStateWithDescriptor:sd];
+
+        NSDictionary *kernelRecords = manifest[@"kernels"];
+        NSDictionary *stageRecords = manifest[@"stages"];
+        NSMutableSet *neededKernels = [NSMutableSet set];
+        for (NSString *key in stageRecords) {
+            if (!stage_wanted(key, phaseMode)) continue;
+            for (NSDictionary *stage in stageRecords[key]) {
+                [neededKernels addObject:stage[@"kernel"]];
+            }
+        }
+        for (NSString *key in kernelRecords) {
+            if (![neededKernels containsObject:key]) continue;
+            NSDictionary *record = kernelRecords[key];
+            Kernel kernel;
+            kernel.native = [record[@"route"] isEqual:@"native"];
+            NSString *assetPath = record[@"path"];
+            if (!safe_path(assetPath) || !files[assetPath]) return fail(error, "ANR unlisted kernel asset");
+            const auto cacheKey = std::make_pair((uintptr_t)(__bridge void *)device,
+                                                 utf8(files[assetPath][@"sha256"]) + ":" + utf8(record[@"entry"]));
+            {
+                std::lock_guard<std::mutex> lock(g_pipelineMutex);
+                auto cached = g_pipelineCache.find(cacheKey);
+                if (cached != g_pipelineCache.end()) {
+                    kernel.pipeline = cached->second;
+                } else {
+                    NSURL *url = [NSURL fileURLWithPath:[directory stringByAppendingPathComponent:assetPath]];
+                    id<MTLLibrary> library = [device newLibraryWithURL:url error:&metalError];
+                    id<MTLFunction> function = [library newFunctionWithName:record[@"entry"]];
+                    kernel.pipeline = function ? [device newComputePipelineStateWithFunction:function error:&metalError] : nil;
+                    if (kernel.pipeline) g_pipelineCache.emplace(cacheKey, kernel.pipeline);
+                }
+            }
+            if (!kernel.pipeline) {
+                return fail(error, "ANR pipeline " + utf8(key) + ": " + utf8(metalError.localizedDescription));
+            }
+            kernel.resources = [record[@"resource_count"] unsignedIntValue];
+            kernel.samplers = [record[@"sampler_count"] unsignedIntValue];
+            if (!kernel.resources || kernel.resources > 256 || kernel.samplers > 16) {
+                return fail(error, "ANR descriptor table size invalid");
+            }
+            unsigned tableSlot = 0;
+            for (NSDictionary *b in record[@"bindings"]) {
+                const bool isUniform = [b[@"uniform"] boolValue];
+                const bool isSampler = [b[@"sampler"] boolValue];
+                BindKind kind = isSampler ? BindKind::Sampler : (isUniform ? BindKind::Uniform : BindKind::Buffer);
+                kernel.bindings.push_back({
+                    utf8(b[@"name"]),
+                    kernel.native ? tableSlot++ : [b[@"slot"] unsignedIntValue],
+                    kind,
+                    false,
+                });
+            }
+            for (const auto &binding : kernel.bindings) {
+                const unsigned limit = binding.kind == BindKind::Sampler ? kernel.samplers : kernel.resources;
+                if (binding.index >= limit) return fail(error, "ANR descriptor slot out of bounds");
+            }
+            kernels.emplace(utf8(key), std::move(kernel));
+        }
+
+        for (unsigned slot = 0; slot < 4; ++slot) {
+            for (NSString *key in stageRecords) {
+                if (!stage_wanted(key, phaseMode)) continue;
+                auto &slotStages = stages[slot][utf8(key)];
+                for (NSDictionary *record in stageRecords[key]) {
+                    Stage stage;
+                    stage.label = utf8(record[@"label"] ?: @"");
+                    stage.kernel = utf8(record[@"kernel"]);
+                    stage.groups = extent_from_array(record[@"groups"]);
+                    stage.threads = extent_from_array(record[@"threads"]);
+                    auto it = kernels.find(stage.kernel);
+                    if (it == kernels.end()) return fail(error, "ANR unknown stage kernel");
+                    Kernel &kernel = it->second;
+                    if (stage.threads.width * stage.threads.height * stage.threads.depth > kernel.pipeline.maxTotalThreadsPerThreadgroup) {
+                        return fail(error, "ANR threadgroup exceeds pipeline limit");
+                    }
+                    if (!safe_path(record[@"uniforms"]) || !files[record[@"uniforms"]]) {
+                        return fail(error, "ANR unlisted uniform asset");
+                    }
+                    NSData *data = load_file(directory, record[@"uniforms"]);
+                    if (!data || data.length > 4096) return fail(error, "ANR uniform size invalid");
+                    stage.constants = alloc_shared(data.length);
+                    if (!add_resident(stage.constants, error)) return false;
+                    std::memset(stage.constants.contents, 0, stage.constants.length);
+                    std::memcpy(stage.constants.contents, data.bytes, data.length);
+                    for (NSString *name in record[@"buffers"]) {
+                        unsigned index = [record[@"buffers"][name] unsignedIntValue];
+                        if (index >= buffers.size()) return fail(error, "ANR buffer reference invalid");
+                        stage.buffers.emplace(utf8(name), index);
+                    }
+                    for (NSString *name in record[@"images"]) {
+                        const std::string target = utf8(record[@"images"][name]);
+                        stage.images.emplace(utf8(name), target);
+                        if (target == "color" || target == "depth" || target == "motion" || target == "output") {
+                            stage.hasExternalImage = true;
+                        }
+                    }
+                    MTL4ArgumentTableDescriptor *td = [MTL4ArgumentTableDescriptor new];
+                    td.maxBufferBindCount = 3;
+                    stage.arguments = [device newArgumentTableWithDescriptor:td error:&metalError];
+                    if (!stage.arguments) return fail(error, "ANR argument table: " + utf8(metalError.localizedDescription));
+                    stage.resources = alloc_shared(kernel.resources * sizeof(Descriptor));
+                    stage.samplers = alloc_shared(kernel.samplers * sizeof(Descriptor));
+                    stage.root = alloc_shared(16);
+                    if (!add_resident(stage.resources, error) || !add_resident(stage.samplers, error)
+                        || !add_resident(stage.root, error)) {
+                        return false;
+                    }
+                    std::memset(stage.resources.contents, 0, stage.resources.length);
+                    std::memset(stage.samplers.contents, 0, stage.samplers.length);
+                    uint64_t pointers[] = {stage.resources.gpuAddress, stage.samplers.gpuAddress};
+                    std::memcpy(stage.root.contents, pointers, sizeof(pointers));
+                    slotStages.push_back(std::move(stage));
+                }
+            }
+        }
+
+        NSDictionary *inputs = manifest[@"inputs"];
+        inputColor0 = [inputs[@"color0"] unsignedIntValue];
+        inputColor1 = [inputs[@"color1"] unsignedIntValue];
+        inputDepth0 = [inputs[@"depth0"] unsignedIntValue];
+        inputDepth1 = [inputs[@"depth1"] unsignedIntValue];
+        inputFrame = [inputs[@"frame"] unsignedIntValue];
+        for (NSArray *pair in manifest[@"swaps"]) {
+            bufferSwaps.emplace_back([pair[0] unsignedIntValue], [pair[1] unsignedIntValue]);
+        }
+        for (id<MTLBuffer> b : buffers) staticMetal3Resources.push_back(b);
+        for (unsigned slot = 0; slot < 4; ++slot) staticMetal3Resources.push_back(frameBuffers[slot]);
+        staticMetal3Resources.push_back(empty);
+
+        [residency commit];
+        initialized = true;
+        return true;
+    }
+
+    bool init_v2(std::string &error, unsigned reqWidth, unsigned reqHeight, Encoding reqEncoding, PhaseMode phaseMode) {
+        isV2 = true;
+        releaseName = utf8(manifest[@"release"] ?: @"FG-V.B20");
+        backendName = utf8(manifest[@"backend"] ?: @"packed");
+        encoding = reqEncoding;
+
+        const std::string ckpt = utf8(manifest[@"checkpoint_id"]);
+        const bool validPacked = backendName == "packed"
+            && ckpt == "b7481951e4f54e4f2d534ec41c8f3d8e721f4fd22839d2ba2bd236cbd28bea64";
+        const bool validDp4a = backendName == "dp4a"
+            && ckpt == "bef1b3e76649887e6cb36f178a3011752d51b4e868f22e70f7c4a5a8d62408f4";
+        if (!validPacked && !validDp4a) {
+            return fail(error, "ANR v2 unsupported backend/checkpoint");
+        }
+
+        NSDictionary *files = manifest[@"files"];
+        if (!verify_inventory(files, error)) return false;
+
+        NSDictionary *sizes = manifest[@"sizes"];
+        NSArray *minSz = sizes[@"min"], *maxSz = sizes[@"max"];
+        const unsigned minW = [minSz[0] unsignedIntValue], minH = [minSz[1] unsignedIntValue];
+        const unsigned maxW = [maxSz[0] unsignedIntValue], maxH = [maxSz[1] unsignedIntValue];
+        if (reqWidth < minW || reqHeight < minH || reqWidth > maxW || reqHeight > maxH) {
+            char msg[160];
+            snprintf(msg, sizeof msg, "ANR v2 size %ux%u outside supported %ux%u..%ux%u",
+                     reqWidth, reqHeight, minW, minH, maxW, maxH);
+            return fail(error, msg);
+        }
+        width = reqWidth;
+        height = reqHeight;
+
+        NSDictionary *encMap = manifest[@"encodings"];
+        NSDictionary *encEntry = encMap[ns(encoding_key(reqEncoding))];
+        if (![encEntry isKindOfClass:NSDictionary.class]) {
+            return fail(error, std::string("ANR v2 missing encoding: ") + encoding_key(reqEncoding));
+        }
+
+        NSString *progFile = encEntry[@"program"];
+        NSString *weightsFile = encEntry[@"weights"];
+        NSString *metallibFile = manifest[@"metallib"];
+        if (!safe_path(progFile) || !safe_path(weightsFile) || !safe_path(metallibFile)
+            || !files[progFile] || !files[weightsFile] || !files[metallibFile]) {
+            return fail(error, "ANR v2 unlisted program/weights/metallib asset");
+        }
+
+        NSData *progData = load_file(directory, progFile);
+        NSDictionary *program = progData ? [NSJSONSerialization JSONObjectWithData:progData options:0 error:nil] : nil;
+        if (![program isKindOfClass:NSDictionary.class] || [program[@"version"] intValue] != 3) {
+            return fail(error, "ANR v2 invalid dynamic program");
+        }
+        NSData *weights = load_file(directory, weightsFile);
+        if (!weights || !weights.length) return fail(error, "ANR v2 missing weights");
+
+        // Evaluate dynamic resolution variants and find the unique matching variant.
+        NSDictionary *selectedVariant = nil;
+        std::vector<int64_t> exprVals;
+        for (NSDictionary *variant in program[@"variants"]) {
+            std::vector<int64_t> candidateVals;
+            if (!eval_exprs(variant[@"exprs"], width, height, candidateVals, error)) {
+                return false;
+            }
+            if (check_guards(variant[@"guards"], candidateVals)) {
+                selectedVariant = variant;
+                exprVals = std::move(candidateVals);
+                break;
+            }
+        }
+        if (!selectedVariant) {
+            char msg[128];
+            snprintf(msg, sizeof msg, "ANR v2 no graph variant matches %ux%u", width, height);
+            return fail(error, msg);
+        }
+
+        MTLResidencySetDescriptor *rd = [MTLResidencySetDescriptor new];
+        rd.initialCapacity = 1600;
+        NSError *metalError = nil;
+        residency = [device newResidencySetWithDescriptor:rd error:&metalError];
+        if (!residency) return fail(error, "ANR residency: " + utf8(metalError.localizedDescription));
+
+        // Allocate Private GPU buffers and upload weights / clear scratch once on a blit pass.
+        NSArray *bufSpecs = selectedVariant[@"buffers"];
+        if (![bufSpecs isKindOfClass:NSArray.class] || bufSpecs.count < 64 || bufSpecs.count > 256) {
+            return fail(error, "ANR v2 invalid buffer inventory");
+        }
+        buffers.resize(bufSpecs.count);
+
+        id<MTLBuffer> stagingWeights = [device newBufferWithBytes:weights.bytes
+                                                           length:weights.length
+                                                          options:MTLResourceStorageModeShared];
+        if (!stagingWeights) return fail(error, "ANR v2 weight staging allocation failed");
+
+        id<MTLCommandQueue> initQueue = [device newCommandQueue];
+        id<MTLCommandBuffer> initCmd = [initQueue commandBuffer];
+        id<MTLBlitCommandEncoder> initBlit = [initCmd blitCommandEncoder];
+        if (!initBlit) return fail(error, "ANR v2 init blit encoder failed");
+
+        for (NSDictionary *record in bufSpecs) {
+            unsigned index = [record[@"index"] unsignedIntValue];
+            int64_t sizeVal = 0;
+            if (!resolve_int(record[@"size"], exprVals, sizeVal) || sizeVal <= 0 || sizeVal > (1LL << 30)) {
+                return fail(error, "ANR v2 invalid resolved buffer size");
+            }
+            const size_t bytes = (size_t)sizeVal;
+            if (index >= buffers.size() || buffers[index]) {
+                return fail(error, "ANR v2 duplicate/invalid buffer index");
+            }
+            buffers[index] = alloc_private(bytes);
+            if (!add_resident(buffers[index], error)) return false;
+
+            if ([record[@"kind"] isEqual:@"weight"]) {
+                size_t offset = [record[@"data_offset"] unsignedLongLongValue];
+                if (offset > weights.length || bytes > weights.length - offset) {
+                    return fail(error, "ANR v2 weight span out of bounds");
+                }
+                [initBlit copyFromBuffer:stagingWeights
+                            sourceOffset:offset
+                                toBuffer:buffers[index]
+                       destinationOffset:0
+                                    size:bytes];
+                if (buffers[index].length > bytes) {
+                    [initBlit fillBuffer:buffers[index]
+                                   range:NSMakeRange(bytes, buffers[index].length - bytes)
+                                   value:0];
+                }
+            } else {
+                [initBlit fillBuffer:buffers[index]
+                               range:NSMakeRange(0, buffers[index].length)
+                               value:0];
+                if ([record[@"kind"] isEqual:@"persistent"]) {
+                    persistentBuffers.push_back(index);
+                }
+            }
+        }
+        [initBlit endEncoding];
+        [initCmd commit];
+        [initCmd waitUntilCompleted];
+        if (initCmd.status != MTLCommandBufferStatusCompleted) {
+            return fail(error, "ANR v2 weight upload GPU failure");
+        }
+
+        // Allocate internal textures (tex.color0/1 with R32Uint views, tex.gain0/1).
+        NSDictionary *texSpecs = selectedVariant[@"textures"];
+        if ([texSpecs isKindOfClass:NSDictionary.class]) {
+            for (NSString *texName in texSpecs) {
+                NSDictionary *spec = texSpecs[texName];
+                MTLPixelFormat fmt = pixel_format_from_name(spec[@"format"]);
+                if (fmt == MTLPixelFormatInvalid) {
+                    return fail(error, "ANR v2 unsupported internal texture format: " + utf8(spec[@"format"]));
+                }
+                int64_t tw = width, th = height;
+                if (spec[@"width"] && !resolve_int(spec[@"width"], exprVals, tw)) {
+                    return fail(error, "ANR v2 bad texture width expr");
+                }
+                if (spec[@"height"] && !resolve_int(spec[@"height"], exprVals, th)) {
+                    return fail(error, "ANR v2 bad texture height expr");
+                }
+                if (tw <= 0 || th <= 0 || tw > 16384 || th > 16384) {
+                    return fail(error, "ANR v2 internal texture dimensions invalid");
+                }
+                MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:fmt
+                                                                                              width:(NSUInteger)tw
+                                                                                             height:(NSUInteger)th
+                                                                                          mipmapped:NO];
+                td.storageMode = MTLStorageModePrivate;
+                td.hazardTrackingMode = MTLHazardTrackingModeUntracked;
+                td.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+                NSString *storageFmt = spec[@"storage_format"];
+                if ([storageFmt isEqual:@"r32_uint"]) {
+                    td.usage |= MTLTextureUsagePixelFormatView;
+                }
+                InternalTexture itex;
+                itex.main = [device newTextureWithDescriptor:td];
+                if (!add_resident(itex.main, error)) return false;
+                staticMetal3Resources.push_back(itex.main);
+                if ([storageFmt isEqual:@"r32_uint"]) {
+                    itex.r32uintView = [itex.main newTextureViewWithPixelFormat:MTLPixelFormatR32Uint];
+                    if (!add_resident(itex.r32uintView, error)) return false;
+                    staticMetal3Resources.push_back(itex.r32uintView);
+                }
+                internalTextures.emplace(utf8(texName), itex);
+            }
+        }
+
+        for (unsigned slot = 0; slot < 4; ++slot) {
+            frameBuffers[slot] = alloc_shared(204);
+            if (!add_resident(frameBuffers[slot], error)) return false;
+            MTLResidencySetDescriptor *bd = [MTLResidencySetDescriptor new];
+            bd.initialCapacity = 8;
+            borrowedSets[slot] = [device newResidencySetWithDescriptor:bd error:&metalError];
+            if (!borrowedSets[slot]) return fail(error, "ANR frame residency allocation failed");
+        }
+        empty = alloc_shared(256);
+        if (!add_resident(empty, error)) return false;
+        std::memset(empty.contents, 0, empty.length);
+
+        MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
+        sd.supportArgumentBuffers = YES;
+        sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear;
+        sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToZero;
+        sampler = [device newSamplerStateWithDescriptor:sd];
+
+        // Load single combined metallib (cached per device + sha256).
+        const std::string libSha = utf8(files[metallibFile][@"sha256"]);
+        id<MTLLibrary> library = nil;
+        {
+            std::lock_guard<std::mutex> lock(g_pipelineMutex);
+            const auto libKey = std::make_pair((uintptr_t)(__bridge void *)device, libSha);
+            auto foundLib = g_libraryCache.find(libKey);
+            if (foundLib != g_libraryCache.end()) {
+                library = foundLib->second;
+            } else {
+                NSURL *url = [NSURL fileURLWithPath:[directory stringByAppendingPathComponent:metallibFile]];
+                library = [device newLibraryWithURL:url error:&metalError];
+                if (library) g_libraryCache.emplace(libKey, library);
+            }
+        }
+        if (!library) return fail(error, "ANR v2 metallib load failed: " + utf8(metalError.localizedDescription));
+
+        // Optional Metal 4 MPP library for Apple10 / M5+ GPUs (NAX matrix engines).
+        const char *mppEnv = getenv("FSR4_ANR_MPP");
+        const bool wantMpp = [device supportsFamily:MTLGPUFamilyApple10] && (!mppEnv || strcmp(mppEnv, "0") != 0);
+        NSString *metallibMppFile = manifest[@"metallib_mpp"];
+        NSDictionary *mppKernelMap = manifest[@"mpp_kernels"];
+        id<MTLLibrary> mppLibrary = nil;
+        std::string mppLibSha;
+        if (wantMpp && [metallibMppFile isKindOfClass:NSString.class]
+            && [mppKernelMap isKindOfClass:NSDictionary.class]
+            && safe_path(metallibMppFile) && files[metallibMppFile]) {
+            mppLibSha = utf8(files[metallibMppFile][@"sha256"]);
+            std::lock_guard<std::mutex> lock(g_pipelineMutex);
+            const auto mppKey = std::make_pair((uintptr_t)(__bridge void *)device, mppLibSha);
+            auto foundMpp = g_libraryCache.find(mppKey);
+            if (foundMpp != g_libraryCache.end()) {
+                mppLibrary = foundMpp->second;
+            } else {
+                NSURL *url = [NSURL fileURLWithPath:[directory stringByAppendingPathComponent:metallibMppFile]];
+                mppLibrary = [device newLibraryWithURL:url error:&metalError];
+                if (mppLibrary) g_libraryCache.emplace(mppKey, mppLibrary);
+            }
+        }
+
+        NSDictionary *kernelRecords = manifest[@"kernels"];
+        NSDictionary *stageRecords = selectedVariant[@"stages"];
+        NSMutableSet *neededKernels = [NSMutableSet set];
+        std::map<std::string, bool> kernelMul32;
+        for (NSString *key in stageRecords) {
+            if (!stage_wanted(key, phaseMode)) continue;
+            for (NSDictionary *stage in stageRecords[key]) {
+                NSString *kstr = stage[@"kernel"];
+                [neededKernels addObject:kstr];
+                MTLSize th = extent_from_array(stage[@"threads"]);
+                const bool mul32 = ((th.width * th.height * th.depth) % 32u) == 0u;
+                const std::string ks = utf8(kstr);
+                auto it = kernelMul32.find(ks);
+                if (it == kernelMul32.end()) kernelMul32[ks] = mul32;
+                else it->second = it->second && mul32;
+            }
+        }
+
+        for (NSString *key in neededKernels) {
+            NSDictionary *record = kernelRecords[key];
+            if (![record isKindOfClass:NSDictionary.class]) {
+                return fail(error, "ANR v2 missing kernel record: " + utf8(key));
+            }
+            Kernel kernel;
+            NSString *entryName = record[@"entry"];
+            id<MTLLibrary> useLib = library;
+            std::string useSha = libSha;
+            if (mppLibrary && [mppKernelMap[key] isKindOfClass:NSString.class]) {
+                id<MTLFunction> mppFn = [mppLibrary newFunctionWithName:mppKernelMap[key]];
+                if (mppFn) {
+                    entryName = mppKernelMap[key];
+                    useLib = mppLibrary;
+                    useSha = mppLibSha;
+                    mppActive = true;
+                }
+            }
+            id<MTLFunction> function = [useLib newFunctionWithName:entryName];
+            if (!function) return fail(error, "ANR v2 missing function: " + utf8(entryName));
+            const bool isMul32 = kernelMul32[utf8(key)];
+            const auto cacheKey = std::make_pair((uintptr_t)(__bridge void *)device,
+                                                 useSha + ":" + utf8(entryName) + (isMul32 ? ":m32" : ":any"));
+            {
+                std::lock_guard<std::mutex> lock(g_pipelineMutex);
+                auto cached = g_pipelineCache.find(cacheKey);
+                if (cached != g_pipelineCache.end()) {
+                    kernel.pipeline = cached->second;
+                } else {
+                    MTLComputePipelineDescriptor *pd = [MTLComputePipelineDescriptor new];
+                    pd.computeFunction = function;
+                    pd.threadGroupSizeIsMultipleOfThreadExecutionWidth = isMul32 ? YES : NO;
+                    kernel.pipeline = [device newComputePipelineStateWithDescriptor:pd
+                                                                            options:MTLPipelineOptionNone
+                                                                         reflection:nil
+                                                                              error:&metalError];
+                    if (kernel.pipeline) g_pipelineCache.emplace(cacheKey, kernel.pipeline);
+                }
+            }
+            if (!kernel.pipeline) {
+                return fail(error, "ANR v2 pipeline " + utf8(key) + ": " + utf8(metalError.localizedDescription));
+            }
+            kernel.argEncoder = [function newArgumentEncoderWithBufferIndex:0];
+            if (!kernel.argEncoder) return fail(error, "ANR v2 argument encoder missing for: " + utf8(key));
+            kernel.slotCount = [record[@"slot_count"] unsignedIntValue];
+            kernel.uniformBytes = [record[@"uniform_bytes"] unsignedIntValue];
+            if (!kernel.slotCount || kernel.slotCount > 64 || kernel.uniformBytes > 4096) {
+                return fail(error, "ANR v2 kernel slot/uniform size invalid");
+            }
+            for (NSDictionary *b in record[@"bindings"]) {
+                NSString *kstr = b[@"kind"];
+                BindKind bk = BindKind::Buffer;
+                if ([kstr isEqual:@"uniform"]) bk = BindKind::Uniform;
+                else if ([kstr isEqual:@"texture"]) bk = BindKind::Texture;
+                else if ([kstr isEqual:@"storage_texture"]) bk = BindKind::StorageTexture;
+                else if ([kstr isEqual:@"sampler"]) bk = BindKind::Sampler;
+                const bool writable = b[@"writable"] ? [b[@"writable"] boolValue]
+                                                     : (bk == BindKind::Buffer || bk == BindKind::StorageTexture);
+                kernel.bindings.push_back({
+                    utf8(b[@"name"]),
+                    [b[@"slot"] unsignedIntValue],
+                    bk,
+                    [b[@"r32uint"] boolValue] != NO,
+                    writable,
+                });
+            }
+            kernels.emplace(utf8(key), std::move(kernel));
+        }
+
+        // Build per-slot stages with resolved dispatch sizes and packed uniform blocks.
+        for (unsigned slot = 0; slot < 4; ++slot) {
+            for (NSString *key in stageRecords) {
+                if (!stage_wanted(key, phaseMode)) continue;
+                auto &slotStages = stages[slot][utf8(key)];
+                for (NSDictionary *record in stageRecords[key]) {
+                    Stage stage;
+                    stage.label = utf8(record[@"label"] ?: @"");
+                    stage.kernel = utf8(record[@"kernel"]);
+                    auto it = kernels.find(stage.kernel);
+                    if (it == kernels.end()) return fail(error, "ANR v2 unknown stage kernel");
+                    Kernel &kernel = it->second;
+
+                    NSArray *gArr = record[@"groups"];
+                    int64_t gx = 0, gy = 0, gz = 0;
+                    if (gArr.count != 3 || !resolve_int(gArr[0], exprVals, gx)
+                        || !resolve_int(gArr[1], exprVals, gy) || !resolve_int(gArr[2], exprVals, gz)
+                        || gx <= 0 || gy <= 0 || gz <= 0) {
+                        return fail(error, "ANR v2 invalid resolved dispatch groups");
+                    }
+                    stage.groups = MTLSizeMake((NSUInteger)gx, (NSUInteger)gy, (NSUInteger)gz);
+                    stage.threads = extent_from_array(record[@"threads"]);
+                    if (stage.threads.width * stage.threads.height * stage.threads.depth > kernel.pipeline.maxTotalThreadsPerThreadgroup) {
+                        return fail(error, "ANR v2 threadgroup exceeds pipeline limit");
+                    }
+
+                    // Pack dynamic uniform block.
+                    stage.constants = alloc_shared(std::max(kernel.uniformBytes, 16u));
+                    if (!add_resident(stage.constants, error)) return false;
+                    std::memset(stage.constants.contents, 0, stage.constants.length);
+                    auto *uBytes = (uint8_t *)stage.constants.contents;
+                    for (NSArray *item in record[@"uniforms"]) {
+                        const unsigned offset = [item[0] unsignedIntValue];
+                        const int typeCode = [item[1] intValue];
+                        if (offset + 4 > stage.constants.length) {
+                            return fail(error, "ANR v2 uniform offset out of bounds");
+                        }
+                        if (typeCode == 2) {
+                            double dv = 0.0;
+                            if (!resolve_double(item[2], exprVals, dv) || !std::isfinite(dv)) {
+                                return fail(error, "ANR v2 invalid float uniform");
+                            }
+                            float fv = (float)dv;
+                            std::memcpy(uBytes + offset, &fv, 4);
+                        } else if (typeCode == 1) {
+                            int64_t iv = 0;
+                            if (!resolve_int(item[2], exprVals, iv)) return fail(error, "ANR v2 invalid int uniform");
+                            int32_t v32 = (int32_t)iv;
+                            std::memcpy(uBytes + offset, &v32, 4);
+                        } else {
+                            int64_t iv = 0;
+                            if (!resolve_int(item[2], exprVals, iv) || iv < 0) return fail(error, "ANR v2 invalid uint uniform");
+                            uint32_t v32 = (uint32_t)iv;
+                            std::memcpy(uBytes + offset, &v32, 4);
+                        }
+                    }
+
+                    for (NSString *name in record[@"buffers"]) {
+                        unsigned index = [record[@"buffers"][name] unsignedIntValue];
+                        if (index >= buffers.size()) return fail(error, "ANR v2 buffer reference invalid");
+                        stage.buffers.emplace(utf8(name), index);
+                    }
+                    for (NSString *name in record[@"images"]) {
+                        const std::string target = utf8(record[@"images"][name]);
+                        stage.images.emplace(utf8(name), target);
+                        if (target == "color" || target == "depth" || target == "motion" || target == "output") {
+                            stage.hasExternalImage = true;
+                        }
+                    }
+
+                    const NSUInteger argLen = std::max<NSUInteger>(kernel.argEncoder.encodedLength, 64);
+                    stage.argBuffer = alloc_shared(argLen);
+                    if (!add_resident(stage.argBuffer, error)) return false;
+                    std::memset(stage.argBuffer.contents, 0, stage.argBuffer.length);
+
+                    MTL4ArgumentTableDescriptor *td = [MTL4ArgumentTableDescriptor new];
+                    td.maxBufferBindCount = 1;
+                    stage.arguments = [device newArgumentTableWithDescriptor:td error:&metalError];
+                    if (!stage.arguments) return fail(error, "ANR v2 argument table: " + utf8(metalError.localizedDescription));
+
+                    slotStages.push_back(std::move(stage));
+                }
+
+                // Compute minimal barrier placement from exact read/write resource DAG.
+                std::set<std::string> dirty, readSinceBar;
+                for (size_t i = 0; i < slotStages.size(); ++i) {
+                    Stage &st = slotStages[i];
+                    const Kernel &k = kernels.at(st.kernel);
+                    std::set<std::string> reads, writes;
+                    for (const Binding &b : k.bindings) {
+                        if (b.kind == BindKind::Buffer) {
+                            auto bit = st.buffers.find(b.name);
+                            if (bit == st.buffers.end()) continue;
+                            std::string id = "b:" + std::to_string(bit->second);
+                            if (b.writable) { writes.insert(id); reads.insert(id); }
+                            else { reads.insert(id); }
+                        } else if (b.kind == BindKind::Texture || b.kind == BindKind::StorageTexture) {
+                            auto iit = st.images.find(b.name);
+                            if (iit == st.images.end()) continue;
+                            std::string id = "i:" + iit->second;
+                            if (b.writable) { writes.insert(id); }
+                            else { reads.insert(id); }
+                        }
+                    }
+                    bool hazard = false;
+                    for (const auto &r : reads) if (dirty.count(r)) { hazard = true; break; }
+                    if (!hazard) for (const auto &w : writes) if (dirty.count(w) || readSinceBar.count(w)) { hazard = true; break; }
+                    st.needsBarrier = (i > 0 && hazard);
+                    if (st.needsBarrier) {
+                        dirty.clear();
+                        readSinceBar.clear();
+                    }
+                    dirty.insert(writes.begin(), writes.end());
+                    readSinceBar.insert(reads.begin(), reads.end());
+                }
+            }
+        }
+
+        NSDictionary *inputs = selectedVariant[@"inputs"];
+        inputColor0 = [inputs[@"color0"] unsignedIntValue];
+        inputColor1 = [inputs[@"color1"] unsignedIntValue];
+        inputDepth0 = [inputs[@"depth0"] unsignedIntValue];
+        inputDepth1 = [inputs[@"depth1"] unsignedIntValue];
+        inputFrame = [inputs[@"frame"] unsignedIntValue];
+        for (NSArray *pair in selectedVariant[@"swaps"]) {
+            bufferSwaps.emplace_back([pair[0] unsignedIntValue], [pair[1] unsignedIntValue]);
+        }
+        for (NSArray *pair in selectedVariant[@"texture_swaps"]) {
+            textureSwaps.emplace_back(utf8(pair[0]), utf8(pair[1]));
+        }
+
+        for (id<MTLBuffer> b : buffers) staticMetal3Resources.push_back(b);
+        for (unsigned slot = 0; slot < 4; ++slot) staticMetal3Resources.push_back(frameBuffers[slot]);
+        staticMetal3Resources.push_back(empty);
+
+        const char *devBar = getenv("FSR4_ANR_DEVICE_BARRIER");
+        deviceInternalBarrier = !devBar || strcmp(devBar, "0") != 0;
+        const char *dagEnv = getenv("FSR4_ANR_DAG_BARRIER");
+        dagBarriers = !dagEnv || strcmp(dagEnv, "0") != 0;
+
+        [residency commit];
+        initialized = true;
         return true;
     }
 };
-Runtime::Runtime(id<MTLDevice> device,const std::string &directory):impl(std::make_unique<Impl>()) {
-    impl->device=device;impl->directory=ns(directory);
-}
-Runtime::~Runtime()=default;
-unsigned Runtime::width() const {return impl->width;}
-unsigned Runtime::height() const {return impl->height;}
-id<MTLBuffer> Runtime::diagnostic_buffer(unsigned index) const {return index<impl->buffers.size()?impl->buffers[index]:nil;}
 
-bool Runtime::initialize(std::string &error,bool twoXOnly) { @autoreleasepool {
-    auto &r=*impl;if(r.initialized)return true;
-    NSData *md=load(r.directory,@"manifest.json");
-    if(!md||md.length>32u*1024u*1024u)return r.fail(error,"ANR missing/oversized manifest");
-    r.manifest=[NSJSONSerialization JSONObjectWithData:md options:0 error:nil];
-    if(![r.manifest isKindOfClass:NSDictionary.class] || ![r.manifest[@"schema"] isEqual:@"fsr4_anr_runtime_v1"]
-       || ![r.manifest[@"checkpoint_id"] isEqual:@"e09deb7012c96c172e49e72eb0b747b4611a8b6e3f14e5f5563189c580772ac1"])
-        return r.fail(error,"ANR runtime manifest/checkpoint mismatch");
-    NSDictionary *files=r.manifest[@"files"];
-    if(![files isKindOfClass:NSDictionary.class] || !files.count || files.count>1000)return r.fail(error,"ANR runtime inventory missing");
-    for(NSString *name in files) {
-        if(!safe_path(name))return r.fail(error,"ANR unsafe asset path");
-        NSString *path=[r.directory stringByAppendingPathComponent:name];
-        NSDictionary *attributes=[NSFileManager.defaultManager attributesOfItemAtPath:path error:nil];
-        if(![attributes[NSFileType] isEqual:NSFileTypeRegular])return r.fail(error,"ANR asset missing/nonregular: "+utf8(name));
-        NSDictionary *row=files[name];
-        if(![row isKindOfClass:NSDictionary.class]||![row[@"bytes"] isKindOfClass:NSNumber.class]
-           ||[row[@"bytes"] unsignedLongLongValue]>32u*1024u*1024u||![row[@"sha256"] isKindOfClass:NSString.class])
-            return r.fail(error,"ANR malformed inventory entry");
-        NSData *data=load(r.directory,name);if(!data)return r.fail(error,"ANR unreadable asset");
-        if(data.length!=[row[@"bytes"] unsignedLongLongValue] || hash(data)!=utf8(row[@"sha256"]))
-            return r.fail(error,"ANR asset identity mismatch: "+utf8(name));
-    }
-    r.width=[r.manifest[@"width"] unsignedIntValue];r.height=[r.manifest[@"height"] unsignedIntValue];
-    if(!((r.width==1920&&r.height==1080)||(r.width==2560&&r.height==1440)||(r.width==3840&&r.height==2160)))
-        return r.fail(error,"ANR unsupported geometry");
-    MTLResidencySetDescriptor *rd=[MTLResidencySetDescriptor new];rd.initialCapacity=1600;
-    NSError *metalError=nil;r.residency=[r.device newResidencySetWithDescriptor:rd error:&metalError];
-    if(!r.residency)return r.fail(error,"ANR residency: "+utf8(metalError.localizedDescription));
-    NSData *weights=load(r.directory,@"weights.bin");
-    if(!weights || weights.length!=43520 || hash(weights)!="af6c2f200ddb7baeaf4d82b5515af6f077f67896b2a9d26163ef6ea23975acb5")
-        return r.fail(error,"ANR unsupported model weights");
-    if(![r.manifest[@"buffers"] isKindOfClass:NSArray.class]||[r.manifest[@"buffers"] count]<80||[r.manifest[@"buffers"] count]>128)
-        return r.fail(error,"ANR invalid buffer inventory");
-    r.buffers.resize([r.manifest[@"buffers"] count]);
-    for(NSDictionary *record in r.manifest[@"buffers"]) {
-        unsigned index=[record[@"index"] unsignedIntValue];size_t bytes=[record[@"size"] unsignedLongLongValue];
-        if(index>=r.buffers.size() || r.buffers[index] || !bytes || bytes>(size_t(1)<<30))return r.fail(error,"ANR buffer shape invalid");
-        r.buffers[index]=r.buffer(bytes);if(!r.add(r.buffers[index],error))return false;
-        std::memset(r.buffers[index].contents,0,r.buffers[index].length);
-        if([record[@"kind"] isEqual:@"weight"]) {
-            size_t offset=[record[@"data_offset"] unsignedLongLongValue];
-            if(offset>weights.length || bytes>weights.length-offset)return r.fail(error,"ANR weight span invalid");
-            std::memcpy(r.buffers[index].contents,(const uint8_t*)weights.bytes+offset,bytes);
-        }
-    }
-    for(unsigned slot=0;slot<4;++slot){
-        r.frameBuffers[slot]=r.buffer(204);if(!r.add(r.frameBuffers[slot],error))return false;
-        MTLResidencySetDescriptor *bd=[MTLResidencySetDescriptor new];bd.initialCapacity=4;
-        r.borrowedSets[slot]=[r.device newResidencySetWithDescriptor:bd error:&metalError];
-        if(!r.borrowedSets[slot])return r.fail(error,"ANR frame residency allocation failed");
-    }
-    r.empty=r.buffer(256);if(!r.add(r.empty,error))return false;std::memset(r.empty.contents,0,r.empty.length);
-    MTLSamplerDescriptor *sd=[MTLSamplerDescriptor new];sd.supportArgumentBuffers=YES;
-    sd.minFilter=sd.magFilter=MTLSamplerMinMagFilterLinear;r.sampler=[r.device newSamplerStateWithDescriptor:sd];
-    NSDictionary *kernelRecords=r.manifest[@"kernels"];
-    NSMutableSet *neededKernels=[NSMutableSet set];
-    NSDictionary *stageRecords=r.manifest[@"stages"];
-    auto requiredStage=[twoXOnly](NSString *key){
-        return !twoXOnly||[key isEqual:@"pair"]||[key isEqual:@"phase:0.5:image"];
-    };
-    for(NSString *key in stageRecords){
-        if(!requiredStage(key))continue;
-        for(NSDictionary *stage in stageRecords[key])[neededKernels addObject:stage[@"kernel"]];
-    }
-    for(NSString *key in kernelRecords) {
-        if(![neededKernels containsObject:key])continue;
-        NSDictionary *record=kernelRecords[key];Kernel kernel;kernel.native=[record[@"route"] isEqual:@"native"];
-        NSString *assetPath=record[@"path"];
-        if(!safe_path(assetPath)||!files[assetPath])return r.fail(error,"ANR unlisted kernel asset");
-        // Pipeline cache is keyed by exact shader bytes and device, not name.
-        // Neural state and scratch remain independent per runtime owner.
-        const auto cacheKey=std::make_pair((uintptr_t)(__bridge void*)r.device,
-            utf8(files[assetPath][@"sha256"])+":"+utf8(record[@"entry"]));
-        {std::lock_guard<std::mutex> lock(pipelineMutex);
-            auto cached=pipelineCache.find(cacheKey);
-            if(cached!=pipelineCache.end())kernel.pipeline=cached->second;
-            else{
-                NSURL *url=[NSURL fileURLWithPath:[r.directory stringByAppendingPathComponent:assetPath]];
-                id<MTLLibrary> library=[r.device newLibraryWithURL:url error:&metalError];
-                id<MTLFunction> function=[library newFunctionWithName:record[@"entry"]];
-                kernel.pipeline=function ? [r.device newComputePipelineStateWithFunction:function error:&metalError] : nil;
-                if(kernel.pipeline)pipelineCache.emplace(cacheKey,kernel.pipeline);
-            }
-        }
-        if(!kernel.pipeline)return r.fail(error,"ANR pipeline "+utf8(key)+": "+utf8(metalError.localizedDescription));
-        kernel.resources=[record[@"resource_count"] unsignedIntValue];kernel.samplers=[record[@"sampler_count"] unsignedIntValue];
-        if(!kernel.resources||kernel.resources>256||kernel.samplers>16)return r.fail(error,"ANR descriptor table size invalid");
-        unsigned tableSlot=0;
-        for(NSDictionary *b in record[@"bindings"])kernel.bindings.push_back({utf8(b[@"name"]),
-            kernel.native ? tableSlot++ : [b[@"slot"] unsignedIntValue],
-            (bool)[b[@"uniform"] boolValue],(bool)[b[@"sampler"] boolValue]});
-        for(const auto &binding:kernel.bindings)if(binding.index>=(binding.sampler?kernel.samplers:kernel.resources))
-            return r.fail(error,"ANR descriptor slot out of bounds");
-        r.kernels.emplace(utf8(key),std::move(kernel));
-    }
-    for(unsigned slot=0;slot<4;++slot)for(NSString *key in stageRecords) {
-        if(!requiredStage(key))continue;
-        auto &stages=r.stages[slot][utf8(key)];
-        for(NSDictionary *record in stageRecords[key]) {
-            Stage stage;stage.kernel=utf8(record[@"kernel"]);
-            stage.groups=extent(record[@"groups"]);stage.threads=extent(record[@"threads"]);
-            auto it=r.kernels.find(stage.kernel);if(it==r.kernels.end())return r.fail(error,"ANR unknown stage kernel");
-            Kernel &kernel=it->second;
-            if(stage.threads.width*stage.threads.height*stage.threads.depth>kernel.pipeline.maxTotalThreadsPerThreadgroup)
-                return r.fail(error,"ANR threadgroup exceeds pipeline limit");
-            if(!safe_path(record[@"uniforms"])||!files[record[@"uniforms"]])return r.fail(error,"ANR unlisted uniform asset");
-            NSData *data=load(r.directory,record[@"uniforms"]);if(!data||data.length>4096)return r.fail(error,"ANR uniform size invalid");
-            stage.constants=r.buffer(data.length);
-            if(!r.add(stage.constants,error))return false;
-            std::memset(stage.constants.contents,0,stage.constants.length);std::memcpy(stage.constants.contents,data.bytes,data.length);
-            for(NSString *name in record[@"buffers"]) {
-                unsigned index=[record[@"buffers"][name] unsignedIntValue];if(index>=r.buffers.size())return r.fail(error,"ANR buffer reference invalid");
-                stage.buffers.emplace(utf8(name),index);
-            }
-            for(NSString *name in record[@"images"])stage.images.emplace(utf8(name),utf8(record[@"images"][name]));
-            MTL4ArgumentTableDescriptor *td=[MTL4ArgumentTableDescriptor new];
-            td.maxBufferBindCount=3;
-            stage.arguments=[r.device newArgumentTableWithDescriptor:td error:&metalError];
-            if(!stage.arguments)return r.fail(error,"ANR argument table: "+utf8(metalError.localizedDescription));
-            {
-                stage.resources=r.buffer(kernel.resources*sizeof(Descriptor));stage.samplers=r.buffer(kernel.samplers*sizeof(Descriptor));stage.root=r.buffer(16);
-                if(!r.add(stage.resources,error)||!r.add(stage.samplers,error)||!r.add(stage.root,error))return false;
-                std::memset(stage.resources.contents,0,stage.resources.length);std::memset(stage.samplers.contents,0,stage.samplers.length);
-                uint64_t pointers[]={stage.resources.gpuAddress,stage.samplers.gpuAddress};std::memcpy(stage.root.contents,pointers,sizeof(pointers));
-            }
-            stages.push_back(std::move(stage));
-        }
-    }
-    r.swaps=r.manifest[@"swaps"];
-    [r.residency commit];r.initialized=true;return true;
-} }
+Runtime::Runtime(id<MTLDevice> device, const std::string &directory)
+    : impl(std::make_unique<Impl>()) {
+    impl->device = device;
+    impl->directory = ns(directory);
+}
 
-bool Runtime::encode_pair(id<MTL4CommandBuffer> command,id<MTLTexture> color,id<MTLTexture> depth,id<MTLTexture> motion,
-                          const void *frame,size_t frameBytes,std::string &error) {
-    return pair(command,true,color,depth,motion,frame,frameBytes,error);
+Runtime::~Runtime() = default;
+
+unsigned Runtime::width() const { return impl->width; }
+unsigned Runtime::height() const { return impl->height; }
+bool Runtime::is_v2() const { return impl->isV2; }
+bool Runtime::mpp_active() const { return impl->mppActive; }
+Encoding Runtime::encoding() const { return impl->encoding; }
+std::string Runtime::release_name() const { return impl->releaseName; }
+std::string Runtime::backend_name() const { return impl->backendName; }
+
+id<MTLBuffer> Runtime::diagnostic_buffer(unsigned index) const {
+    return index < impl->buffers.size() ? impl->buffers[index] : nil;
 }
-bool Runtime::encode_pair_classic(id<MTLCommandBuffer> command,id<MTLTexture> color,id<MTLTexture> depth,id<MTLTexture> motion,
-                                  const void *frame,size_t frameBytes,std::string &error) {
-    return pair(command,false,color,depth,motion,frame,frameBytes,error);
+
+bool Runtime::initialize(std::string &error, bool twoXOnly) {
+    return initialize(error, 1920, 1080, Encoding::PQ10, twoXOnly ? PhaseMode::TwoX : PhaseMode::All);
 }
-bool Runtime::pair(id command,bool metal4,id<MTLTexture> color,id<MTLTexture> depth,id<MTLTexture> motion,
-                   const void *frame,size_t frameBytes,std::string &error) {
-    auto &r=*impl;if(!r.initialized)return r.fail(error,"ANR runtime not initialized");
-    if(!command || [command device]!=r.device || !color || !depth || !motion || !frame || frameBytes!=204)
-        return r.fail(error,"ANR pair contract mismatch");
-    // Reusing this slot is legal only after caller-observed completion. GPU
-    // neural/history buffers stay shared and dispatch barriers preserve order.
-    auto borrowed=r.borrowedSets[r.frameSlot];[borrowed removeAllAllocations];
-    for(id texture in @[color,depth,motion])[borrowed addAllocation:texture];[borrowed commit];
-    r.inputColor=color;r.inputDepth=depth;r.inputMotion=motion;r.output=nil;
-    r.buffers.at([r.manifest[@"inputs"][@"frame"] unsignedIntValue])=r.frameBuffers[r.frameSlot];
-    ++r.bufferRevision;
-    std::memcpy(r.frameBuffers[r.frameSlot].contents,frame,frameBytes);
-    return r.encode_group(command,metal4,r.stages[r.frameSlot].at("pair"),error);
-}
-bool Runtime::encode_interpolation(id<MTL4CommandBuffer> command,double phase,id<MTLTexture> output,std::string &error) {
-    return interpolate(command,true,phase,output,error);
-}
-bool Runtime::encode_interpolation_classic(id<MTLCommandBuffer> command,double phase,id<MTLTexture> output,std::string &error) {
-    return interpolate(command,false,phase,output,error);
-}
-void Runtime::set_coalesced(bool enabled){impl->coalesced=enabled;}
-void Runtime::set_frame_slot(unsigned slot){impl->frameSlot=slot%4;}
-bool Runtime::reset_history(id command,bool metal4,std::string &error){
-    auto &r=*impl;if(!r.initialized||!command||[command device]!=r.device)return r.fail(error,"ANR reset command mismatch");
-    id encoder=nil;
-    if(metal4){[(id<MTL4CommandBuffer>)command useResidencySet:r.residency];
-        encoder=[(id<MTL4CommandBuffer>)command computeCommandEncoder];
-        if(encoder)[(id<MTL4ComputeCommandEncoder>)encoder barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageBlit visibilityOptions:MTL4VisibilityOptionDevice];}
-    else encoder=[(id<MTLCommandBuffer>)command blitCommandEncoder];
-    if(!encoder)return r.fail(error,"ANR reset encoder allocation failed");
-    for(NSDictionary *record in r.manifest[@"buffers"]){
-        if(![record[@"kind"] isEqual:@"persistent"])continue;
-        auto buffer=r.buffers.at([record[@"index"] unsignedIntValue]);
-        if(metal4)[(id<MTL4ComputeCommandEncoder>)encoder fillBuffer:buffer range:NSMakeRange(0,buffer.length) value:0];
-        else [(id<MTLBlitCommandEncoder>)encoder fillBuffer:buffer range:NSMakeRange(0,buffer.length) value:0];
+
+bool Runtime::initialize(std::string &error, unsigned width, unsigned height,
+                         Encoding encoding, PhaseMode phaseMode) {
+    @autoreleasepool {
+        auto &r = *impl;
+        if (r.initialized) return true;
+        NSData *md = load_file(r.directory, @"manifest.json");
+        if (!md || md.length > 32u * 1024u * 1024u) {
+            return r.fail(error, "ANR missing/oversized manifest");
+        }
+        r.manifest = [NSJSONSerialization JSONObjectWithData:md options:0 error:nil];
+        if (![r.manifest isKindOfClass:NSDictionary.class]) {
+            return r.fail(error, "ANR malformed manifest");
+        }
+        NSString *schema = r.manifest[@"schema"];
+        if ([schema isEqual:@"fsr4_anr_runtime_v2"]) {
+            return r.init_v2(error, width, height, encoding, phaseMode);
+        }
+        if ([schema isEqual:@"fsr4_anr_runtime_v1"]) {
+            return r.init_v1(error, phaseMode);
+        }
+        return r.fail(error, "ANR unsupported runtime schema");
     }
-    [encoder endEncoding];return true;
 }
-bool Runtime::interpolate(id command,bool metal4,double phase,id<MTLTexture> output,std::string &error) {
-    auto &r=*impl;if(!r.initialized || !command || [command device]!=r.device || !output || output.device!=r.device)return r.fail(error,"ANR interpolation contract mismatch");
-    char name[64];snprintf(name,sizeof name,"phase:%.6g:image",phase);
-    auto found=r.stages[r.frameSlot].find(name);if(found==r.stages[r.frameSlot].end())return r.fail(error,"ANR unsupported phase");
-    r.output=output;[r.borrowedSets[r.frameSlot] addAllocation:output];[r.borrowedSets[r.frameSlot] commit];
-    return r.encode_group(command,metal4,found->second,error);
+
+bool Runtime::encode_pair(id<MTL4CommandBuffer> command, id<MTLTexture> color,
+                          id<MTLTexture> depth, id<MTLTexture> motion,
+                          const void *frame, size_t frameBytes, std::string &error) {
+    return pair(command, true, color, depth, motion, frame, frameBytes, error);
 }
+
+bool Runtime::encode_pair_classic(id<MTLCommandBuffer> command, id<MTLTexture> color,
+                                  id<MTLTexture> depth, id<MTLTexture> motion,
+                                  const void *frame, size_t frameBytes, std::string &error) {
+    return pair(command, false, color, depth, motion, frame, frameBytes, error);
+}
+
+bool Runtime::pair(id command, bool metal4, id<MTLTexture> color, id<MTLTexture> depth,
+                   id<MTLTexture> motion, const void *frame, size_t frameBytes, std::string &error) {
+    auto &r = *impl;
+    if (!r.initialized) return r.fail(error, "ANR runtime not initialized");
+    if (!command || [command device] != r.device || !color || !depth || !motion || !frame || frameBytes != 204) {
+        return r.fail(error, "ANR pair contract mismatch");
+    }
+    if (metal4) {
+        r.update_borrowed_residency(color, depth, motion, r.output);
+    }
+    r.inputColor = color;
+    r.inputDepth = depth;
+    r.inputMotion = motion;
+    r.output = nil;
+    if (r.buffers.at(r.inputFrame) != r.frameBuffers[r.frameSlot]) {
+        r.buffers.at(r.inputFrame) = r.frameBuffers[r.frameSlot];
+        ++r.bufferRevision;
+    }
+    std::memcpy(r.frameBuffers[r.frameSlot].contents, frame, frameBytes);
+    return r.encode_group(command, metal4, r.stages[r.frameSlot].at("pair"), error);
+}
+
+bool Runtime::encode_interpolation(id<MTL4CommandBuffer> command, double phase,
+                                   id<MTLTexture> output, std::string &error) {
+    return interpolate(command, true, phase, output, error);
+}
+
+bool Runtime::encode_interpolation_classic(id<MTLCommandBuffer> command, double phase,
+                                           id<MTLTexture> output, std::string &error) {
+    return interpolate(command, false, phase, output, error);
+}
+
+bool Runtime::interpolate(id command, bool metal4, double phase, id<MTLTexture> output, std::string &error) {
+    auto &r = *impl;
+    if (!r.initialized || !command || [command device] != r.device || !output || output.device != r.device) {
+        return r.fail(error, "ANR interpolation contract mismatch");
+    }
+    char name[64];
+    snprintf(name, sizeof name, "phase:%.6g:image", phase);
+    auto found = r.stages[r.frameSlot].find(name);
+    if (found == r.stages[r.frameSlot].end()) {
+        return r.fail(error, std::string("ANR unsupported phase: ") + name);
+    }
+    r.output = output;
+    if (metal4) {
+        r.update_borrowed_residency(r.inputColor, r.inputDepth, r.inputMotion, output);
+    }
+    return r.encode_group(command, metal4, found->second, error);
+}
+
+bool Runtime::encode_frame(id<MTL4CommandBuffer> command, id<MTLTexture> color,
+                           id<MTLTexture> depth, id<MTLTexture> motion,
+                           const void *frame, size_t frameBytes,
+                           const double *phases, id<MTLTexture> const *outputs,
+                           unsigned phaseCount, std::string &error) {
+    return frame_combined(command, true, color, depth, motion, frame, frameBytes, phases, outputs, phaseCount, error);
+}
+
+bool Runtime::encode_frame_classic(id<MTLCommandBuffer> command, id<MTLTexture> color,
+                                   id<MTLTexture> depth, id<MTLTexture> motion,
+                                   const void *frame, size_t frameBytes,
+                                   const double *phases, id<MTLTexture> const *outputs,
+                                   unsigned phaseCount, std::string &error) {
+    return frame_combined(command, false, color, depth, motion, frame, frameBytes, phases, outputs, phaseCount, error);
+}
+
+bool Runtime::frame_combined(id command, bool metal4, id<MTLTexture> color, id<MTLTexture> depth,
+                             id<MTLTexture> motion, const void *frame, size_t frameBytes,
+                             const double *phases, id<MTLTexture> const *outputs,
+                             unsigned phaseCount, std::string &error) {
+    auto &r = *impl;
+    if (!r.initialized) return r.fail(error, "ANR runtime not initialized");
+    if (!command || [command device] != r.device || !color || !depth || !motion
+        || !frame || frameBytes != 204 || phaseCount > 2) {
+        return r.fail(error, "ANR frame contract mismatch");
+    }
+    id<MTLTexture> o0 = phaseCount >= 1 ? outputs[0] : nil;
+    id<MTLTexture> o1 = phaseCount >= 2 ? outputs[1] : nil;
+    if ((phaseCount >= 1 && (!o0 || o0.device != r.device))
+        || (phaseCount >= 2 && (!o1 || o1.device != r.device))) {
+        return r.fail(error, "ANR frame output contract mismatch");
+    }
+
+    const char *fuseEnv = getenv("FSR4_ANR_FUSE_GROUPS");
+    if (!fuseEnv || strcmp(fuseEnv, "1") != 0) {
+        if (!pair(command, metal4, color, depth, motion, frame, frameBytes, error)) return false;
+        for (unsigned p = 0; p < phaseCount; ++p) {
+            if (!interpolate(command, metal4, phases[p], outputs[p], error)) return false;
+        }
+        return true;
+    }
+
+    std::vector<std::pair<std::vector<Stage> *, id<MTLTexture>>> batches;
+    batches.reserve(1 + phaseCount);
+    batches.push_back({&r.stages[r.frameSlot].at("pair"), nil});
+    for (unsigned p = 0; p < phaseCount; ++p) {
+        char name[64];
+        snprintf(name, sizeof name, "phase:%.6g:image", phases[p]);
+        auto found = r.stages[r.frameSlot].find(name);
+        if (found == r.stages[r.frameSlot].end()) {
+            return r.fail(error, std::string("ANR unsupported phase: ") + name);
+        }
+        batches.push_back({&found->second, outputs[p]});
+    }
+
+    r.inputColor = color;
+    r.inputDepth = depth;
+    r.inputMotion = motion;
+    r.output = o0;
+    if (metal4) {
+        r.update_borrowed_residency(color, depth, motion, o0, o1);
+    }
+    if (r.buffers.at(r.inputFrame) != r.frameBuffers[r.frameSlot]) {
+        r.buffers.at(r.inputFrame) = r.frameBuffers[r.frameSlot];
+        ++r.bufferRevision;
+    }
+    std::memcpy(r.frameBuffers[r.frameSlot].contents, frame, frameBytes);
+    return r.encode_groups(command, metal4, batches, error);
+}
+
+bool Runtime::profile_pair(id<MTL4CommandBuffer> command, id<MTL4CounterHeap> heap,
+                           unsigned baseIndex, id<MTLTexture> color, id<MTLTexture> depth,
+                           id<MTLTexture> motion, const void *frame, size_t frameBytes,
+                           std::vector<StageProfile> &stages, std::string &error) {
+    auto &r = *impl;
+    if (!r.initialized) return r.fail(error, "ANR runtime not initialized");
+    if (!command || !heap || [command device] != r.device || !color || !depth || !motion || !frame || frameBytes != 204) {
+        return r.fail(error, "ANR profile_pair contract mismatch");
+    }
+    r.update_borrowed_residency(color, depth, motion, r.output);
+    r.inputColor = color;
+    r.inputDepth = depth;
+    r.inputMotion = motion;
+    r.output = nil;
+    if (r.buffers.at(r.inputFrame) != r.frameBuffers[r.frameSlot]) {
+        r.buffers.at(r.inputFrame) = r.frameBuffers[r.frameSlot];
+        ++r.bufferRevision;
+    }
+    std::memcpy(r.frameBuffers[r.frameSlot].contents, frame, frameBytes);
+    return r.encode_group(command, true, r.stages[r.frameSlot].at("pair"), error, heap, baseIndex, &stages);
+}
+
+bool Runtime::profile_interpolation(id<MTL4CommandBuffer> command, id<MTL4CounterHeap> heap,
+                                    unsigned baseIndex, double phase, id<MTLTexture> output,
+                                    std::vector<StageProfile> &stages, std::string &error) {
+    auto &r = *impl;
+    if (!r.initialized || !command || !heap || [command device] != r.device || !output || output.device != r.device) {
+        return r.fail(error, "ANR profile_interpolation contract mismatch");
+    }
+    char name[64];
+    snprintf(name, sizeof name, "phase:%.6g:image", phase);
+    auto found = r.stages[r.frameSlot].find(name);
+    if (found == r.stages[r.frameSlot].end()) {
+        return r.fail(error, std::string("ANR unsupported phase: ") + name);
+    }
+    r.output = output;
+    r.update_borrowed_residency(r.inputColor, r.inputDepth, r.inputMotion, output);
+    return r.encode_group(command, true, found->second, error, heap, baseIndex, &stages);
+}
+
+void Runtime::set_coalesced(bool enabled) {
+    impl->coalesced = enabled;
+}
+
+void Runtime::set_frame_slot(unsigned slot) {
+    impl->frameSlot = slot % 4;
+}
+
+bool Runtime::reset_history(id command, bool metal4, std::string &error) {
+    auto &r = *impl;
+    if (!r.initialized || !command || [command device] != r.device) {
+        return r.fail(error, "ANR reset command mismatch");
+    }
+    id encoder = nil;
+    if (metal4) {
+        [(id<MTL4CommandBuffer>)command useResidencySet:r.residency];
+        encoder = [(id<MTL4CommandBuffer>)command computeCommandEncoder];
+        if (encoder) {
+            [(id<MTL4ComputeCommandEncoder>)encoder barrierAfterQueueStages:MTLStageAll
+                                                               beforeStages:MTLStageBlit
+                                                          visibilityOptions:MTL4VisibilityOptionDevice];
+        }
+    } else {
+        encoder = [(id<MTLCommandBuffer>)command blitCommandEncoder];
+    }
+    if (!encoder) return r.fail(error, "ANR reset encoder allocation failed");
+    for (unsigned index : r.persistentBuffers) {
+        auto buffer = r.buffers.at(index);
+        if (metal4) {
+            [(id<MTL4ComputeCommandEncoder>)encoder fillBuffer:buffer range:NSMakeRange(0, buffer.length) value:0];
+        } else {
+            [(id<MTLBlitCommandEncoder>)encoder fillBuffer:buffer range:NSMakeRange(0, buffer.length) value:0];
+        }
+    }
+    [encoder endEncoding];
+    return true;
+}
+
 void Runtime::swap_history() {
-    auto &r=*impl;
-    // These two swaps are implicit in the upstream host's input contract,
-    // in addition to the explicitly listed model-history swaps.
-    std::swap(r.buffers.at([r.manifest[@"inputs"][@"color0"] unsignedIntValue]),r.buffers.at([r.manifest[@"inputs"][@"color1"] unsignedIntValue]));
-    std::swap(r.buffers.at([r.manifest[@"inputs"][@"depth0"] unsignedIntValue]),r.buffers.at([r.manifest[@"inputs"][@"depth1"] unsignedIntValue]));
-    for(NSArray *pair in r.swaps)std::swap(r.buffers.at([pair[0] unsignedIntValue]),r.buffers.at([pair[1] unsignedIntValue]));
+    auto &r = *impl;
+    std::swap(r.buffers.at(r.inputColor0), r.buffers.at(r.inputColor1));
+    std::swap(r.buffers.at(r.inputDepth0), r.buffers.at(r.inputDepth1));
+    for (const auto &swapPair : r.bufferSwaps) {
+        std::swap(r.buffers.at(swapPair.first), r.buffers.at(swapPair.second));
+    }
+    for (const auto &texPair : r.textureSwaps) {
+        auto a = r.internalTextures.find(texPair.first);
+        auto b = r.internalTextures.find(texPair.second);
+        if (a != r.internalTextures.end() && b != r.internalTextures.end()) {
+            std::swap(a->second, b->second);
+        }
+    }
     ++r.bufferRevision;
 }
-}
+
+} // namespace anr

@@ -368,7 +368,7 @@ build/anr_tools/anr_replay: tools/anr/replay.mm src/anr/anr_runtime.mm src/anr/a
 
 build/anr_tools/anr_live_test: tests/anr/anr_live_test.mm src/common/fsr4_fg_settings.h src/anr/anr_live.h src/anr/anr_live.mm src/anr/anr_runtime.h src/anr/anr_runtime.mm hook/anr_metalfx.mm build/anr_helpers_ui_v2.metallib
 	mkdir -p build/anr_tools
-	$(CXX) $(CXXFLAGS) -Wextra -Werror -Wno-unused-parameter -fobjc-arc tests/anr/anr_live_test.mm src/anr/anr_live.mm src/anr/anr_runtime.mm hook/anr_metalfx.mm $(FRAMEWORKS) -framework MetalFX -o $@
+	$(CXX) $(CXXFLAGS) -Wextra -Werror -Wno-unused-parameter -fobjc-arc tests/anr/anr_live_test.mm src/anr/anr_live.mm src/anr/anr_runtime.mm hook/anr_metalfx.mm $(FRAMEWORKS) -framework MetalFX -framework QuartzCore -o $@
 
 build/anr_tools/anr_motion_test: tests/anr/anr_motion_test.mm src/common/fsr4_fg_settings.h src/anr/anr_live.h src/anr/anr_live.mm src/anr/anr_runtime.h src/anr/anr_runtime.mm hook/anr_metalfx.mm build/anr_helpers_ui_v2.metallib
 	mkdir -p build/anr_tools

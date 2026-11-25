@@ -315,14 +315,15 @@ static void title_color(NSButton *button, NSColor *color) {
     self.fgStatus.accessibilityLabel = @"Frame generation status";
     [v addSubview:label(@"Frame generation", 12, y, 180, YES)];
     self.frameGeneration = [[NSSegmentedControl alloc] initWithFrame:NSMakeRect(202, y - 4, W - 214, 26)];
-    self.frameGeneration.segmentCount = 2;
+    self.frameGeneration.segmentCount = 3;
     [self.frameGeneration setLabel:@"MetalFX" forSegment:0];
-    [self.frameGeneration setLabel:@"ANR" forSegment:1];
+    [self.frameGeneration setLabel:@"ANR 2x" forSegment:1];
+    [self.frameGeneration setLabel:@"ANR 3x" forSegment:2];
     self.frameGeneration.trackingMode = NSSegmentSwitchTrackingSelectOne;
     self.frameGeneration.target = self; self.frameGeneration.action = @selector(frameGenerationChanged:);
     self.frameGeneration.accessibilityLabel = @"Frame generation";
-    self.frameGeneration.toolTip = @"MetalFX: Apple's original method, no ANR GPU work. ANR: experimental generator "
-                                   @"with a local runtime. DLSS Frame Generation must be enabled in the game.";
+    self.frameGeneration.toolTip = @"MetalFX: Apple's original method, no ANR GPU work. ANR 2x/3x: experimental V.B20 "
+                                   @"neural generator (3x inserts two frames per real frame). DLSS FG must be enabled in-game.";
     [v addSubview:self.frameGeneration]; y -= 30;
     self.fgWarning = label(frame_generation_warning(), 12, y, W - 24, NO);
     self.fgWarning.font = [NSFont systemFontOfSize:11];
@@ -451,8 +452,10 @@ static void title_color(NSButton *button, NSColor *color) {
 
 - (void)frameGenerationChanged:(id)sender {
     const NSInteger selected = self.frameGeneration.selectedSegment;
-    if (selected < 0 || selected > 1) return;
-    const auto mode = selected == 1 ? fsr4_fg::Mode::ANR : fsr4_fg::Mode::MetalFX;
+    if (selected < 0 || selected > 2) return;
+    const auto mode = selected == 2 ? fsr4_fg::Mode::ANR3x
+                    : selected == 1 ? fsr4_fg::Mode::ANR
+                                    : fsr4_fg::Mode::MetalFX;
     self.fgSettingsError = write_frame_generation(mode) ? nil : @"! Could not save the frame generation mode.";
     [self refresh];
 }
@@ -460,7 +463,8 @@ static void title_color(NSButton *button, NSColor *color) {
 - (void)refreshFrameGeneration {
     auto fg = read_kv(dist_path("fg-status.conf"));
     const auto requested = read_frame_generation();
-    self.frameGeneration.selectedSegment = requested == fsr4_fg::Mode::ANR ? 1 : 0;
+    self.frameGeneration.selectedSegment = requested == fsr4_fg::Mode::ANR3x ? 2
+                                         : requested == fsr4_fg::Mode::ANR ? 1 : 0;
     self.frameGeneration.enabled = !fsr4_fg::settings_path(g_root.c_str(), getenv("FSR4_FG_SETTINGS")).empty();
     self.fgWarning.stringValue = self.fgSettingsError ?: frame_generation_warning();
     self.fgWarning.textColor = self.fgSettingsError ? NSColor.systemRedColor : NSColor.systemOrangeColor;
@@ -472,12 +476,25 @@ static void title_color(NSButton *button, NSColor *color) {
     else if (fg.empty()) self.fgStatus.stringValue = @"FG: no data (enable DLSS FG in the game)";
     else if (fgAge > 3) self.fgStatus.stringValue = @"FG: no recent frames";
     else if (atoi(fg["active"].c_str())) {
-        const char *ui = (fg["ui_mode"] == "precomposited-copy" || fg["ui_mode"] == "precomposited-adaptive") ? ", HUD recomposited"
-                       : fg["ui_mode"] == "premultiplied-overlay" ? ", UI overlay" : "";
-        self.fgStatus.stringValue = [NSString stringWithFormat:@"FG: ANR active (2x), generated %s%s", fg["generated"].c_str(), ui];
+        const char *ui = (fg["ui_mode"] == "precomposited-copy" || fg["ui_mode"] == "precomposited-adaptive") ? ", HUD"
+                       : fg["ui_mode"] == "premultiplied-overlay" ? ", UI" : "";
+        const int mult = fg.count("multiplier") && atoi(fg["multiplier"].c_str()) >= 2
+            ? atoi(fg["multiplier"].c_str()) : fsr4_fg::multiplier(requested);
+        std::string meta = std::to_string(mult) + "x";
+        if (fg.count("release") && !fg["release"].empty()) meta += " " + fg["release"];
+        if (fg.count("encoding") && !fg["encoding"].empty()) meta += " " + fg["encoding"];
+        if (fg.count("mpp_active") && atoi(fg["mpp_active"].c_str())) meta += " MPP";
+        if (mult == 3 && fg.count("generated_extra_3x")) {
+            self.fgStatus.stringValue = [NSString stringWithFormat:@"FG: ANR active (%s), %s (+%s extra)%s",
+                meta.c_str(), fg["generated"].c_str(), fg["generated_extra_3x"].c_str(), ui];
+        } else {
+            self.fgStatus.stringValue = [NSString stringWithFormat:@"FG: ANR active (%s), generated %s%s",
+                meta.c_str(), fg["generated"].c_str(), ui];
+        }
     } else
         self.fgStatus.stringValue = [NSString stringWithFormat:@"FG: original MetalFX, %s", fg["reason"].c_str()];
-    self.fgStatus.toolTip = [NSString stringWithFormat:@"UI: %s, precomposited frames %s, overlay frames %s",
+    self.fgStatus.toolTip = [NSString stringWithFormat:@"Release: %s, encoding: %s, extra 3x: %s, UI: %s (%s/%s)",
+        fg["release"].c_str(), fg["encoding"].c_str(), fg["generated_extra_3x"].c_str(),
         fg["ui_mode"].c_str(), fg["ui_composited"].c_str(), fg["ui_overlay"].c_str()];
 }
 

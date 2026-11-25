@@ -2,7 +2,7 @@
 
 ## Current result
 
-The ANR `FG-V.B14` macOS test kit was reverse-engineered far enough to build
+The ANR `FG-V.B20` addon (as well as legacy `FG-V.B14` kits) is supported via
 an **independent native Metal runtime**. It does not load or launch `bin/check`
 in a game. Model inference runs on the game's own Metal command buffer.
 
@@ -13,18 +13,27 @@ for DLSS FG. It is separate from the temporal-upscaling hook:
 Game DLSS FG -> D3DMetal -> MetalFX FG encode -> our ANR runtime -> game output
 ```
 
-No extra presentation or fake FPS counter is introduced. D3DMetal continues
-to submit commands and present frames. This seam supports **2x FG**: one
-intermediate frame per real-frame pair. The standalone runner also tests
-other interpolation phases; that is not a claim of in-game 4x/6x support.
+- **2x FG (`anr`)**: one intermediate frame (`t=0.5`) per real-frame pair. D3DMetal
+  continues to submit commands and present frames with zero presentation hook overhead.
+- **3x FG (`anr3x`, V.B20 only)**: two intermediate frames (`t=1/3` and `t=2/3`)
+  generated from a single shared pair-encoder pass. `t=1/3` writes to MetalFX's
+  output texture; `t=2/3` writes to a per-slot texture and is inserted right after
+  `t=1/3` via a lazy `CAMetalDrawable` / `MTL4CommandQueue` (Metal 4) or
+  `MTLCommandBuffer` (Metal 3) presentation hook with EMA-smoothed 1/3 pacing.
+- **Dynamic resolution & native encodings (V.B20 `fsr4_anr_runtime_v2`)**: serves
+  any resolution from `640x360` to `7680x4320` (e.g., `1710x1073`, `1920x1080`,
+  `2560x1440`, `3840x2160`) directly in native `srgb8`, `pq10`, or `scrgb16`
+  without SDR/PQ10 round-trip conversion.
 
-**Verified here:** model replay, reference quality gates, real MetalFX
-objects on Metal 3 and Metal 4, x86_64/Rosetta, opt-out/resume, reset and
-three frames in flight, plus stationary-image readback.
+**Verified here:** V.B20 dynamic replay, reference quality gates (`t=0.5` and `t=0.75`),
+real MetalFX objects on Metal 3 and Metal 4 (PQ10, linear HDR, and `1710x1073` native
+`srgb8`), x86_64/Rosetta, live `MetalFX <-> ANR 2x <-> ANR 3x` switching, `CAMetalLayer`
+3x frame insertion, motion-position checks (`t=0.5`, `t=1/3`, `t=2/3`), UI recomposition,
+and interleaved M5 A/B benchmarks.
 
-**Not yet verified:** a running CrossOver game's camera/color conventions,
-visual artifacts, UI behavior or presentation/frame pacing. This is an
-experimental integration, not a universal game-support claim.
+**Not yet verified:** long gameplay sessions across arbitrary CrossOver titles,
+game-specific camera/color conventions, or live 3x frame-pacing smoothness in every
+display/VSync configuration. This remains an experimental integration.
 
 ## Source of the model and shaders
 
@@ -66,6 +75,26 @@ required for ANR.
 
 ## Prepare local runtimes
 
+### Preparing `FG-V.B20` (recommended: dynamic resolution + 3x + M5 MPP)
+
+Download the official `anr-fg-V.B20-addon.zip` from
+https://github.com/apex-compute/ANR/releases/tag/FG-V.B20 (requires `spirv-cross`
+and Xcode's `metal` compiler; no Windows DLL or Metal Shader Converter SDK required):
+
+```sh
+python3 tools/anr/prepare.py --addon /path/to/anr-fg-V.B20-addon.zip \
+  --output build/anr_runtime_v20
+```
+
+This emits a single ~1.5 MB `fsr4_anr_runtime_v2` directory containing:
+- `manifest.json`, `program_{pq10,srgb8,scrgb16}.json`, and `weights_{pq10,srgb8,scrgb16}.bin`;
+- `kernels.metallib` (portable Metal 3.1/Apple7+ shaders with `optnone` stripped and
+  plain threadgroup loads/stores in gather kernels);
+- `kernels_mpp.metallib` (Metal 4.0 MPP NAX `conv_packed_m1` kernel automatically
+  used on `MTLGPUFamilyApple10` / Apple M5+, falling back cleanly on M1-M4).
+
+### Preparing legacy `FG-V.B14`
+
 Supply an extracted kit and an Apple Metal Shader Converter header directory.
 The headers can come from an existing SDK installation. This project does not
 install the SDK or silently download it. The conversion tool uses the C API
@@ -89,9 +118,7 @@ failed preparation does not expose a half-built runtime. Original kit
 files are not modified. The selected packs, weights and converter have
 pinned identities, and each generated runtime has an asset hash inventory.
 
-The complete generated runtime is about 3 MB per resolution. The large
-original archive consists mostly of test inputs/reference images, not model
-weights. All prepared/proprietary assets stay under ignored `build/`.
+All prepared/proprietary assets stay under ignored `build/`.
 
 ## Standalone model verification
 
@@ -138,27 +165,36 @@ as trained, with quality not validated.
 - Failure initialization is briefly cached to avoid recompiling or hashing
   a broken runtime on every encode.
 
-A calibrated Metal 4 timestamp A/B on M5 measured approximately 4.34 ms
-(separate encoders) vs 4.07 ms (grouped) for a 1080p pair plus one intermediate
-frame, eight warmups and 64 measured fixed-pair iterations. A later 1080p run
-measured 4.069 ms, split into roughly 2.227 ms pair work and 1.839 ms phase work.
-These are standalone GPU durations, **not game FPS or a guaranteed ceiling**.
-Thermal load and other work vary timings; later short runs included 5.27 ms.
-
-The optional packed graph passed the same reference gates and MetalFX
-PQ10/HDR, Metal 3/4 and queued-frame tests. Measured M5 inference for
-`t=0.5`: about **3.83 ms at 1080p, 6.91 ms at 1440p, 14.78 ms at 4K**.
-Its PSNR was respectively 83.90, 84.21 and 84.34 dB, so it trades a little
-numerical precision for speed without failing the test-kit thresholds.
-These are separate replay runs, not guaranteed game timings.
-
-At 4K the tested native complete inference was about 16 ms on M5. Increasing display
-resolution has a real cost. Import/export color/depth conversions add work
-in games whose textures do not already match the model's input.
-
-Raw GPU counter ticks are calibrated with `sampleTimestamps` and the CPU's
-Mach timebase. They are not assumed to be nanoseconds: the measured M5 tick
-was about 41.667 ns. Host wall time is reported separately.
+- **V.B20 shader & Metal 4 MPP optimizations (M5+)**:
+  - `strip_optnone_msl()` in `tools/anr/prepare.py` strips SPIR-V Cross
+    `[[clang::optnone]]` barriers around `spvFMul`/`spvFAdd`/`spvFSub` across all
+    33 kernels, allowing Metal's compiler to fuse FMA chains and eliminate dead
+    temporaries without hurting numerical parity.
+  - Gather kernels (`*gather*`) use plain threadgroup loads/stores outside atomic
+    phases (separated by `threadgroup_barrier`), reserving CAS loops strictly for
+    `atomic_fetch_add`.
+  - On Apple M5+ (`MTLGPUFamilyApple10`), `conv_packed_m1` automatically dispatches
+    the native Metal 4 `mpp::tensor_ops::matmul2d` NAX kernel (`kernels_mpp.metallib`)
+    with register `cooperative_tensor` accumulators and 15.5 KB `threadgroup union`
+    aliasing (toggleable via `FSR4_ANR_MPP=0`).
+  - Runtime DAG barrier elision (`FSR4_ANR_DAG_BARRIER=0` to disable),
+    `threadGroupSizeIsMultipleOfThreadExecutionWidth = YES`, cached per-slot
+    `MTLResidencySet`s, and zero-conversion native `srgb8`/`pq10`/`scrgb16`
+    bridge fast paths (`anr_import_dm` when only depth/motion need conversion).
+- **V.B20 measured M5 interleaved A/B results (1080p)**:
+  - **V.B20 optimized vs unoptimized V.B20**: **+17.6% to +21.1% faster** in 2x
+    (`B/A = 0.7888..0.8244`) and **+14.4% to +19.6% faster** in 3x (`B/A = 0.8044..0.8558`),
+    reaching **~3.85 ms** standalone boost-clock GPU time (`pair=1.91 ms`, `phase=1.89 ms`).
+  - **V.B20 optimized vs legacy V.B14 packed (`anr_runtime_fast`)**: **+11.7% faster**
+    at 1080p 2x (`B/A = 0.8828`).
+  - **V.B20 reference verification (`verify.py`, 1080p)**: `73.10 dB` at `t=0.5`
+    (gate `72.0 dB`) and `72.30 dB` at `t=0.75` (gate `71.0 dB`), both passed.
+- **V.B14 baseline timings (M5)**:
+  - Grouped encoders measured ~4.07 ms (native) / ~3.83 ms (packed) at 1080p,
+    6.91 ms at 1440p, and 14.78 ms at 4K.
+- Raw GPU counter ticks are calibrated with `sampleTimestamps` and the CPU's
+  Mach timebase (~41.667 ns on M5). Standalone GPU durations are **not game FPS
+  or a guaranteed ceiling**; thermal state and GPU clocks vary under load.
 
 ## Test the real MetalFX seam
 
@@ -222,9 +258,12 @@ accidentally testing only MetalFX.
 
 ### Live panel switch and native passthrough
 
-The panel offers `MetalFX / ANR` under `Генерация кадров`, with the visible
-orange warning `! Экспериментальная функция`. This selects an FG engine;
-DLSS Frame Generation must still be enabled in the game.
+The panel offers `MetalFX / ANR 2x / ANR 3x` under `Генерация кадров`, with the
+visible orange warning `! Экспериментальная функция`. This selects an FG engine
+and multiplier; DLSS Frame Generation must still be enabled in the game.
+Switching between `ANR 2x` and `ANR 3x` on a V.B20 runtime keeps pipelines and
+allocations warm (no reload hitch); `ANR 3x` requires a `fsr4_anr_runtime_v2`
+runtime and automatically falls back to 2x on legacy V.B14 runtimes.
 
 `dist/crossover/fg-settings.conf` stores only the FG choice, independently
 of SR `panel.conf`. The shared-root preference overrides `FSR4_FG` and is

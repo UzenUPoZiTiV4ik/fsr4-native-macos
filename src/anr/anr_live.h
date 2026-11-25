@@ -38,6 +38,11 @@ typedef struct Fsr4AnrStatus {
     Fsr4AnrUIMode uiMode;
     uint32_t uiSamples,uiChanged,uiSoft,uiOpaque,uiOpacitySum;
     float motionScaleX,motionScaleY,anrMotionScaleX,anrMotionScaleY;
+    uint32_t multiplier;
+    uint64_t generatedExtra3x;
+    int mppActive;
+    char release[24];
+    char encodingName[16];
 } Fsr4AnrStatus;
 // 1 generated and consumed, 2 history primed (run original without invalidating),
 // 0 rejected (run original and invalidate ANR history).
@@ -47,6 +52,16 @@ void fsr4_anr_release_owner(void *device,void *owner);
 void fsr4_anr_get_status(Fsr4AnrStatus *out);
 void fsr4_anr_set_inactive(const char *reason);
 void fsr4_anr_publish_passthrough(void);
+
+// 3x extra-frame presentation handoff (only active when ANR 3x is selected).
+// Returns:
+//   0 = no 3x pacing action needed
+//   1 = first interpolated frame (t=1/3) is being presented; caller presents it with
+//       *outStepSeconds, then immediately presents *outExtraTexture (CF-retained MTLTexture)
+//       with *outStepSeconds and calls fsr4_anr_release_extra_ticket(*outTicket, presented).
+//   2 = real frame following an inserted t=2/3 frame; caller paces it with *outStepSeconds.
+int fsr4_anr_on_present_event(void *device, void **outExtraTexture, double *outStepSeconds, uint64_t *outTicket);
+void fsr4_anr_release_extra_ticket(uint64_t ticket, int presented);
 
 static inline const char *fsr4_anr_frame_reason(const Fsr4AnrFrame *f) {
     if(!f || f->abiVersion!=FSR4_ANR_FG_ABI || f->structSize<sizeof(*f))return "ANR: incompatible FG ABI";

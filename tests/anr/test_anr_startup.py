@@ -65,11 +65,17 @@ class AnrStartupTest(unittest.TestCase):
     def test_anr_selected_at_dlopen_before_any_frame(self):
         self.startup("anr")
 
+    def test_anr3x_selected_at_dlopen_before_any_frame(self):
+        self.startup("anr3x",status_io=True)
+
     def test_metalfx_selected_at_dlopen(self):
         self.startup("metalfx")
 
     def test_file_anr_overrides_metalfx_before_dlopen(self):
         self.startup("metalfx","anr",status_io=True)
+
+    def test_file_anr3x_overrides_metalfx_before_dlopen(self):
+        self.startup("metalfx","anr3x",status_io=True)
 
     def test_file_metalfx_overrides_anr_before_dlopen(self):
         self.startup("anr","metalfx",status_io=True)
