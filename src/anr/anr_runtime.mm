@@ -113,6 +113,18 @@ struct Kernel {
     std::vector<Binding> bindings;
 };
 
+struct StageArguments {
+    id<MTLBuffer> buffer = nil;
+    id<MTL4ArgumentTable> table = nil;
+    bool initialized = false;
+    std::array<uint64_t, 4> externalIDs = {};
+};
+
+struct ExternalImage {
+    unsigned slot;
+    unsigned source; // color, depth, motion, output
+};
+
 struct Stage {
     std::string label;
     std::string kernel;
@@ -124,8 +136,10 @@ struct Stage {
     id<MTLBuffer> samplers = nil;
     id<MTLBuffer> root = nil;
     // v2 (B20) compact Tier-2 argument buffer:
-    id<MTLBuffer> argBuffer = nil;
-    id<MTL4ArgumentTable> arguments = nil;
+    id<MTL4ArgumentTable> arguments = nil; // v1
+    StageArguments parityArgs[2];
+    std::vector<ExternalImage> externalImages;
+    std::map<std::string, size_t> bufferOffsets;
     uint64_t bufferRevision = 0;
     std::map<std::string, unsigned> buffers;
     std::map<std::string, std::string> images;
@@ -267,6 +281,8 @@ struct Runtime::Impl {
     unsigned height = 0;
     uint64_t bufferRevision = 1;
     unsigned frameSlot = 0;
+    unsigned swapParity = 0;
+    id<MTLBuffer> scratchArena = nil;
 
     unsigned inputColor0 = 0, inputColor1 = 0, inputDepth0 = 0, inputDepth1 = 0, inputFrame = 0;
     std::vector<unsigned> persistentBuffers;
@@ -306,9 +322,9 @@ struct Runtime::Impl {
 
     id<MTLBuffer> alloc_private(size_t bytes) {
         const bool dumpMode = getenv("ANR_DUMP_BUFFERS") != nullptr;
-        const MTLResourceOptions opts = dumpMode
-            ? MTLResourceStorageModeShared
-            : (MTLResourceStorageModePrivate | MTLResourceHazardTrackingModeUntracked);
+        // Metal 3 needs tracked hazards across encoders (in particular the reset
+        // blit before the pair pass). Metal 4 is synchronized explicitly.
+        const MTLResourceOptions opts = dumpMode ? MTLResourceStorageModeShared : MTLResourceStorageModePrivate;
         return [device newBufferWithLength:std::max(bytes, size_t(256)) options:opts];
     }
 
@@ -409,50 +425,59 @@ struct Runtime::Impl {
     }
 
     bool prepare_stage_v2(Stage &stage, std::string &error) {
-        auto found = kernels.find(stage.kernel);
-        if (found == kernels.end()) return fail(error, "ANR kernel missing: " + stage.kernel);
-        Kernel &kernel = found->second;
-        const bool buffersUpToDate = stage.bufferRevision == bufferRevision;
-        if (buffersUpToDate && !stage.hasExternalImage) {
-            return true;
-        }
-        [kernel.argEncoder setArgumentBuffer:stage.argBuffer offset:0];
-        for (const Binding &binding : kernel.bindings) {
-            if (binding.kind == BindKind::Sampler) {
-                if (!buffersUpToDate) {
-                    [kernel.argEncoder setSamplerState:sampler atIndex:binding.index];
+        auto &args = stage.parityArgs[swapParity];
+        if (args.initialized && stage.externalImages.empty()) return true;
+        Kernel &kernel = kernels.at(stage.kernel);
+        auto encoder = kernel.argEncoder;
+        bool bound = false;
+        if (!args.initialized) {
+            [encoder setArgumentBuffer:args.buffer offset:0];
+            bound = true;
+            for (const Binding &binding : kernel.bindings) {
+                switch (binding.kind) {
+                    case BindKind::Sampler:
+                        [encoder setSamplerState:sampler atIndex:binding.index];
+                        break;
+                    case BindKind::Uniform:
+                        [encoder setBuffer:stage.constants offset:0 atIndex:binding.index];
+                        break;
+                    case BindKind::Buffer: {
+                        auto it = stage.buffers.find(binding.name);
+                        id<MTLBuffer> target = it == stage.buffers.end() ? empty : buffers.at(it->second);
+                        size_t offset = it == stage.buffers.end() ? 0 : stage.bufferOffsets.at(binding.name);
+                        [encoder setBuffer:target offset:offset atIndex:binding.index];
+                        break;
+                    }
+                    case BindKind::Texture:
+                    case BindKind::StorageTexture: {
+                        const auto &name = stage.images.at(binding.name);
+                        if (!internalTextures.count(name)) break; // bound below
+                        auto tex = resolve_texture(name, binding.r32uint, error);
+                        if (!tex) return false;
+                        [encoder setTexture:tex atIndex:binding.index];
+                        break;
+                    }
                 }
-                continue;
             }
-            if (binding.kind == BindKind::Uniform) {
-                if (!buffersUpToDate) {
-                    [kernel.argEncoder setBuffer:stage.constants offset:0 atIndex:binding.index];
-                }
-                continue;
-            }
-            if (binding.kind == BindKind::Texture || binding.kind == BindKind::StorageTexture) {
-                auto image = stage.images.find(binding.name);
-                if (image == stage.images.end()) {
-                    return fail(error, "ANR v2 unbound texture parameter: " + binding.name);
-                }
-                id<MTLTexture> tex = resolve_texture(image->second, binding.r32uint, error);
-                if (!tex) return false;
-                [kernel.argEncoder setTexture:tex atIndex:binding.index];
-                continue;
-            }
-            // Buffer binding.
-            if (buffersUpToDate) continue;
-            id<MTLBuffer> target = empty;
-            auto it = stage.buffers.find(binding.name);
-            if (it != stage.buffers.end()) {
-                target = buffers.at(it->second);
-            }
-            [kernel.argEncoder setBuffer:target offset:0 atIndex:binding.index];
         }
-        if (!stage.bufferRevision) {
-            [stage.arguments setAddress:stage.argBuffer.gpuAddress atIndex:0];
+        if (!stage.externalImages.empty()) {
+            id<MTLTexture> textures[] = {inputColor, inputDepth, inputMotion, output};
+            auto next = args.externalIDs;
+            for (const auto &image : stage.externalImages) {
+                auto tex = textures[image.source];
+                if (!tex) return fail(error, "ANR v2 missing external texture");
+                const uint64_t key = tex.gpuResourceID._impl;
+                if (args.initialized && args.externalIDs[image.source] == key) continue;
+                if (!bound) {
+                    [encoder setArgumentBuffer:args.buffer offset:0];
+                    bound = true;
+                }
+                [encoder setTexture:tex atIndex:image.slot];
+                next[image.source] = key;
+            }
+            args.externalIDs = next;
         }
-        stage.bufferRevision = bufferRevision;
+        args.initialized = true;
         return true;
     }
 
@@ -460,7 +485,8 @@ struct Runtime::Impl {
                        const std::vector<std::pair<std::vector<Stage> *, id<MTLTexture>>> &batches,
                        std::string &error,
                        id<MTL4CounterHeap> profileHeap = nil, unsigned profileBase = 0,
-                       std::vector<StageProfile> *profileOut = nullptr) {
+                       std::vector<StageProfile> *profileOut = nullptr, const FrameExtras &extras = {},
+                       bool fuseGroups = true) {
         if (metal4) {
             [(id<MTL4CommandBuffer>)command useResidencySet:residency];
             [(id<MTL4CommandBuffer>)command useResidencySet:borrowedSets[frameSlot]];
@@ -473,7 +499,7 @@ struct Runtime::Impl {
                 for (Stage &stage : *batch.first) {
                     m3Resources.push_back(stage.constants);
                     if (isV2) {
-                        m3Resources.push_back(stage.argBuffer);
+                        m3Resources.push_back(stage.parityArgs[swapParity].buffer);
                     } else {
                         m3Resources.push_back(stage.resources);
                         m3Resources.push_back(stage.samplers);
@@ -500,61 +526,66 @@ struct Runtime::Impl {
             ? MTL4VisibilityOptionDevice
             : MTL4VisibilityOptionNone;
         id encoder = nil;
-        bool firstInEncoder = true;
+        bool firstDispatch = true;
         unsigned stageIdx = 0;
+        auto closeEncoder = [&] {
+            [encoder endEncoding];
+            encoder = nil;
+        };
+        // A batch boundary always orders the two dispatches, even when the DAG
+        // for either batch alone has no hazard. This also protects helper I/O.
+        auto beginDispatch = [&](bool boundary, bool hazard) {
+            if (encoder && (!coalesced || (!fuseGroups && boundary))) closeEncoder();
+            if (!encoder) {
+                encoder = metal4 ? (id)[(id<MTL4CommandBuffer>)command computeCommandEncoder]
+                                 : (id)[(id<MTLCommandBuffer>)command computeCommandEncoder];
+                if (!encoder) return fail(error, "ANR compute encoder allocation failed");
+                if (metal4) {
+                    auto enc = (id<MTL4ComputeCommandEncoder>)encoder;
+                    [enc barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageDispatch
+                               visibilityOptions:MTL4VisibilityOptionDevice];
+                    if (firstDispatch && extras.fence) [enc waitForFence:extras.fence beforeEncoderStages:MTLStageDispatch];
+                } else {
+                    auto enc = (id<MTLComputeCommandEncoder>)encoder;
+                    [enc useResources:m3Resources.data() count:m3Resources.size() usage:MTLResourceUsageRead | MTLResourceUsageWrite];
+                    if (firstDispatch && extras.fence) [enc waitForFence:extras.fence];
+                }
+            } else if (boundary || hazard) {
+                if (metal4) {
+                    [(id<MTL4ComputeCommandEncoder>)encoder barrierAfterEncoderStages:MTLStageDispatch
+                                                                 beforeEncoderStages:MTLStageDispatch
+                                                                   visibilityOptions:boundary ? MTL4VisibilityOptionDevice : intraVis];
+                } else {
+                    [(id<MTLComputeCommandEncoder>)encoder memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
+                }
+            }
+            firstDispatch = false;
+            return true;
+        };
+        if (extras.import) {
+            if (!beginDispatch(true, false)) return false;
+            extras.import(encoder);
+        }
 
         for (size_t bIdx = 0; bIdx < batches.size(); ++bIdx) {
             auto &group = *batches[bIdx].first;
             for (size_t sIdx = 0; sIdx < group.size(); ++sIdx) {
                 Stage &stage = group[sIdx];
                 if (profiling) {
-                    if (encoder) {
-                        [encoder endEncoding];
-                        encoder = nil;
-                    }
                     [(id<MTL4CommandBuffer>)command writeTimestampIntoHeap:profileHeap atIndex:profileBase + stageIdx * 2];
                 }
-                if (!encoder) {
-                    if (metal4) {
-                        encoder = [(id<MTL4CommandBuffer>)command computeCommandEncoder];
-                    } else {
-                        encoder = [(id<MTLCommandBuffer>)command computeCommandEncoder];
-                    }
-                    if (!encoder) return fail(error, "ANR compute encoder allocation failed");
-                    if (metal4) {
-                        [(id<MTL4ComputeCommandEncoder>)encoder barrierAfterQueueStages:MTLStageAll
-                                                                           beforeStages:MTLStageDispatch
-                                                                      visibilityOptions:MTL4VisibilityOptionDevice];
-                    } else {
-                        [(id<MTLComputeCommandEncoder>)encoder useResources:m3Resources.data()
-                                                                      count:m3Resources.size()
-                                                                      usage:MTLResourceUsageRead | MTLResourceUsageWrite];
-                    }
-                    firstInEncoder = true;
-                }
-
-                // Always emit a barrier at batch boundary (pair -> phase, phase1 -> phase2)
-                // and whenever the stage dependency DAG indicates a hazard since the last barrier.
-                const bool needBar = !firstInEncoder && (sIdx == 0 || !dagBarriers || stage.needsBarrier);
+                if (!beginDispatch(sIdx == 0, !dagBarriers || stage.needsBarrier)) return false;
                 Kernel &kernel = kernels.at(stage.kernel);
                 if (metal4) {
                     auto enc = (id<MTL4ComputeCommandEncoder>)encoder;
-                    if (needBar) {
-                        [enc barrierAfterEncoderStages:MTLStageDispatch
-                                   beforeEncoderStages:MTLStageDispatch
-                                     visibilityOptions:intraVis];
-                    }
                     [enc setComputePipelineState:kernel.pipeline];
-                    [enc setArgumentTable:stage.arguments];
+                    [enc setArgumentTable:isV2 ? stage.parityArgs[swapParity].table : stage.arguments];
                     [enc dispatchThreadgroups:stage.groups threadsPerThreadgroup:stage.threads];
                 } else {
                     auto enc = (id<MTLComputeCommandEncoder>)encoder;
-                    if (needBar) {
-                        [enc memoryBarrierWithScope:MTLBarrierScopeBuffers | MTLBarrierScopeTextures];
-                    }
                     [enc setComputePipelineState:kernel.pipeline];
                     if (isV2) {
-                        [enc setBuffer:stage.argBuffer offset:0 atIndex:0];
+                        [enc setBuffer:stage.parityArgs[swapParity].buffer offset:0 atIndex:0];
                     } else {
                         [enc setBuffer:stage.root offset:0 atIndex:2];
                     }
@@ -562,24 +593,28 @@ struct Runtime::Impl {
                 }
 
                 if (profiling) {
-                    [encoder endEncoding];
-                    encoder = nil;
+                    closeEncoder();
                     [(id<MTL4CommandBuffer>)command writeTimestampIntoHeap:profileHeap atIndex:profileBase + stageIdx * 2 + 1];
                     if (profileOut) {
                         profileOut->push_back({stage.label, stage.kernel, 0.0});
                     }
-                } else if (!coalesced) {
-                    [encoder endEncoding];
-                    encoder = nil;
                 }
-                firstInEncoder = false;
                 ++stageIdx;
             }
+            if (bIdx && extras.exportPhase) {
+                if (!beginDispatch(true, false)) return false;
+                extras.exportPhase(encoder, unsigned(bIdx - 1));
+            }
         }
-
-        if (encoder) {
-            [encoder endEncoding];
+        if (extras.fence) {
+            if (metal4) [(id<MTL4ComputeCommandEncoder>)encoder updateFence:extras.fence afterEncoderStages:MTLStageDispatch];
+            else [(id<MTLComputeCommandEncoder>)encoder updateFence:extras.fence];
         }
+        if (extras.retire) {
+            if (!beginDispatch(true, false)) return false;
+            extras.retire(encoder);
+        }
+        closeEncoder();
         return true;
     }
 
@@ -828,6 +863,75 @@ struct Runtime::Impl {
         return true;
     }
 
+    // Plan offsets once for all wanted phases. A phase can run on its own, or
+    // after another phase with no intervening pair. Pair features must survive both.
+    bool plan_scratch(NSDictionary *variant, PhaseMode mode, const std::vector<size_t> &sizes,
+                      std::vector<size_t> &offsets, size_t &arenaBytes, std::string &error) {
+        using Interval = std::pair<size_t, size_t>; // inclusive dispatch ordinals
+        std::vector<std::vector<Interval>> spans(sizes.size());
+        NSDictionary *groups = variant[@"stages"];
+        NSMutableArray *order = [NSMutableArray arrayWithObject:@"pair"];
+        for (NSString *key in groups) {
+            if (![key isEqual:@"pair"] && stage_wanted(key, mode)) [order addObject:key];
+        }
+        size_t ordinal = 0;
+        const size_t pairEnd = [groups[@"pair"] count];
+        for (NSString *key in order) {
+            const size_t start = ordinal;
+            for (NSDictionary *stage in groups[key]) {
+                for (NSNumber *number in [stage[@"buffers"] allValues]) {
+                    unsigned index = number.unsignedIntValue;
+                    if (index >= sizes.size()) return fail(error, "ANR v2 invalid scratch reference");
+                    auto &uses = spans[index];
+                    if (uses.empty() || uses.back().first < start) uses.emplace_back(ordinal, ordinal);
+                    else uses.back().second = ordinal;
+                }
+                ++ordinal;
+            }
+        }
+        std::set<unsigned> dedicated;
+        for (NSNumber *index in [variant[@"inputs"] allValues]) dedicated.insert(index.unsignedIntValue);
+        for (NSArray *pair in variant[@"swaps"]) {
+            for (NSNumber *index in pair) dedicated.insert(index.unsignedIntValue);
+        }
+        std::vector<unsigned> scratch;
+        for (NSDictionary *record in variant[@"buffers"]) {
+            unsigned index = [record[@"index"] unsignedIntValue];
+            if (![record[@"kind"] isEqual:@"scratch"] || dedicated.count(index)) continue;
+            auto &uses = spans[index];
+            if (uses.size() > 1 && uses.front().first < pairEnd) {
+                uses = {{uses.front().first, ordinal - 1}};
+            }
+            scratch.push_back(index);
+        }
+        // Largest-first, lowest fitting address among already-placed live neighbors.
+        std::stable_sort(scratch.begin(), scratch.end(), [&](unsigned a, unsigned b) { return sizes[a] > sizes[b]; });
+        std::vector<unsigned> placed;
+        for (unsigned index : scratch) {
+            std::vector<Interval> occupied; // half-open byte ranges
+            for (unsigned other : placed) {
+                bool overlaps = false;
+                for (auto a : spans[index]) {
+                    for (auto b : spans[other]) {
+                        if (a.first <= b.second && b.first <= a.second) { overlaps = true; break; }
+                    }
+                    if (overlaps) break;
+                }
+                if (overlaps) occupied.emplace_back(offsets[other], offsets[other] + sizes[other]);
+            }
+            std::sort(occupied.begin(), occupied.end());
+            size_t offset = 0;
+            for (auto range : occupied) {
+                if (offset + sizes[index] <= range.first) break;
+                offset = std::max(offset, (range.second + 255) & ~size_t(255));
+            }
+            offsets[index] = offset;
+            arenaBytes = std::max(arenaBytes, offset + sizes[index]);
+            placed.push_back(index);
+        }
+        return true;
+    }
+
     bool init_v2(std::string &error, unsigned reqWidth, unsigned reqHeight, Encoding reqEncoding, PhaseMode phaseMode) {
         isV2 = true;
         releaseName = utf8(manifest[@"release"] ?: @"FG-V.B20");
@@ -846,8 +950,8 @@ struct Runtime::Impl {
         NSDictionary *files = manifest[@"files"];
         if (!verify_inventory(files, error)) return false;
 
-        NSDictionary *sizes = manifest[@"sizes"];
-        NSArray *minSz = sizes[@"min"], *maxSz = sizes[@"max"];
+        NSDictionary *limits = manifest[@"sizes"];
+        NSArray *minSz = limits[@"min"], *maxSz = limits[@"max"];
         const unsigned minW = [minSz[0] unsignedIntValue], minH = [minSz[1] unsignedIntValue];
         const unsigned maxW = [maxSz[0] unsignedIntValue], maxH = [maxSz[1] unsignedIntValue];
         if (reqWidth < minW || reqHeight < minH || reqWidth > maxW || reqHeight > maxH) {
@@ -924,16 +1028,37 @@ struct Runtime::Impl {
         id<MTLBlitCommandEncoder> initBlit = [initCmd blitCommandEncoder];
         if (!initBlit) return fail(error, "ANR v2 init blit encoder failed");
 
+        std::vector<size_t> sizes(buffers.size());
+        std::vector<size_t> offsets(buffers.size(), SIZE_MAX); // dedicated unless packed below
         for (NSDictionary *record in bufSpecs) {
             unsigned index = [record[@"index"] unsignedIntValue];
             int64_t sizeVal = 0;
             if (!resolve_int(record[@"size"], exprVals, sizeVal) || sizeVal <= 0 || sizeVal > (1LL << 30)) {
                 return fail(error, "ANR v2 invalid resolved buffer size");
             }
-            const size_t bytes = (size_t)sizeVal;
-            if (index >= buffers.size() || buffers[index]) {
+            if (index >= buffers.size() || sizes[index]) {
                 return fail(error, "ANR v2 duplicate/invalid buffer index");
             }
+            sizes[index] = (size_t)sizeVal;
+        }
+        const char *aliasEnv = getenv("FSR4_ANR_SCRATCH_ALIAS");
+        if ((!aliasEnv || strcmp(aliasEnv, "0") != 0) && !getenv("ANR_DUMP_BUFFERS")) {
+            size_t arenaBytes = 0;
+            if (!plan_scratch(selectedVariant, phaseMode, sizes, offsets, arenaBytes, error)) return false;
+            if (arenaBytes) {
+                scratchArena = alloc_private((arenaBytes + 255) & ~size_t(255));
+                if (!add_resident(scratchArena, error)) return false;
+                [initBlit fillBuffer:scratchArena range:NSMakeRange(0, scratchArena.length) value:0];
+                staticMetal3Resources.push_back(scratchArena);
+            }
+        }
+        for (NSDictionary *record in bufSpecs) {
+            unsigned index = [record[@"index"] unsignedIntValue];
+            if (offsets[index] != SIZE_MAX) {
+                buffers[index] = scratchArena;
+                continue;
+            }
+            const size_t bytes = sizes[index];
             buffers[index] = alloc_private(bytes);
             if (!add_resident(buffers[index], error)) return false;
 
@@ -992,7 +1117,6 @@ struct Runtime::Impl {
                                                                                              height:(NSUInteger)th
                                                                                           mipmapped:NO];
                 td.storageMode = MTLStorageModePrivate;
-                td.hazardTrackingMode = MTLHazardTrackingModeUntracked;
                 td.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
                 NSString *storageFmt = spec[@"storage_format"];
                 if ([storageFmt isEqual:@"r32_uint"]) {
@@ -1073,14 +1197,17 @@ struct Runtime::Impl {
         NSDictionary *stageRecords = selectedVariant[@"stages"];
         NSMutableSet *neededKernels = [NSMutableSet set];
         std::map<std::string, bool> kernelMul32;
+        std::map<std::string, NSUInteger> kernelMaxThreads;
         for (NSString *key in stageRecords) {
             if (!stage_wanted(key, phaseMode)) continue;
             for (NSDictionary *stage in stageRecords[key]) {
                 NSString *kstr = stage[@"kernel"];
                 [neededKernels addObject:kstr];
                 MTLSize th = extent_from_array(stage[@"threads"]);
-                const bool mul32 = ((th.width * th.height * th.depth) % 32u) == 0u;
+                const NSUInteger count = th.width * th.height * th.depth;
+                const bool mul32 = (count % 32u) == 0u;
                 const std::string ks = utf8(kstr);
+                kernelMaxThreads[ks] = std::max(kernelMaxThreads[ks], count);
                 auto it = kernelMul32.find(ks);
                 if (it == kernelMul32.end()) kernelMul32[ks] = mul32;
                 else it->second = it->second && mul32;
@@ -1108,8 +1235,10 @@ struct Runtime::Impl {
             id<MTLFunction> function = [useLib newFunctionWithName:entryName];
             if (!function) return fail(error, "ANR v2 missing function: " + utf8(entryName));
             const bool isMul32 = kernelMul32[utf8(key)];
+            const NSUInteger maxThreads = kernelMaxThreads.at(utf8(key));
             const auto cacheKey = std::make_pair((uintptr_t)(__bridge void *)device,
-                                                 useSha + ":" + utf8(entryName) + (isMul32 ? ":m32" : ":any"));
+                                                 useSha + ":" + utf8(entryName) + (isMul32 ? ":m32" : ":any")
+                                                 + ":t" + std::to_string(maxThreads));
             {
                 std::lock_guard<std::mutex> lock(g_pipelineMutex);
                 auto cached = g_pipelineCache.find(cacheKey);
@@ -1118,6 +1247,7 @@ struct Runtime::Impl {
                 } else {
                     MTLComputePipelineDescriptor *pd = [MTLComputePipelineDescriptor new];
                     pd.computeFunction = function;
+                    pd.maxTotalThreadsPerThreadgroup = maxThreads;
                     pd.threadGroupSizeIsMultipleOfThreadExecutionWidth = isMul32 ? YES : NO;
                     kernel.pipeline = [device newComputePipelineStateWithDescriptor:pd
                                                                             options:MTLPipelineOptionNone
@@ -1216,25 +1346,34 @@ struct Runtime::Impl {
                     for (NSString *name in record[@"buffers"]) {
                         unsigned index = [record[@"buffers"][name] unsignedIntValue];
                         if (index >= buffers.size()) return fail(error, "ANR v2 buffer reference invalid");
+                        stage.bufferOffsets.emplace(utf8(name), offsets[index] == SIZE_MAX ? 0 : offsets[index]);
                         stage.buffers.emplace(utf8(name), index);
                     }
                     for (NSString *name in record[@"images"]) {
                         const std::string target = utf8(record[@"images"][name]);
                         stage.images.emplace(utf8(name), target);
-                        if (target == "color" || target == "depth" || target == "motion" || target == "output") {
-                            stage.hasExternalImage = true;
-                        }
                     }
 
+                    for (const Binding &binding : kernel.bindings) {
+                        if (binding.kind != BindKind::Texture && binding.kind != BindKind::StorageTexture) continue;
+                        auto image = stage.images.find(binding.name);
+                        if (image == stage.images.end()) return fail(error, "ANR v2 unbound texture: " + binding.name);
+                        if (internalTextures.count(image->second)) continue;
+                        const std::array<std::string, 4> sources = {"color", "depth", "motion", "output"};
+                        auto source = std::find(sources.begin(), sources.end(), image->second);
+                        if (source == sources.end()) return fail(error, "ANR v2 unknown texture: " + image->second);
+                        stage.externalImages.push_back({binding.index, unsigned(source - sources.begin())});
+                    }
                     const NSUInteger argLen = std::max<NSUInteger>(kernel.argEncoder.encodedLength, 64);
-                    stage.argBuffer = alloc_shared(argLen);
-                    if (!add_resident(stage.argBuffer, error)) return false;
-                    std::memset(stage.argBuffer.contents, 0, stage.argBuffer.length);
-
                     MTL4ArgumentTableDescriptor *td = [MTL4ArgumentTableDescriptor new];
                     td.maxBufferBindCount = 1;
-                    stage.arguments = [device newArgumentTableWithDescriptor:td error:&metalError];
-                    if (!stage.arguments) return fail(error, "ANR v2 argument table: " + utf8(metalError.localizedDescription));
+                    for (auto &args : stage.parityArgs) {
+                        args.buffer = alloc_shared(argLen);
+                        if (!add_resident(args.buffer, error)) return false;
+                        args.table = [device newArgumentTableWithDescriptor:td error:&metalError];
+                        if (!args.table) return fail(error, "ANR v2 argument table: " + utf8(metalError.localizedDescription));
+                        [args.table setAddress:args.buffer.gpuAddress atIndex:0];
+                    }
 
                     slotStages.push_back(std::move(stage));
                 }
@@ -1249,7 +1388,8 @@ struct Runtime::Impl {
                         if (b.kind == BindKind::Buffer) {
                             auto bit = st.buffers.find(b.name);
                             if (bit == st.buffers.end()) continue;
-                            std::string id = "b:" + std::to_string(bit->second);
+                            // Logical buffer IDs alone miss WAR/WAW on reused arena bytes.
+                            std::string id = offsets[bit->second] == SIZE_MAX ? "b:" + std::to_string(bit->second) : "arena";
                             if (b.writable) { writes.insert(id); reads.insert(id); }
                             else { reads.insert(id); }
                         } else if (b.kind == BindKind::Texture || b.kind == BindKind::StorageTexture) {
@@ -1287,7 +1427,7 @@ struct Runtime::Impl {
             textureSwaps.emplace_back(utf8(pair[0]), utf8(pair[1]));
         }
 
-        for (id<MTLBuffer> b : buffers) staticMetal3Resources.push_back(b);
+        for (id<MTLBuffer> b : buffers) if (b != scratchArena) staticMetal3Resources.push_back(b);
         for (unsigned slot = 0; slot < 4; ++slot) staticMetal3Resources.push_back(frameBuffers[slot]);
         staticMetal3Resources.push_back(empty);
 
@@ -1416,26 +1556,26 @@ bool Runtime::encode_frame(id<MTL4CommandBuffer> command, id<MTLTexture> color,
                            id<MTLTexture> depth, id<MTLTexture> motion,
                            const void *frame, size_t frameBytes,
                            const double *phases, id<MTLTexture> const *outputs,
-                           unsigned phaseCount, std::string &error) {
-    return frame_combined(command, true, color, depth, motion, frame, frameBytes, phases, outputs, phaseCount, error);
+                           unsigned phaseCount, std::string &error, const FrameExtras &extras) {
+    return frame_combined(command, true, color, depth, motion, frame, frameBytes, phases, outputs, phaseCount, error, extras);
 }
 
 bool Runtime::encode_frame_classic(id<MTLCommandBuffer> command, id<MTLTexture> color,
                                    id<MTLTexture> depth, id<MTLTexture> motion,
                                    const void *frame, size_t frameBytes,
                                    const double *phases, id<MTLTexture> const *outputs,
-                                   unsigned phaseCount, std::string &error) {
-    return frame_combined(command, false, color, depth, motion, frame, frameBytes, phases, outputs, phaseCount, error);
+                                   unsigned phaseCount, std::string &error, const FrameExtras &extras) {
+    return frame_combined(command, false, color, depth, motion, frame, frameBytes, phases, outputs, phaseCount, error, extras);
 }
 
 bool Runtime::frame_combined(id command, bool metal4, id<MTLTexture> color, id<MTLTexture> depth,
                              id<MTLTexture> motion, const void *frame, size_t frameBytes,
                              const double *phases, id<MTLTexture> const *outputs,
-                             unsigned phaseCount, std::string &error) {
+                             unsigned phaseCount, std::string &error, const FrameExtras &extras) {
     auto &r = *impl;
     if (!r.initialized) return r.fail(error, "ANR runtime not initialized");
     if (!command || [command device] != r.device || !color || !depth || !motion
-        || !frame || frameBytes != 204 || phaseCount > 2) {
+        || !frame || frameBytes != 204 || phaseCount > 2 || (phaseCount && (!outputs || !phases))) {
         return r.fail(error, "ANR frame contract mismatch");
     }
     id<MTLTexture> o0 = phaseCount >= 1 ? outputs[0] : nil;
@@ -1446,13 +1586,7 @@ bool Runtime::frame_combined(id command, bool metal4, id<MTLTexture> color, id<M
     }
 
     const char *fuseEnv = getenv("FSR4_ANR_FUSE_GROUPS");
-    if (!fuseEnv || strcmp(fuseEnv, "1") != 0) {
-        if (!pair(command, metal4, color, depth, motion, frame, frameBytes, error)) return false;
-        for (unsigned p = 0; p < phaseCount; ++p) {
-            if (!interpolate(command, metal4, phases[p], outputs[p], error)) return false;
-        }
-        return true;
-    }
+    const bool fuse = !fuseEnv || strcmp(fuseEnv, "0") != 0;
 
     std::vector<std::pair<std::vector<Stage> *, id<MTLTexture>>> batches;
     batches.reserve(1 + phaseCount);
@@ -1464,6 +1598,7 @@ bool Runtime::frame_combined(id command, bool metal4, id<MTLTexture> color, id<M
         if (found == r.stages[r.frameSlot].end()) {
             return r.fail(error, std::string("ANR unsupported phase: ") + name);
         }
+        if (p && batches.back().first == &found->second) return r.fail(error, "ANR duplicate frame phase");
         batches.push_back({&found->second, outputs[p]});
     }
 
@@ -1479,7 +1614,7 @@ bool Runtime::frame_combined(id command, bool metal4, id<MTLTexture> color, id<M
         ++r.bufferRevision;
     }
     std::memcpy(r.frameBuffers[r.frameSlot].contents, frame, frameBytes);
-    return r.encode_groups(command, metal4, batches, error);
+    return r.encode_groups(command, metal4, batches, error, nil, 0, nullptr, extras, fuse);
 }
 
 bool Runtime::profile_pair(id<MTL4CommandBuffer> command, id<MTL4CounterHeap> heap,
@@ -1574,7 +1709,8 @@ void Runtime::swap_history() {
             std::swap(a->second, b->second);
         }
     }
-    ++r.bufferRevision;
+    if (r.isV2) r.swapParity ^= 1;
+    else ++r.bufferRevision;
 }
 
 } // namespace anr

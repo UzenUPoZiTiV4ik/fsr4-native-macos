@@ -19,6 +19,12 @@ inline float3 srgb_decode(float3 v){return select(pow((max(v,0.f)+.055f)/1.055f,
 inline float3 srgb_encode(float3 v){return select(1.055f*pow(max(v,0.f),float3(1.f/2.4f))-.055f,12.92f*v,v<=.0031308f);}
 // encoding bits 0..1: 0=linear HDR, 1=SDR code, 2=PQ10 code.
 // encoding bit 3 (8): V.B20 native passthrough (skip color transfer conversion).
+inline uint2 depth_motion_coord(uint2 gid, constant AnrConvert &p) {
+    if (p.renderWidth == p.width && p.renderHeight == p.height) return gid;
+    return min(uint2((float2(gid)+.5f)*float2(p.renderWidth,p.renderHeight)/float2(p.width,p.height)),
+               uint2(p.renderWidth-1,p.renderHeight-1));
+}
+
 kernel void anr_import(texture2d<float,access::read> color [[texture(0)]],
                        texture2d<float,access::read> depth [[texture(1)]],
                        texture2d<float,access::read> motion [[texture(2)]],
@@ -35,8 +41,7 @@ kernel void anr_import(texture2d<float,access::read> color [[texture(0)]],
         if(enc!=2u)rgb=pq_encode(rgb,p.whiteNits);
     }
     rgb=select(rgb,float3(0),!isfinite(rgb));pq.write(float4(rgb,1),gid);
-    uint2 low=min(uint2((float2(gid)+.5f)*float2(p.renderWidth,p.renderHeight)/float2(p.width,p.height)),
-                  uint2(p.renderWidth-1,p.renderHeight-1));
+    uint2 low=depth_motion_coord(gid,p);
     float z=depth.read(low).x;if(!isfinite(z))z=p.depthReversed?0:1;
     depthCopy.write(float4(z,0,0,0),gid);
     float2 mv=motion.read(low).xy;mv=select(mv,float2(0),!isfinite(mv));motionCopy.write(float4(mv,0,0),gid);
@@ -49,8 +54,7 @@ kernel void anr_import_dm(texture2d<float,access::read> depth [[texture(1)]],
                           texture2d<float,access::write> motionCopy [[texture(5)]],
                           constant AnrConvert &p [[buffer(0)]],uint2 gid [[thread_position_in_grid]]) {
     if(gid.x>=p.width||gid.y>=p.height)return;
-    uint2 low=min(uint2((float2(gid)+.5f)*float2(p.renderWidth,p.renderHeight)/float2(p.width,p.height)),
-                  uint2(p.renderWidth-1,p.renderHeight-1));
+    uint2 low=depth_motion_coord(gid,p);
     float z=depth.read(low).x;if(!isfinite(z))z=p.depthReversed?0:1;
     depthCopy.write(float4(z,0,0,0),gid);
     float2 mv=motion.read(low).xy;mv=select(mv,float2(0),!isfinite(mv));motionCopy.write(float4(mv,0,0),gid);
@@ -80,12 +84,11 @@ kernel void anr_export(texture2d<float,access::read> pq [[texture(0)]],
                 if(all(isfinite(clean))){
                     float3 delta=hud.rgb-clean;
                     uiDifference=max(abs(delta.x),max(abs(delta.y),abs(delta.z)));
-                    uiMagnitude=max(1.f,max(max(abs(clean.x),max(abs(clean.y),abs(clean.z))),
-                                           max(abs(hud.x),max(abs(hud.y),abs(hud.z)))));
                     // Minimum opacity consistent with a bounded RGB foreground.
                     // Supports negative wide-gamut scRGB values cleanly via lowerBound <= 0.
                     float upper=max(1.f,max(max(clean.x,max(clean.y,clean.z)),max(hud.x,max(hud.y,hud.z))));
                     float lowerBound=min(0.f,min(min(clean.x,min(clean.y,clean.z)),min(hud.x,min(hud.y,hud.z))));
+                    uiMagnitude=max(upper,-lowerBound);
                     float3 room=select(max(clean-float3(lowerBound),float3(1.e-7f)),
                                        max(float3(upper)-clean,float3(1.e-7f)),delta>=0.f);
                     float3 lowerOpacity=abs(delta)/room;

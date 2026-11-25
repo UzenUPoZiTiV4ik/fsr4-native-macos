@@ -356,9 +356,13 @@ std::shared_ptr<View> create(const Fsr4AnrFrame &f, MTLPixelFormat outputFmt,
     NSString *libraryPath = [[NSString stringWithUTF8String:root] stringByAppendingPathComponent:@"build/anr_helpers_ui_v2.metallib"];
     NSError *metalError = nil;
     id<MTLLibrary> library = [v->device newLibraryWithURL:[NSURL fileURLWithPath:libraryPath] error:&metalError];
-    auto pipeline = [&](NSString *name) -> id<MTLComputePipelineState> {
-        id<MTLFunction> fn = [library newFunctionWithName:name];
-        return fn ? [v->device newComputePipelineStateWithFunction:fn error:&metalError] : nil;
+    auto pipeline = [&](NSString *name, NSUInteger threads = 256) -> id<MTLComputePipelineState> {
+        MTLComputePipelineDescriptor *pd = [MTLComputePipelineDescriptor new];
+        pd.computeFunction = [library newFunctionWithName:name];
+        pd.maxTotalThreadsPerThreadgroup = threads;
+        pd.threadGroupSizeIsMultipleOfThreadExecutionWidth = threads == 256;
+        return pd.computeFunction ? [v->device newComputePipelineStateWithDescriptor:pd options:MTLPipelineOptionNone
+                                                                          reflection:nil error:&metalError] : nil;
     };
     if (!library) {
         error = "ANR helpers: " + std::string(metalError.localizedDescription.UTF8String);
@@ -367,7 +371,7 @@ std::shared_ptr<View> create(const Fsr4AnrFrame &f, MTLPixelFormat outputFmt,
     v->importPSO = pipeline(@"anr_import");
     v->importDmPSO = pipeline(@"anr_import_dm");
     v->exportPSO = pipeline(@"anr_export");
-    v->retirePSO = pipeline(@"anr_retire");
+    v->retirePSO = pipeline(@"anr_retire", 1);
 
     const MTLPixelFormat colorFmt = internal_color_format(v->runtime->is_v2(), v->runtime->encoding());
     v->color = tex(v->device, colorFmt, f.uw, f.uh);
@@ -439,9 +443,9 @@ float ui_noise_floor(MTLPixelFormat format) {
 }
 
 // which: 0 = anr_import, 1 = anr_export (primary), 2 = anr_retire, 3 = anr_import_dm, 4 = anr_export (extra 3x)
-bool helper(View &v, id command, bool metal4, int which,
-            id<MTLTexture> color, id<MTLTexture> depth, id<MTLTexture> motion,
-            id<MTLTexture> output, id<MTLFence> fence, id<MTLTexture> ui = nil) {
+void encode_helper(View &v, id encoder, bool metal4, int which,
+                   id<MTLTexture> color, id<MTLTexture> depth, id<MTLTexture> motion,
+                   id<MTLTexture> output, id<MTLTexture> ui = nil) {
     auto &slot = v.slots[v.activeSlot];
     const bool isImport = (which == 0 || which == 3);
     const bool isExport = (which == 1 || which == 4);
@@ -450,13 +454,10 @@ bool helper(View &v, id command, bool metal4, int which,
                                     : which == 3 ? (v.importDmPSO ?: v.importPSO)
                                     : isExport ? v.exportPSO
                                     : v.retirePSO;
-    const MTLSize threads = isRetire ? MTLSizeMake(1, 1, 1) : MTLSizeMake(v.width, v.height, 1);
+    const MTLSize groups = isRetire ? MTLSizeMake(1, 1, 1) : MTLSizeMake((v.width + 15) / 16, (v.height + 15) / 16, 1);
     const MTLSize group = isRetire ? MTLSizeMake(1, 1, 1) : MTLSizeMake(16, 16, 1);
     if (metal4) {
-        auto enc = [(id<MTL4CommandBuffer>)command computeCommandEncoder];
-        if (!enc) return false;
-        [enc barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageDispatch visibilityOptions:MTL4VisibilityOptionDevice];
-        if (isImport && fence) [enc waitForFence:fence beforeEncoderStages:MTLStageDispatch];
+        auto enc = (id<MTL4ComputeCommandEncoder>)encoder;
         id<MTL4ArgumentTable> args = isImport ? slot.importArgs
                                    : which == 1 ? slot.exportArgs
                                    : which == 4 ? slot.exportExtraArgs
@@ -473,13 +474,9 @@ bool helper(View &v, id command, bool metal4, int which,
         }
         [enc setComputePipelineState:pso];
         [enc setArgumentTable:args];
-        [enc dispatchThreads:threads threadsPerThreadgroup:group];
-        if (isExport && fence) [enc updateFence:fence afterEncoderStages:MTLStageDispatch];
-        [enc endEncoding];
+        [enc dispatchThreadgroups:groups threadsPerThreadgroup:group];
     } else {
-        auto enc = [(id<MTLCommandBuffer>)command computeCommandEncoder];
-        if (!enc) return false;
-        if (isImport && fence) [enc waitForFence:fence];
+        auto enc = (id<MTLComputeCommandEncoder>)encoder;
         [enc setComputePipelineState:pso];
         [enc setBuffer:isRetire ? slot.completion : slot.constants offset:0 atIndex:0];
         if (isExport) [enc setBuffer:slot.completion offset:16 atIndex:1];
@@ -491,11 +488,8 @@ bool helper(View &v, id command, bool metal4, int which,
             id<MTLTexture> textures[] = {v.generated, output, color, ui ?: color};
             for (unsigned i = 0; i < 4; ++i) [enc setTexture:textures[i] atIndex:i];
         }
-        [enc dispatchThreads:threads threadsPerThreadgroup:group];
-        if (isExport && fence) [enc updateFence:fence];
-        [enc endEncoding];
+        [enc dispatchThreadgroups:groups threadsPerThreadgroup:group];
     }
-    return true;
 }
 
 void update_slot_residency(FrameSlot &slot, id<MTLTexture> c, id<MTLTexture> d, id<MTLTexture> m,
@@ -742,87 +736,47 @@ int fsr4_anr_encode_frame(const Fsr4AnrFrame *frame) {
         const bool directExport = !ui && colorNative;
 
         bool ok = !priming || v.runtime->reset_history(command, metal4, error);
-        if (ok && !directImport) {
-            ok = helper(v, command, metal4, dmOnlyImport ? 3 : 0, color, depth, motion, output, fence);
-        } else if (ok && fence) {
-            if (metal4) {
-                auto enc = [(id<MTL4CommandBuffer>)command computeCommandEncoder];
-                ok = enc != nil;
-                if (enc) {
-                    [enc waitForFence:fence beforeEncoderStages:MTLStageDispatch];
-                    [enc endEncoding];
-                }
-            } else {
-                auto enc = [(id<MTLCommandBuffer>)command computeCommandEncoder];
-                ok = enc != nil;
-                if (enc) {
-                    [enc waitForFence:fence];
-                    [enc endEncoding];
-                }
-            }
+        const unsigned phaseCount = priming ? 0 : (want3x ? 2 : 1);
+        const double phases[] = {want3x ? 1.0 / 3.0 : 0.5, 2.0 / 3.0};
+        id<MTLTexture> targets[] = {directExport ? output : v.generated,
+                                    directExport ? slot.extraOutput : v.generated};
+        anr::FrameExtras extras;
+        extras.fence = fence;
+        if (!directImport) {
+            extras.import = ^(id enc) {
+                encode_helper(v, enc, metal4, dmOnlyImport ? 3 : 0, color, depth, motion, output);
+            };
         }
-
-        id<MTLTexture> pairColor = (directImport || dmOnlyImport) ? color : v.color;
-        id<MTLTexture> pairDepth = directImport ? depth : v.depth;
-        id<MTLTexture> pairMotion = directImport ? motion : v.motion;
-        id<MTLTexture> target1 = directExport ? output : v.generated;
-
-        if (ok) {
-            ok = metal4
-                ? v.runtime->encode_pair(command, pairColor, pairDepth, pairMotion, hardFrame, sizeof hardFrame, error)
-                : v.runtime->encode_pair_classic(command, pairColor, pairDepth, pairMotion, hardFrame, sizeof hardFrame, error);
+        if (!directExport) {
+            extras.exportPhase = ^(id enc, unsigned phase) {
+                encode_helper(v, enc, metal4, phase ? 4 : 1, color, depth, motion, phase ? slot.extraOutput : output, ui);
+            };
         }
-
-        const double phase1 = want3x ? (1.0 / 3.0) : 0.5;
-        if (ok && !priming) {
-            ok = metal4
-                ? v.runtime->encode_interpolation(command, phase1, target1, error)
-                : v.runtime->encode_interpolation_classic(command, phase1, target1, error);
-        }
-        if (ok && !priming && !directExport) {
-            // Delay fence update until after phase 2/3 when 3x is active.
-            ok = helper(v, command, metal4, 1, color, depth, motion, output, want3x ? nil : fence, ui);
-        }
-
-        // In 3x mode, encode the second intermediate frame (t = 2/3) into slot.extraOutput
-        // on the same command buffer (reusing the pair features computed once above!).
-        bool encodedExtra = false;
-        if (ok && !priming && want3x) {
-            id<MTLTexture> target2 = directExport ? slot.extraOutput : v.generated;
-            ok = metal4
-                ? v.runtime->encode_interpolation(command, 2.0 / 3.0, target2, error)
-                : v.runtime->encode_interpolation_classic(command, 2.0 / 3.0, target2, error);
-            if (ok && !directExport) {
-                ok = helper(v, command, metal4, 4, color, depth, motion, slot.extraOutput, fence, ui);
-            }
-            encodedExtra = ok;
-        }
-
-        if (ok && directExport && fence) {
-            if (metal4) {
-                auto enc = [(id<MTL4CommandBuffer>)command computeCommandEncoder];
-                ok = enc != nil;
-                if (enc) {
-                    [enc barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageDispatch visibilityOptions:MTL4VisibilityOptionDevice];
-                    [enc updateFence:fence afterEncoderStages:MTLStageDispatch];
-                    [enc endEncoding];
-                }
-            } else {
-                auto enc = [(id<MTLCommandBuffer>)command computeCommandEncoder];
-                ok = enc != nil;
-                if (enc) {
-                    [enc updateFence:fence];
-                    [enc endEncoding];
-                }
-            }
-        }
-
         if (metal4) {
-            if (!helper(v, command, true, 2, nil, nil, nil, nil, nil)) {
+            extras.retire = ^(id enc) { encode_helper(v, enc, true, 2, nil, nil, nil, nil); };
+        }
+        if (ok) {
+            id<MTLTexture> pairColor = (directImport || dmOnlyImport) ? color : v.color;
+            id<MTLTexture> pairDepth = directImport ? depth : v.depth;
+            id<MTLTexture> pairMotion = directImport ? motion : v.motion;
+            ok = metal4
+                ? v.runtime->encode_frame(command, pairColor, pairDepth, pairMotion, hardFrame, sizeof hardFrame,
+                                          phases, targets, phaseCount, error, extras)
+                : v.runtime->encode_frame_classic(command, pairColor, pairDepth, pairMotion, hardFrame, sizeof hardFrame,
+                                                  phases, targets, phaseCount, error, extras);
+        }
+        const bool encodedExtra = ok && phaseCount == 2;
+        if (metal4 && !ok) {
+            // A partial frame still owns its slot until any submitted work retires.
+            auto enc = [(id<MTL4CommandBuffer>)command computeCommandEncoder];
+            if (!enc) {
                 v.failed = true;
                 return reject("ANR: completion encoder unavailable; resources retained");
             }
-        } else {
+            [enc barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageDispatch visibilityOptions:MTL4VisibilityOptionDevice];
+            extras.retire(enc);
+            [enc endEncoding];
+        } else if (!metal4) {
             const auto retained = view;
             const unsigned index = v.activeSlot;
             [(id<MTLCommandBuffer>)command addCompletedHandler:^(id<MTLCommandBuffer> done) {

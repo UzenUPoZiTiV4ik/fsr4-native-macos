@@ -31,6 +31,15 @@ struct StageProfile {
     double gpuMs = 0.0;
 };
 
+// Optional synchronous helper dispatches on the same compute encoder as inference.
+// Helpers bind their own resources but do not insert barriers or end the encoder.
+struct FrameExtras {
+    id<MTLFence> fence = nil;
+    void (^import)(id encoder) = nil;
+    void (^exportPhase)(id encoder, unsigned phaseIndex) = nil;
+    void (^retire)(id encoder) = nil;
+};
+
 class Runtime {
 public:
     Runtime(id<MTLDevice> device, const std::string &directory);
@@ -70,12 +79,12 @@ public:
                       id<MTLTexture> depth, id<MTLTexture> motion,
                       const void *frame, size_t frameBytes,
                       const double *phases, id<MTLTexture> const *outputs,
-                      unsigned phaseCount, std::string &error);
+                      unsigned phaseCount, std::string &error, const FrameExtras &extras = {});
     bool encode_frame_classic(id<MTLCommandBuffer> command, id<MTLTexture> color,
                               id<MTLTexture> depth, id<MTLTexture> motion,
                               const void *frame, size_t frameBytes,
                               const double *phases, id<MTLTexture> const *outputs,
-                              unsigned phaseCount, std::string &error);
+                              unsigned phaseCount, std::string &error, const FrameExtras &extras = {});
 
     // Per-stage Metal 4 GPU profiling helpers (writes timestamps before/after each dispatch).
     bool profile_pair(id<MTL4CommandBuffer> command, id<MTL4CounterHeap> heap,
@@ -107,7 +116,7 @@ private:
     bool frame_combined(id command, bool metal4, id<MTLTexture> color, id<MTLTexture> depth,
                         id<MTLTexture> motion, const void *frame, size_t bytes,
                         const double *phases, id<MTLTexture> const *outputs,
-                        unsigned phaseCount, std::string &error);
+                        unsigned phaseCount, std::string &error, const FrameExtras &extras);
     std::unique_ptr<Impl> impl;
 };
 
