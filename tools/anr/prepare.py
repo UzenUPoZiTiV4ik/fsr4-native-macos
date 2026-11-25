@@ -458,7 +458,7 @@ inline float tg_atomic_add_f32(threadgroup float *ptr, float delta) {
     return head + helper + body
 
 
-def translate_spv_kernel(spv_bytes, slang_reflection, entry_name, work_dir):
+def translate_spv_kernel(spv_bytes, slang_reflection, entry_name, work_dir, kernel_key=None):
     spv_path = work_dir / (entry_name + ".spv")
     msl_path = work_dir / (entry_name + ".metal")
     air_path = work_dir / (entry_name + ".air")
@@ -500,6 +500,8 @@ def translate_spv_kernel(spv_bytes, slang_reflection, entry_name, work_dir):
         msl_code = rewrite_pushpull_tail_msl(msl_code)
     if "(threadgroup atomic_float*)" in msl_code:
         msl_code = rewrite_tg_float_atomics_msl(msl_code)
+    import opt_gather
+    msl_code = opt_gather.optimize_gather_msl(kernel_key, msl_code)
     msl_path.write_text(msl_code)
 
     subprocess.run(
@@ -701,7 +703,7 @@ def prepare_v20(addon, output, backend="packed"):
             prefix = module.removesuffix(".slang") + "/" + module + "." + entry
             slang_refl = json.loads(kernels_main[prefix + ".json"])
             spv_bytes = kernels_main[prefix + ".spv"]
-            air_path, meta, ufields = translate_spv_kernel(spv_bytes, slang_refl, "k" + str(index), compile_dir)
+            air_path, meta, ufields = translate_spv_kernel(spv_bytes, slang_refl, "k" + str(index), compile_dir, kernel_key)
             return kernel_key, str(air_path), meta, ufields
 
         with ThreadPoolExecutor(max_workers=8) as pool:
