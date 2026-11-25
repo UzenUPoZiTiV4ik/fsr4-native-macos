@@ -7,12 +7,35 @@ Works as a standalone tool and inside games via CrossOver (DLSS → FSR 4).
 
 - `src/` is split by concern: shared device/backend/input helpers in `src/common/`, the live-game hook layer and panel in `src/live/`, the legacy FSR 4.0.2 runtime in `src/fsr402/`, the FSR 4.1.1/4.1.2 runtimes in `src/fsr41x/` (Metal kernels in `src/fsr41x/shaders/`), the experimental ANR frame-generation runtime in `src/anr/`, the Netal input layer in `src/netal/`, and the standalone CLI binaries in `src/cli/`. Core FSR 4.1.1 runtime interfaces live in [src/fsr41x/fsr411_runtime.h](src/fsr41x/fsr411_runtime.h), FSR 4.1.2 session management in [src/fsr41x/fsr412_session.inc](src/fsr41x/fsr412_session.inc), and the MetalFX interception layer in [hook/fsr4_metalfx.m](hook/fsr4_metalfx.m).
 - `tools/` is grouped per model and task: `tools/fsr402/`, `tools/fsr411/` and `tools/fsr412/` hold the per-model importers, compilers and weight pipelines, `tools/common/` the shared parsers, plus `tools/netal/`, `tools/anr/`, `tools/crossover/` (bottle integration via [tools/crossover/crossover_fsr4.py](tools/crossover/crossover_fsr4.py)), `tools/installer/`, `tools/bench/` and `tools/diagnostics/`. Weight importers and pinned graphs: the adjusted `int8-lite-lossy` and `lossy2` profiles pin the `dll-2026-11-22` release through [tools/fsr412/nov22_weights.py](tools/fsr412/nov22_weights.py) and [tools/fsr411/lossy2.py](tools/fsr411/lossy2.py).
-- `tests/` mirrors the same split: `tests/core/`, `tests/fsr402/`, `tests/fsr411/`, `tests/fsr412/`, `tests/anr/`, `tests/netal/`, `tests/crossover/`, `tests/bench/`, `tests/installer/` and `tests/common/`. [Makefile](Makefile) defines build and verification targets including `make test` and `make test-fsr412-lossy`, and [docs/releases/v3.3.md](docs/releases/v3.3.md) tracks the current weight pins and macOS 27 hook changes.
+- `tests/` mirrors the same split: `tests/core/`, `tests/fsr402/`, `tests/fsr411/`, `tests/fsr412/`, `tests/anr/`, `tests/netal/`, `tests/crossover/`, `tests/bench/`, `tests/installer/` and `tests/common/`. [Makefile](Makefile) defines build and verification targets including `make test` and `make test-fsr412-lossy`, and [docs/releases/v4.0.md](docs/releases/v4.0.md) is the latest release (weight pins are unchanged since [v3.3](docs/releases/v3.3.md)).
 - Generated directories. `build/` stores compiled binaries, shader caches, and imported external weights, whereas `dist/crossover/` contains the live hook, settings and backups for source installs. Release ZIPs and DMGs go under `dist/release/`.
 
-## M5 performance: 1080p and 1440p (v3.0)
+## M5 performance: v4.0 speedups (2026-11-25)
 
-**Fresh 2026-11-02 measurements on a fanless MacBook Air M5, 16 GB.**
+**v4.0 makes every backend faster** ([release notes](docs/releases/v4.0.md)):
+the Lite Lossy reuse cache is halved to 16 bytes per pixel with specialized
+full/reuse kernels, exact Winograd covers all eligible 3x3 convolution blocks
+on the SIMD backend, and the M5 MPP path gains probe-verified fast kernels.
+Before/after GPU milliseconds per upscaled frame on one fanless M5 (synthetic
+input contract, single-session measurement; lower is faster, **not game FPS**):
+
+| Lite Lossy mode | Before | After (full / reused) | Frame time |
+| --- | ---: | ---: | ---: |
+| 1080p MPP | 2.410 | 1.886 (2.46 / 1.31) | **-21.7%** (+28% FPS) |
+| 1440p MPP | 5.097 | 3.321 (4.30 / 2.34) | **-34.8%** (+54% FPS) |
+| 4K MPP | 12.733 | 7.637 (9.94 / 5.34) | **-40.0%** (+67% FPS) |
+| 1080p SIMD | 3.322 | 2.593 (3.87 / 1.31) | **-21.9%** (+28% FPS) |
+| 1440p SIMD | 5.776 | 4.698 (7.04 / 2.36) | **-18.7%** (+23% FPS) |
+
+At 4K, Lite Lossy (7.64 ms) is now **faster than ordinary Lite** (8.57 ms)
+while evaluating its network only half of the frames. The convolution work
+alone is worth -6..-9% frame time on the MPP backend and -9..-14% on SIMD
+across Lite, Exact and Lossy2 (e.g. SIMD Exact-Fast 1440p: 14.46 -> 12.52 ms).
+
+## M5 performance: 1080p and 1440p model comparison (v3.0 baseline)
+
+**These absolute numbers are the pre-v4.0 baseline** (2026-11-02, fanless
+MacBook Air M5, 16 GB); v4.0 improves on them per the table above.
 Values are **whole-upscaler GPU milliseconds, not game FPS**; lower is faster.
 Each value is the median of 12 round means, with **768 measured frames per
 model, backend and resolution**. Observed ranges and P99 are linked below.
@@ -81,7 +104,7 @@ Older recorded-capture measurements remain in
 
 ## Easiest: the FSR4 Installer app
 
-1. Download **FSR4-Installer-v3.0.dmg** from the
+1. Download **FSR4-Installer-v4.0.dmg** from the
    [latest release](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/releases/latest)
    and drag **FSR4 Installer** to Applications.
 2. First launch: the app is not notarized, so macOS blocks it. Open
@@ -210,8 +233,8 @@ make test-fsr411-mpp-fast  # GPU-probed M5 kernels and forced fallback
 make test-fsr-pre-m5      # forced SIMD and exact Winograd
 ```
 
-Build the installer app and DMG: `make installer INSTALLER_VERSION=v3.3`
-(or `python3 tools/installer/build_app.py v3.3 --dmg`).
+Build the installer app and DMG: `make installer INSTALLER_VERSION=v4.0`
+(or `python3 tools/installer/build_app.py v4.0 --dmg`).
 
 ## Documentation
 
@@ -222,6 +245,7 @@ Build the installer app and DMG: `make installer INSTALLER_VERSION=v3.3`
 | FSR 4.1.2 Lossy (formerly Lite 2) | [docs/FSR411_LOSSY2.md](docs/FSR411_LOSSY2.md) |
 | Lite Lossy, tiled inference and new temporal repairs | [docs/FSR412_LOSSY.md](docs/FSR412_LOSSY.md) |
 | Original-shader oracle, geometry and POST CNB | [docs/FSR412_UPSTREAM_ORACLE.md](docs/FSR412_UPSTREAM_ORACLE.md) |
+| v4.0 release notes: faster Lite Lossy, wider Winograd, MPP fast paths | [docs/releases/v4.0.md](docs/releases/v4.0.md) |
 | v3.3 Lossy weights and macOS 27 hook fix | [docs/releases/v3.3.md](docs/releases/v3.3.md) |
 | v3.2 release notes: hook startup fix and experimental new-look | [docs/releases/v3.2.md](docs/releases/v3.2.md) |
 | Experimental Lite Lossy new-look: limits and measurements | [docs/FSR412_NEW_LOOK.md](docs/FSR412_NEW_LOOK.md) |
