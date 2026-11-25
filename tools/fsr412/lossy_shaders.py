@@ -503,10 +503,25 @@ def apply_lossy_pre(text, tier, low_res_mv=True, depth_inverted=False, reuse_onl
         closing = _close(text, sample.end() - 1)
         args = argument_list(text[sample.end():closing])
         _require(len(args) == 2 and args[1] == "0u", "velocity sample mip")
-        depth = (
-            "r_depth.read(uint2(clamp(int2(" + args[0] + "), int2(0), "
-            "int2(MLSR_Optimized_Constants.width_lr, MLSR_Optimized_Constants.height_lr)-int2(1))),0u).x"
+        # Dilation reads unclamped coordinates. Only its interior winner can
+        # be returned verbatim; the original record clamps an exterior winner.
+        final = _one(r"(r_depth\.read\(uint2\(uint2\(_\d+\)\), 0u\)\.x) ([<>]) "
+                     r"(\(_\d+ \? _\d+ : _\d+\))", args[0], "final dilation comparison")
+        _require(final[2] == (">" if depth_inverted else "<"), "final depth direction")
+        coord = args[0].replace(final[0], "fsr412LastWins")
+        declarations = (
+            f"        const float fsr412LastDepth = {final[1]};\n"
+            f"        const float fsr412PriorDepth = {final[3]};\n"
+            f"        const bool fsr412LastWins = fsr412LastDepth {final[2]} fsr412PriorDepth;\n"
+            f"        const uint2 fsr412Winner = {coord};\n"
         )
+        line = text.rindex("\n", 0, sample.start()) + 1
+        text = text[:line] + declarations + text[line:sample.end()] + "fsr412Winner, 0u" + text[closing:]
+        depth = ("(all(fsr412Winner < uint2(MLSR_Optimized_Constants.width_lr, MLSR_Optimized_Constants.height_lr)) "
+                 "? (fsr412LastWins ? fsr412LastDepth : fsr412PriorDepth) "
+                 ": r_depth.read(uint2(clamp(int2(fsr412Winner), int2(0), "
+                 "int2(MLSR_Optimized_Constants.width_lr, MLSR_Optimized_Constants.height_lr)-int2(1))), 0u).x)")
+        write = _one(r"^        rw_reprojected_color\.write\([^\n;]+, uint2\((" + _NAME + r")\)\);$", text, "reprojection store")
         if depth_inverted:
             depth = "-(" + depth + ")"
     else:
@@ -789,7 +804,7 @@ def apply_lossy_post(text, tier, new_look=False, mode="unified"):
                     fsr412Hi = max(fsr412Hi, v);
                 }}
             }}
-            float3 {blend_var} = Fsr412LossyResolve(fsr412Current, fsr412RepCenter[fsr412SubY * 2 + fsr412SubX], {history_var}, fsr412Samples,
+            float3 {blend_var} = Fsr412LossyResolve(fsr412Current, float3(r_reprojected_color.read(uint2({pixel_var}), 0u).xyz), {history_var}, fsr412Samples,
                 fsr412Lo, fsr412Hi, fsr412LumaFinite, fsr412AtRest, fsr412OtherMotion, fsr412Uncovered);"""
 
         _require(new_body.count(blend_after[0]) == 1, "reuse blend replacement")
@@ -810,8 +825,13 @@ def apply_lossy_post(text, tier, new_look=False, mode="unified"):
             text = _rewrite_new_look_history_stores(text, body, loop_var, blend_var)
 
         # Insert threadgroup memory tiles at kernel start and cooperative loads before early-out.
-        rep_type = "half4" if new_look else "half3"
-        rep_read_expr = "r_reprojected_color.read(uint2(p), 0u)" if new_look else "r_reprojected_color.read(uint2(p), 0u).xyz"
+        # Plain reuse needs only neighborhood luma. Compute it once per
+        # staged texel, and read each output pixel's RGB center in the loop.
+        rep_type = "half4" if new_look else "float"
+        rep_tile = "fsr412RepTile" if new_look else "fsr412RepLumaTile"
+        rep_read_expr = "r_reprojected_color.read(uint2(p), 0u)"
+        if not new_look:
+            rep_read_expr = f"Fsr412LossyLuma(float3({rep_read_expr}.xyz))"
         mot_read_expr = (
             "short2(Fsr412LookMotion(c, Fsr412LossyMotion, MLSR_Optimized_Constants))"
             if new_look
@@ -819,7 +839,7 @@ def apply_lossy_post(text, tier, new_look=False, mode="unified"):
         )
         kernel_open = _one(r"kernel void \w+\([^\n]*\)\n\{\n", text, "reuse kernel open")
         tg_decls = (
-            f"    threadgroup {rep_type} fsr412RepTile[34 * 34];\n"
+            f"    threadgroup {rep_type} {rep_tile}[34 * 34];\n"
             f"    threadgroup short2 fsr412MotTile[32 * 32];\n"
         )
         text = text[:kernel_open.end()] + tg_decls + text[kernel_open.end():]
@@ -831,7 +851,7 @@ def apply_lossy_post(text, tier, new_look=False, mode="unified"):
             for (uint i = gl_LocalInvocationID.x; i < 34u * 34u; i += 256u)
             {{
                 const int2 p = clamp(fsr412RepOrigin + int2(int(i % 34u), int(i / 34u)), int2(0), fsr412TileOutMax);
-                fsr412RepTile[i] = {rep_read_expr};
+                {rep_tile}[i] = {rep_read_expr};
             }}
             const int2 fsr412MotOrigin = int2(gl_WorkGroupID.xy * uint2(16u)) - int2(8);
             const int2 fsr412MotMax = int2(MLSR_Optimized_Constants.width / 2u, MLSR_Optimized_Constants.height / 2u) - int2(1);
@@ -886,17 +906,13 @@ def apply_lossy_post(text, tier, new_look=False, mode="unified"):
             }}
         }}
         float fsr412RepLuma[16];
-        float3 fsr412RepCenter[4];
         {{
             const int2 repLoc = fsr412LocCell * int2(2);
             for (int ry = 0; ry < 4; ++ry)
             {{
                 for (int rx = 0; rx < 4; ++rx)
                 {{
-                    float3 c = float3(fsr412RepTile[uint(repLoc.y + ry) * 34u + uint(repLoc.x + rx)]);
-                    fsr412RepLuma[ry * 4 + rx] = Fsr412LossyLuma(c);
-                    if (rx >= 1 && rx <= 2 && ry >= 1 && ry <= 2)
-                        fsr412RepCenter[(ry - 1) * 2 + (rx - 1)] = c;
+                    fsr412RepLuma[ry * 4 + rx] = fsr412RepLumaTile[uint(repLoc.y + ry) * 34u + uint(repLoc.x + rx)];
                 }}
             }}
         }}

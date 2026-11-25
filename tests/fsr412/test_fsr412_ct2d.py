@@ -64,9 +64,9 @@ class PostColorTile(unittest.TestCase):
         for path in self.posts():
             with self.subTest(path=path.parent.name):
                 result = post_color_tile(path.read_text())
-                self.assertEqual(result.count("fsr412PostTile[fsr412_tile_index("), 9)
+                self.assertEqual(result.count("fsr412_post_read(fsr412PostTile, fsr412TapBase + "), 9)
                 self.assertNotIn("r_prepared_color.read(uint2(uint2(clamp(int2(uint2(", result)
-                self.assertIn("threadgroup float3 fsr412PostTile[%d];" % (POST_TILE_SIDE ** 2), result)
+                self.assertIn("threadgroup packed_float3 fsr412PostTile[%d];" % (POST_TILE_SIDE ** 2), result)
                 # The fill and its barrier precede the first early exit.
                 self.assertLess(result.index("threadgroup_barrier(mem_flags::mem_threadgroup);"),
                                 result.index("        if (any("))

@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include "fsr4_input.h"
 #include "fsr4_log.h"
@@ -285,8 +286,10 @@ struct Session {
 struct FrameSlot {
     static constexpr size_t kSize = 32768, kDone = kSize - 4;
     id<MTLBuffer> constants = nil;
-    NSMutableDictionary *tables = nil;
-    NSMutableArray *resources = nil;
+    std::unordered_map<std::string,id<MTL4ArgumentTable>> tables;
+    std::vector<id<MTLAllocation>> resources;
+    // Strong pointer identities: an address can't be recycled between frames.
+    std::vector<id<MTLAllocation>> residencyKey;
     id<MTLResidencySet> residency = nil;
     std::shared_ptr<FrameSnapshot> snapshot;
     StageProfiler *stageProfiler = nullptr;
@@ -320,6 +323,7 @@ struct View {
     bool cacheValid = false, skippedInference = false, partialInference = false;
     bool qualityValid = false, retrainedWeights = false;
     bool zeroScratch = true, zeroTargets = true;
+    bool usedMetal4Intermediates = false;
     void invalidate() { fsr4_input_invalidate(&inputHistory);cacheValid=false;qualityValid=false;partialInference=false; }
 };
 
@@ -341,9 +345,10 @@ public:
         if (source == output) { error="overlapping placeholder output copy requires a separate texture";return false; }
         if (!ensure_helpers(error)) return false;
         auto slot=acquire_slot(lifetime,error); if(!slot) return false;
-        [slot->resources addObjectsFromArray:@[slot->constants,source,output]];
+        slot->resources = {slot->constants,source,output};
         id enc=[cb computeCommandEncoder]; if(!enc) { error="caller command buffer already encoding"; return false; }
         bool m4=![enc respondsToSelector:@selector(setBuffer:offset:atIndex:)];
+        if (!m4) clear_cached_residency(*slot);
         if (m4 && (!table(*slot,"copyOnly",error) || !table(*slot,"retire",error) || !bind_residency(*slot,cb,error))) {
             [enc endEncoding]; return false;
         }
@@ -398,7 +403,8 @@ public:
         const bool native_or_portable = kind != Kernels::Reference;
         status = fsr4_input_prepare(&frame.input, &view.inputHistory, view.variantKey != session->key, &p);
         if (!fsr4_input_status_ok(status)) return fail(fsr4_input_status_reason(status));
-        if (!ensure_targets(view, *session, p, frame, options, error)) return fail(error);
+        const bool metal4Buffer = [commandBuffer respondsToSelector:@selector(beginCommandBufferWithAllocator:)];
+        if (!ensure_targets(view, *session, p, frame, options, metal4Buffer, error)) return fail(error);
         if (options.snapshot && !prepare_snapshot(*options.snapshot, frame, p, error)) return fail(error);
         FrameSlot *slot = acquire_slot(view, error);
         if (!slot) return fail(error);
@@ -468,6 +474,7 @@ public:
             [enc endEncoding]; return fail(error);
         }
         retain_resources(*slot, *session, view, frame);
+        if (!m4) clear_cached_residency(*slot);
         if (m4 && !bind_residency(*slot, commandBuffer, error)) {
             [enc endEncoding]; return fail(error);
         }
@@ -492,17 +499,21 @@ public:
                 helper(enc, m4, *slot, "initExposure", "fsr411_init_exposure", {}, {view.autoExposure}, MTLSizeMake(1,1,1));
             }
             if (p.copyMask & FSR4_INPUT_COPY_COLOR) {
-                copy(enc, m4, *slot, "copyColor", frame.color, view.colorCopy, p.colorRegion, 0, 0, 8448, false);
+                copy(enc, m4, *slot, "copyColor", frame.color, view.colorCopy, p.colorRegion, 0, 0, 8448, false, false);
                 b.color = view.colorCopy;
             }
             if ((p.copyMask & FSR4_INPUT_COPY_DEPTH) || depth_format(frame.depth.pixelFormat)) {
-                copy(enc, m4, *slot, "copyDepth", frame.depth, view.depthCopy, p.depthRegion, 0, 0, 8704, depth_format(frame.depth.pixelFormat));
+                copy(enc, m4, *slot, "copyDepth", frame.depth, view.depthCopy, p.depthRegion, 0, 0, 8704, depth_format(frame.depth.pixelFormat), false);
                 b.depth = view.depthCopy;
             }
             if (p.copyMask & FSR4_INPUT_COPY_MOTION) {
-                copy(enc, m4, *slot, "copyMotion", frame.motion, view.motionCopy, p.motionRegion, 0, 0, 8960, false);
+                copy(enc, m4, *slot, "copyMotion", frame.motion, view.motionCopy, p.motionRegion, 0, 0, 8960, false, false);
                 b.motion = view.motionCopy;
             }
+            // All three copies write independent internal textures; publish
+            // them together before a snapshot, exposure or PRE can read them.
+            if (!slot->stageProfiler && (b.color != frame.color || b.depth != frame.depth || b.motion != frame.motion))
+                barrier(enc, m4);
             if (slot->snapshot) {
                 const Fsr4InputRect renderRegion{0,0,p.rw,p.rh}, motionRegion{0,0,p.mvW,p.mvH};
                 copy(enc,m4,*slot,"snapshotColor",b.color,slot->snapshot->color,renderRegion,0,0,kSnapshot,false);
@@ -577,7 +588,10 @@ public:
                             stage = "post_tile";
                         }
                     }
-                    dispatch(enc, m4, *slot, *session, stage, groups, b);
+                    // Lite pad1 and pad1b clear disjoint planes. Diagnostic
+                    // captures read the entire arena, so keep their barrier.
+                    const bool deferPad = session->modelLite && name == "pad1" && !view.captures.count(name);
+                    dispatch(enc, m4, *slot, *session, stage, groups, b, !deferPad);
                 }
                 capture_scratch(enc,m4,*slot,view,name);
             }
@@ -788,9 +802,11 @@ private:
             || !f.exposure.width || !f.exposure.height || f.exposure.sampleCount != 1)) { error="invalid exposure texture"; return false; }
         return true;
     }
-    id<MTLTexture> texture(MTLPixelFormat format, uint32_t w, uint32_t h, MTLStorageMode storage = MTLStorageModePrivate) {
+    id<MTLTexture> texture(MTLPixelFormat format, uint32_t w, uint32_t h, MTLStorageMode storage = MTLStorageModePrivate,
+                           bool untracked = false) {
         MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:w height:h mipmapped:NO];
         d.storageMode = storage;
+        if (untracked) d.hazardTrackingMode = MTLHazardTrackingModeUntracked;
         d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
         return [device_ newTextureWithDescriptor:d];
     }
@@ -812,13 +828,27 @@ private:
         snapshot.completion=completion;
         return true;
     }
-    bool fit(id<MTLTexture> __strong &target, MTLPixelFormat format, uint32_t w, uint32_t h) {
-        if (!target || target.width != w || target.height != h || target.pixelFormat != format) target = texture(format,w,h);
+    bool fit(id<MTLTexture> __strong &target, MTLPixelFormat format, uint32_t w, uint32_t h, bool untracked) {
+        if (!target || target.width != w || target.height != h || target.pixelFormat != format)
+            target = texture(format,w,h,MTLStorageModePrivate,untracked);
         return target != nil;
     }
-    bool ensure_targets(View &v, const Session &s, const Fsr4InputPrepared &p, const Frame &f, const Options &o, std::string &error) {
+    bool ensure_targets(View &v, const Session &s, const Fsr4InputPrepared &p, const Frame &f, const Options &o,
+                        bool metal4, std::string &error) {
+        // Only transient targets use explicit Metal 4 ordering. Classic
+        // can span encoders (profiling) and depends on automatic tracking.
+        // Recreate temporaries on a switch back, preserving temporal state.
+        if (!metal4 && v.usedMetal4Intermediates) {
+            if (v.scratch.hazardTrackingMode == MTLHazardTrackingModeUntracked) v.scratch = nil;
+            for (auto *target : {&v.preparedColor, &v.colorCopy, &v.depthCopy, &v.motionCopy,
+                                 &v.outputCopy, &v.rcasTemp, &v.luma}) {
+                if ((*target).hazardTrackingMode == MTLHazardTrackingModeUntracked) *target = nil;
+            }
+        }
+        v.usedMetal4Intermediates = metal4;
         if (!v.scratch || v.scratch.length != s.scratchBytes) {
-            v.scratch = [device_ newBufferWithLength:s.scratchBytes options:MTLResourceStorageModePrivate];
+            const MTLResourceOptions hazards = metal4 ? MTLResourceHazardTrackingModeUntracked : MTLResourceHazardTrackingModeTracked;
+            v.scratch = [device_ newBufferWithLength:s.scratchBytes options:MTLResourceStorageModePrivate | hazards];
             v.zeroScratch = true;
         }
         if (v.width != p.alignedUW || v.height != p.alignedUH || !v.history || !v.reprojected || !v.recurrent) {
@@ -829,7 +859,7 @@ private:
         }
         if (!v.autoExposure) v.autoExposure=texture(MTLPixelFormatR32Float,2,1);
         bool ok = v.scratch && v.history && v.reprojected && v.recurrent && v.autoExposure;
-        if (s.preparedColor) ok &= fit(v.preparedColor,MTLPixelFormatRGBA32Float,p.rw,p.rh);
+        if (s.preparedColor) ok &= fit(v.preparedColor,MTLPixelFormatRGBA32Float,p.rw,p.rh,metal4);
         if(profile_is_lossy(o.profile)) {
             const size_t blocks=size_t(p.alignedUW/4u)*(p.alignedUH/4u);
             const size_t motionCells=s.modelLite?size_t(p.alignedUW/2u)*(p.alignedUH/2u):blocks;
@@ -864,13 +894,13 @@ private:
         }
         // Float32 canonical copies preserve the values returned by the source
         // texture, including sRGB decode and packed R11G11B10 input precision.
-        if (p.copyMask & FSR4_INPUT_COPY_COLOR) ok &= fit(v.colorCopy,MTLPixelFormatRGBA32Float,p.rw,p.rh);
-        if ((p.copyMask & FSR4_INPUT_COPY_DEPTH) || depth_format(f.depth.pixelFormat)) ok &= fit(v.depthCopy,MTLPixelFormatR32Float,p.rw,p.rh);
-        if (p.copyMask & FSR4_INPUT_COPY_MOTION) ok &= fit(v.motionCopy,MTLPixelFormatRG32Float,p.mvW,p.mvH);
-        if (p.copyMask & FSR4_INPUT_COPY_OUTPUT) ok &= fit(v.outputCopy,MTLPixelFormatRGBA32Float,p.uw,p.uh);
-        if (o.rcas && o.sharpness > 0) ok &= fit(v.rcasTemp,MTLPixelFormatRGBA16Float,p.alignedUW,p.alignedUH);
+        if (p.copyMask & FSR4_INPUT_COPY_COLOR) ok &= fit(v.colorCopy,MTLPixelFormatRGBA32Float,p.rw,p.rh,metal4);
+        if ((p.copyMask & FSR4_INPUT_COPY_DEPTH) || depth_format(f.depth.pixelFormat)) ok &= fit(v.depthCopy,MTLPixelFormatR32Float,p.rw,p.rh,metal4);
+        if (p.copyMask & FSR4_INPUT_COPY_MOTION) ok &= fit(v.motionCopy,MTLPixelFormatRG32Float,p.mvW,p.mvH,metal4);
+        if (p.copyMask & FSR4_INPUT_COPY_OUTPUT) ok &= fit(v.outputCopy,MTLPixelFormatRGBA32Float,p.uw,p.uh,metal4);
+        if (o.rcas && o.sharpness > 0) ok &= fit(v.rcasTemp,MTLPixelFormatRGBA16Float,p.alignedUW,p.alignedUH,metal4);
         if (p.autoExposure) {
-            ok &= fit(v.luma,MTLPixelFormatR32Float,std::max(ceil_div(p.rw,64),1u),std::max(ceil_div(p.rh,64),1u));
+            ok &= fit(v.luma,MTLPixelFormatR32Float,std::max(ceil_div(p.rw,64),1u),std::max(ceil_div(p.rh,64),1u),metal4);
             if (!s.splitAutoExposure && !v.spdAtomicTexture) {
                 if (!v.spdAtomic) v.spdAtomic=[device_ newBufferWithLength:4096 options:MTLResourceStorageModeShared];
                 const NSUInteger row=std::max<NSUInteger>(16,[device_ minimumLinearTextureAlignmentForPixelFormat:MTLPixelFormatR32Uint]);
@@ -1232,16 +1262,16 @@ private:
     }
     FrameSlot *acquire_slot(View &v, std::string &error) {
         for (auto &slot:v.slots) if(slot->retired()) {
-            slot->busy=false; [slot->resources removeAllObjects];
+            slot->busy=false;
+            slot->resources.clear();
             slot->snapshot.reset();
             slot->stageProfiler=nullptr;
-            if (slot->residency) { [slot->residency removeAllAllocations]; [slot->residency commit]; }
             return slot.get();
         }
         if (v.slots.size()>=32) { error="32 FSR frames are still in flight; wait for their command buffers"; return nullptr; }
         auto slot=std::make_unique<FrameSlot>();
         slot->constants=[device_ newBufferWithLength:FrameSlot::kSize options:MTLResourceStorageModeShared];
-        slot->tables=[NSMutableDictionary new]; slot->resources=[NSMutableArray new];
+        slot->resources.reserve(40);
         if (!slot->constants) { error="cannot allocate per-frame FSR constants"; return nullptr; }
         memset(slot->constants.contents,0,FrameSlot::kSize);
         auto result=slot.get(); v.slots.push_back(std::move(slot)); return result;
@@ -1276,13 +1306,13 @@ private:
         }
     }
     bool table(FrameSlot &slot, const std::string &name, std::string &error) {
-        if(slot.tables[ns(name)]) return true;
+        if(slot.tables.count(name)) return true;
         if (@available(macOS 26.0,*)) {
             MTL4ArgumentTableDescriptor *d=[MTL4ArgumentTableDescriptor new];
             d.maxBufferBindCount=16; d.maxTextureBindCount=16; d.maxSamplerStateBindCount=4; d.initializeBindings=YES;
             NSError *e=nil; auto t=[device_ newArgumentTableWithDescriptor:d error:&e];
             if (!t) { error=metal_error(e); return false; }
-            slot.tables[ns(name)]=t; return true;
+            slot.tables.emplace(name,t); return true;
         }
         error="Metal 4 argument tables unavailable"; return false;
     }
@@ -1306,13 +1336,18 @@ private:
             v.scratch,v.spdAtomic,v.spdAtomicTexture,v.luma,v.colorCopy,v.depthCopy,v.motionCopy,v.outputCopy,v.rcasTemp,v.lossyMotion,v.lossyPlane,
             f.color,f.depth,f.motion,f.output,f.exposure,exposureOne_,v.preparedColor,
             v.qualityPrevious,v.qualityCurrent,v.litePrevious,v.liteCurrent};
-        for (id resource:resources) if(resource && ![slot.resources containsObject:resource]) [slot.resources addObject:resource];
-        for(const auto &k:s.kernels) if(k.second.literalTables) [slot.resources addObject:k.second.literalTables];
-        for (const auto &c:v.captures) [slot.resources addObject:c.second];
+        for (id resource:resources) if(resource) slot.resources.push_back(resource);
+        for(const auto &k:s.kernels) if(k.second.literalTables) slot.resources.push_back(k.second.literalTables);
+        for (const auto &c:v.captures) slot.resources.push_back(c.second);
         if (slot.snapshot) {
             const auto &snapshot=*slot.snapshot;
-            [slot.resources addObjectsFromArray:@[snapshot.color,snapshot.depth,snapshot.motion,snapshot.output,snapshot.completion]];
+            slot.resources.insert(slot.resources.end(), {snapshot.color,snapshot.depth,snapshot.motion,snapshot.output,snapshot.completion});
         }
+    }
+    static void clear_cached_residency(FrameSlot &slot) {
+        if (!slot.residency) return;
+        slot.residency = nil;
+        slot.residencyKey.clear();
     }
     bool bind_residency(FrameSlot &slot,id cb,std::string &error) {
         if (@available(macOS 26.0,*)) {
@@ -1320,8 +1355,14 @@ private:
                 NSError *e=nil; slot.residency=[device_ newResidencySetWithDescriptor:[MTLResidencySetDescriptor new] error:&e];
                 if (!slot.residency) { error=metal_error(e); return false; }
             }
-            for (id resource in slot.resources) [slot.residency addAllocation:(id<MTLAllocation>)resource];
-            [slot.residency commit];
+            // Order is stable (including literal tables and capture maps).
+            // addAllocations accepts repeated entries, e.g. an aliased cache.
+            if (slot.resources != slot.residencyKey) {
+                [slot.residency removeAllAllocations];
+                [slot.residency addAllocations:slot.resources.data() count:slot.resources.size()];
+                [slot.residency commit];
+                slot.residencyKey = slot.resources;
+            }
             if (![cb respondsToSelector:@selector(useResidencySet:)]) { error="Metal 4 command buffer lacks residency API"; return false; }
             [cb useResidencySet:slot.residency]; return true;
         }
@@ -1338,11 +1379,12 @@ private:
         [enc barrierAfterStages:MTLStageDispatch|MTLStageBlit beforeQueueStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice];
     }
     void helper(id __strong &enc,bool m4,FrameSlot &slot,const std::string &tag,const std::string &name,
-                std::initializer_list<BufferBinding> buffers,std::initializer_list<id<MTLTexture>> textures,MTLSize grid) {
+                std::initializer_list<BufferBinding> buffers,std::initializer_list<id<MTLTexture>> textures,MTLSize grid,
+                bool publish=true) {
         if(slot.stageProfiler) slot.stageProfiler->begin_stage(enc,tag);
         auto pso=helpers_.at(name); NSUInteger index=0;
         if (m4) {
-            id<MTL4ArgumentTable> t=slot.tables[ns(tag)];
+            id<MTL4ArgumentTable> t=slot.tables.at(tag);
             for(auto b:buffers) [t setAddress:b.buffer.gpuAddress+b.offset atIndex:index++];
             index=0; for(auto tx:textures) [t setTexture:tx.gpuResourceID atIndex:index++];
             [enc setArgumentTable:t];
@@ -1353,7 +1395,8 @@ private:
         }
         [enc setComputePipelineState:pso];
         MTLSize threads=grid.height>1?MTLSizeMake(8,8,1):MTLSizeMake(std::min<NSUInteger>(256,grid.width),1,1);
-        [enc dispatchThreads:grid threadsPerThreadgroup:threads]; barrier(enc,m4);
+        [enc dispatchThreads:grid threadsPerThreadgroup:threads];
+        if(publish || slot.stageProfiler) barrier(enc,m4);
         if(slot.stageProfiler) slot.stageProfiler->end_stage(enc);
     }
     void clear_texture(id __strong &enc,bool m4,FrameSlot &s,const std::string &tag,id<MTLTexture> t) {
@@ -1364,9 +1407,9 @@ private:
         helper(enc,m4,s,tag,"fsr411_clear_buffer",{{b,0},{s.constants,off}},{},MTLSizeMake(count,1,1));
     }
     void copy(id __strong &enc,bool m4,FrameSlot &s,const std::string &tag,id<MTLTexture> from,id<MTLTexture> to,
-              Fsr4InputRect rect,uint32_t x,uint32_t y,NSUInteger off,bool depth) {
+              Fsr4InputRect rect,uint32_t x,uint32_t y,NSUInteger off,bool depth,bool publish=true) {
         RegionConstants r={{rect.x,rect.y,rect.width,rect.height},{x,y,0,0}}; put(s,off,r);
-        helper(enc,m4,s,tag,depth?"fsr411_copy_depth":"fsr411_copy",{{s.constants,off}},{from,to},MTLSizeMake(rect.width,rect.height,1));
+        helper(enc,m4,s,tag,depth?"fsr411_copy_depth":"fsr411_copy",{{s.constants,off}},{from,to},MTLSizeMake(rect.width,rect.height,1),publish);
     }
     // Records the shared scratch arena after a named stage (captureStages).
     void capture_scratch(id __strong &enc,bool m4,FrameSlot &slot,const View &view,const std::string &name) {
@@ -1439,7 +1482,7 @@ private:
         for(float v:inv) if(!(v>0.f) || std::ceil(v*32.f)+6.f>float(s.postTileSide)) return false;
         return true;
     }
-    void dispatch(id __strong &enc,bool m4,FrameSlot &slot,const Session &s,const std::string &name,MTLSize groups,const Bindings &b) {
+    void dispatch(id __strong &enc,bool m4,FrameSlot &slot,const Session &s,const std::string &name,MTLSize groups,const Bindings &b,bool publish=true) {
         if(slot.stageProfiler) {
             const std::string profiled =
                 name=="pre_reuse" ? "pre" :
@@ -1449,7 +1492,7 @@ private:
         }
         const auto &k=s.kernels.at(name);
         if(m4) {
-            id<MTL4ArgumentTable> t=slot.tables[ns(name)];
+            id<MTL4ArgumentTable> t=slot.tables.at(name);
             for(const auto &bb:k.buffers) {auto binding=bind_buffer(name,bb.second,slot,s,b); [t setAddress:binding.buffer.gpuAddress+binding.offset atIndex:bb.first];}
             for(const auto &tx:k.textures) [t setTexture:bind_texture(tx.second,b).gpuResourceID atIndex:tx.first];
             for(const auto &sm:k.samplers) [t setSamplerState:sampler_.gpuResourceID atIndex:sm.first];
@@ -1460,7 +1503,8 @@ private:
             for(const auto &tx:k.textures) [ce setTexture:bind_texture(tx.second,b) atIndex:tx.first];
             for(const auto &sm:k.samplers) [ce setSamplerState:sampler_ atIndex:sm.first];
         }
-        [enc setComputePipelineState:k.pso]; [enc dispatchThreadgroups:groups threadsPerThreadgroup:k.threads]; barrier(enc,m4);
+        [enc setComputePipelineState:k.pso]; [enc dispatchThreadgroups:groups threadsPerThreadgroup:k.threads];
+        if(publish || slot.stageProfiler) barrier(enc,m4);
         if(slot.stageProfiler) slot.stageProfiler->end_stage(enc);
     }
     void dispatch_native(id __strong &enc,bool m4,FrameSlot &slot,const Session &s,int pass,const View &v,const TensorSizes &sizes) {
@@ -1468,7 +1512,7 @@ private:
         const auto &n=s.native.at(pass); const unsigned shape=n.inputDispatch?n.inputSlot:n.outputSlot;
         uint32_t width=sizes.v[shape][0],height=sizes.v[shape][1];
         if(m4) {
-            id<MTL4ArgumentTable> t=slot.tables[ns("native"+std::to_string(pass))];
+            id<MTL4ArgumentTable> t=slot.tables.at("native"+std::to_string(pass));
             [t setAddress:v.scratch.gpuAddress atIndex:0]; [t setAddress:s.nativeWeights.gpuAddress atIndex:1];
             [t setAddress:slot.constants.gpuAddress+kNative+n.offset atIndex:2];
             if (s.halfWeights) [t setAddress:s.halfWeights.gpuAddress atIndex:3];

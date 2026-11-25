@@ -13,7 +13,7 @@ except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from common.hlsl_parse import balanced_end
 
-REVISION = 3
+REVISION = 4
 
 _CT2D_PRODUCT = re.compile(
     r"reduce_add\(int4\(as_type<char4>\((_\d+)\)\) \* int4\(as_type<char4>\((_\d+)\[([^\]]+)\]\)\)\)")
@@ -87,6 +87,24 @@ def post_color_tile(text: str) -> str:
     reads = list(_TAP_READ.finditer(text))
     if len(reads) != 9 or len({match[3] for match in reads}) != 1:
         raise ValueError("Lite POST colour taps changed")
+    # All nine clamped global coordinates are represented in the tile. One
+    # address for their top-left corner suffices, even at the image border.
+    xs = [tap[1] for tap in reads[:3]]
+    ys = [tap[2] for tap in reads[::3]]
+    if [(tap[1], tap[2]) for tap in reads] != [(x, y) for y in ys for x in xs]:
+        raise ValueError("Lite POST tap grid changed")
+    for axis in (xs, ys):
+        if (f"uint {axis[0]} = {axis[1]} - 1u;" not in text or
+                f"uint {axis[2]} = {axis[1]} + 1u;" not in text):
+            raise ValueError("Lite POST tap offsets changed")
+    center_x = re.search(rf"uint {xs[1]} = uint\((_\d+)\.x\);", text)
+    if not center_x or f"uint {ys[1]} = uint({center_x[1]}.y);" not in text:
+        raise ValueError("Lite POST tap center changed")
+    center = re.search(rf"^            int2 {center_x[1]} = int2\(rint\(_\d+\)\);\n", text, re.M)
+    if not center:
+        raise ValueError("Lite POST tap center rounding changed")
+    base = f"            uint fsr412TapBase = fsr412_tile_base(fsr412TileOrigin, {center_x[1]});\n"
+    text = text[:center.end()] + base + text[center.end():]
     cell = _CELL.search(text)
     header = re.search(
         r"kernel\s+void\s+\w+\([^\n]*uint3\s+gl_LocalInvocationID\s*\[\[thread_position_in_threadgroup\]\][^\n]*\)\n\{\n",
@@ -111,19 +129,43 @@ def post_color_tile(text: str) -> str:
             f"int2(0), fsr412TileMax)), 0u).xyz;\n"
             f"{indent}}}\n"
             f"{indent}threadgroup_barrier(mem_flags::mem_threadgroup);\n")
-    text = text[:cell.end()] + fill + text[cell.end():]
-    header = re.search(
-        r"kernel\s+void\s+\w+\([^\n]*uint3\s+gl_LocalInvocationID\s*\[\[thread_position_in_threadgroup\]\][^\n]*\)\n\{\n",
-        text,
-    )
-    text = text[:header.end()] + f"    threadgroup float3 fsr412PostTile[{side * side}];\n" + text[header.end():]
-    helper = ("static inline uint fsr412_tile_index(int2 origin, uint x, uint y)\n{\n"
-              f"    const int2 cell = clamp(int2(uint2(x, y)) - origin, int2(0), int2({side - 1}));\n"
-              f"    return uint(cell.y) * {side}u + uint(cell.x);\n}}\n")
+    reuse_tiles = ("    threadgroup float fsr412RepLumaTile[34 * 34];\n"
+                   "    threadgroup short2 fsr412MotTile[32 * 32];\n")
+    if reuse_tiles in text:
+        # New-look reads its alpha-bearing reprojection tile inside the loop.
+        # Only the ordinary Lossy specialization has disjoint tile lifetimes.
+        loop = re.search(r"^        for \(int (_\d+) = 0; \1 < 4; \1\+\+\)", text, re.M)
+        guard = re.search(rf"^        if \(any\({cell[2]} >= _\d+\)\)\n        {{\n            break;\n        }}\n", text, re.M)
+        if (not loop or not guard or not cell.end() < guard.start() < loop.start() or
+                any(name in text[loop.start():] for name in ("fsr412RepLumaTile", "fsr412MotTile"))):
+            raise ValueError("Lite POST reuse tile lifetime changed")
+        # Inactive lanes have valid local indices, and ReadMotion clamps its
+        # global coordinate. Every lane must stage post before it can leave.
+        text = (text[:guard.start()] + text[guard.end():loop.start()] +
+                indent + "threadgroup_barrier(mem_flags::mem_threadgroup);\n" + fill + guard[0] + text[loop.start():])
+        shared = ("    threadgroup union {\n"
+                  f"        packed_float3 post[{side * side}];\n"
+                  "        struct { float luma[34 * 34]; short2 mot[32 * 32]; } reuse;\n"
+                  "    } fsr412Tg;\n")
+        text = text.replace(reuse_tiles, shared, 1).replace("fsr412RepLumaTile[", "fsr412Tg.reuse.luma[")
+        text = text.replace("fsr412MotTile[", "fsr412Tg.reuse.mot[").replace("fsr412PostTile[", "fsr412Tg.post[")
+        tile = "fsr412Tg.post"
+    else:
+        text = text[:cell.end()] + fill + text[cell.end():]
+        decl = f"    threadgroup packed_float3 fsr412PostTile[{side * side}];\n"
+        text = text[:header.end()] + decl + text[header.end():]
+        tile = "fsr412PostTile"
+    helper = ("static inline uint fsr412_tile_base(int2 origin, int2 center)\n{\n"
+              f"    const int2 cell = clamp(center - origin - int2(1), int2(0), int2({side - 3}));\n"
+              f"    return uint(cell.y) * {side}u + uint(cell.x);\n}}\n"
+              "// A 12-byte copy lowers to a vector load with 4-byte alignment.\n"
+              "// A packed_float3 cast scalarizes, changing Gaussian FMA rounding.\n"
+              "static inline float3 fsr412_post_read(threadgroup const packed_float3 *tile, uint index)\n"
+              "{\n    float3 value;\n    __builtin_memcpy(&value, &tile[index], sizeof(packed_float3));\n    return value;\n}\n")
     kernel = text.index("kernel void ")
     text = text[:kernel] + helper + "\n" + text[kernel:]
     text, count = _TAP_READ.subn(
-        lambda tap: f"fsr412PostTile[fsr412_tile_index(fsr412TileOrigin, {tap[1]}, {tap[2]})]", text)
+        lambda tap: f"fsr412_post_read({tile}, fsr412TapBase + {xs.index(tap[1]) + side * ys.index(tap[2])}u)", text)
     if count != 9:
         raise ValueError("Lite POST colour tap rewrite failed")
     return text
