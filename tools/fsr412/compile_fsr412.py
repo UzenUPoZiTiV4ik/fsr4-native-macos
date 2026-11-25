@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fsr412.optimization import (REVISION, POST_TILE_SIDE, input_color_cache, color_cache_source, pixelization_fix,
                                  ct2d_float_dot, post_color_tile, pre_quad_routing)
 from fsr412.model_data import initializer_for, patch_post_tail, load_lossy_initializer, patch_post_biases_by_tap
+from fsr412.pre_opt import pre_exposure, register_pre_tile
 from fsr412.new_look import REVISION as NEW_LOOK_REVISION
 from common.hlsl_parse import balanced_end, argument_list
 
@@ -172,6 +173,8 @@ def compile_metal(src: Path, out: Path, entry: str, external: bool = False, tier
                 text = patch_post_biases_by_tap(text, initializer, receipt)
     if pixel_fix and stage == "post" and not lossy:
         text = pixelization_fix(text)
+    if prepared and stage in ("pre", "pre_reuse"):
+        text = pre_exposure(text, skip_roundtrip=lossy)
     if prepared and stage == "pre":
         text = pre_quad_routing(text)
     if prepared and stage in ("post", "post_full"):
@@ -243,7 +246,7 @@ def main():
     selected={stage:pick(rows,stage,a.res,opts) for stage in order}
     support_dir,support_manifest=support_bundle(root,bdir,a.colorspace,a.auto_exposure)
     digest=hashlib.sha256(json.dumps(vars(a),sort_keys=True).encode())
-    extra=[init,Path(__file__).with_name("model_data.py")]
+    extra=[init,Path(__file__).with_name("model_data.py"),Path(__file__).with_name("pre_opt.py")]
     if a.lossy:extra += [Path(__file__).with_name("lossy_shaders.py"),Path(__file__).with_name("lossy_weights.py"),
         root/"build/fsr412_lossy/import.json",root/"src/fsr41x/fsr412_neural_tile.h",Path(__file__).with_name("neural_tiling.py")]
     if a.new_look:extra.append(Path(__file__).with_name("new_look.py"))
@@ -335,6 +338,9 @@ def main():
                 run(["xcrun", "metallib", tiled_base.with_suffix(".air"), "-o", tiled_base.with_suffix(".metallib")])
                 kernels[tiled_stage] = dict(spec_info, stage=tiled_stage, library=tiled_stage + ".metallib", tile_side=POST_TILE_SIDE)
     if prepared:
+        for stage in ("pre", "pre_reuse"):
+            if stage in kernels:
+                register_pre_tile(kernels, out, stage, run)
         base=out/"prepare_color"
         run(["xcrun","metal","-std=macos-metal2.3","-O3","-c",base.with_suffix(".metal"),"-o",base.with_suffix(".air")])
         run(["xcrun","metallib",base.with_suffix(".air"),"-o",base.with_suffix(".metallib")])
