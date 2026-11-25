@@ -7,7 +7,7 @@ Works as a standalone tool and inside games via CrossOver (DLSS → FSR 4).
 
 - `src/` is split by concern: shared device/backend/input helpers in `src/common/`, the live-game hook layer and panel in `src/live/`, the legacy FSR 4.0.2 runtime in `src/fsr402/`, the FSR 4.1.1/4.1.2 runtimes in `src/fsr41x/` (Metal kernels in `src/fsr41x/shaders/`), the experimental ANR frame-generation runtime in `src/anr/`, the Netal input layer in `src/netal/`, and the standalone CLI binaries in `src/cli/`. Core FSR 4.1.1 runtime interfaces live in [src/fsr41x/fsr411_runtime.h](src/fsr41x/fsr411_runtime.h), FSR 4.1.2 session management in [src/fsr41x/fsr412_session.inc](src/fsr41x/fsr412_session.inc), and the MetalFX interception layer in [hook/fsr4_metalfx.m](hook/fsr4_metalfx.m).
 - `tools/` is grouped per model and task: `tools/fsr402/`, `tools/fsr411/` and `tools/fsr412/` hold the per-model importers, compilers and weight pipelines, `tools/common/` the shared parsers, plus `tools/netal/`, `tools/anr/`, `tools/crossover/` (bottle integration via [tools/crossover/crossover_fsr4.py](tools/crossover/crossover_fsr4.py)), `tools/installer/`, `tools/bench/` and `tools/diagnostics/`. Weight importers and pinned graphs: the adjusted `int8-lite-lossy` and `lossy2` profiles pin the `dll-2026-11-22` release through [tools/fsr412/nov22_weights.py](tools/fsr412/nov22_weights.py) and [tools/fsr411/lossy2.py](tools/fsr411/lossy2.py).
-- `tests/` mirrors the same split: `tests/core/`, `tests/fsr402/`, `tests/fsr411/`, `tests/fsr412/`, `tests/anr/`, `tests/netal/`, `tests/crossover/`, `tests/bench/`, `tests/installer/` and `tests/common/`. [Makefile](Makefile) defines build and verification targets including `make test` and `make test-fsr412-lossy`, and [docs/releases/v4.1.md](docs/releases/v4.1.md) is the latest release (FSR weight pins are unchanged since [v3.3](docs/releases/v3.3.md)).
+- `tests/` mirrors the same split: `tests/core/`, `tests/fsr402/`, `tests/fsr411/`, `tests/fsr412/`, `tests/anr/`, `tests/netal/`, `tests/crossover/`, `tests/bench/`, `tests/installer/` and `tests/common/`. [Makefile](Makefile) defines build and verification targets including `make test` and `make test-fsr412-lossy`, and [docs/releases/v4.2.md](docs/releases/v4.2.md) is the latest release (FSR weight pins are unchanged since [v3.3](docs/releases/v3.3.md)).
 - Generated directories. `build/` stores compiled binaries, shader caches, and imported external weights, whereas `dist/crossover/` contains the live hook, settings and backups for source installs. Release ZIPs and DMGs go under `dist/release/`.
 
 ## M5 performance: v4.0 speedups (2026-11-25)
@@ -104,7 +104,7 @@ Older recorded-capture measurements remain in
 
 ## Easiest: the FSR4 Installer app
 
-1. Download **FSR4-Installer-v4.1.dmg** from the
+1. Download **FSR4-Installer-v4.2.dmg** from the
    [latest release](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos/releases/latest)
    and drag **FSR4 Installer** to Applications.
 2. First launch: the app is not notarized, so macOS blocks it. Open
@@ -227,13 +227,15 @@ generation** alongside M5 Metal 4 MPP optimizations ([release notes](docs/releas
   extra frame via a lazy `CAMetalDrawable` / `MTL4CommandQueue` / `MTLCommandBuffer`
   presentation hook with EMA pacing (no presentation hook overhead in `MetalFX`
   or `ANR 2x`). Live switching between `2x` and `3x` keeps pipelines warm.
-- **M5 optimizations (interleaved A/B at 1080p)**: native Metal 4 MPP NAX
-  `conv_packed_m1` (`kernels_mpp.metallib` on M5+, automatic fallback on M1-M4),
-  `optnone` stripping, plain threadgroup gather loads/stores, DAG barrier elision,
-  and cached slot residency sets. Measured **+17.6% to +21.1% faster** than
-  unoptimized V.B20 in 2x (**+14.4% to +19.6%** in 3x) and **+11.7% faster**
-  than legacy V.B14 `packed` in 2x (~3.85 ms boost-clock standalone GPU time at
-  1080p; standalone replay, not guaranteed game FPS).
+- **M5 optimizations (v4.1 + v4.2)**: native Metal 4 MPP NAX `conv_packed_m1`,
+  18x6 threadgroup motion/trust staging + `simd_ballot` in `final_trust_image_fill_*`,
+  lock-free linked-list cell binning in `phase_gather_sil_pd` and `reverse_gather`,
+  SIMD32 reductions + static `const device` qualification across all 33 kernels
+  (205 read-only / 129 writable), single-encoder live frame fusion (`5/7 -> 1` on
+  Metal 4, `4/6 -> 1` on Metal 3), and scratch buffer aliasing (`94 -> 49` buffers,
+  saving 19.6 / 34.8 / 77.9 MB at 1080p / 1440p / 4K). On M5 (`lowpowermode 0`,
+  continuous 1080p PQ10 `p10`): **3.18 ms** in 2x (-7.1% vs v4.1) and **4.69 ms**
+  in 3x (-7.5% vs v4.1); see [v4.2 release notes](docs/releases/v4.2.md).
 
 Prepare local assets from the upstream `anr-fg-V.B20-addon.zip` with
 `python3 tools/anr/prepare.py --addon /path/to/anr-fg-V.B20-addon.zip --output build/anr_runtime_v20`
@@ -254,13 +256,14 @@ make test-fsr411-mpp-fast  # GPU-probed M5 kernels and forced fallback
 make test-fsr-pre-m5      # forced SIMD and exact Winograd
 ```
 
-Build the installer app and DMG: `make installer INSTALLER_VERSION=v4.1`
-(or `python3 tools/installer/build_app.py v4.1 --dmg`).
+Build the installer app and DMG: `make installer INSTALLER_VERSION=v4.2`
+(or `python3 tools/installer/build_app.py v4.2 --dmg`).
 
 ## Documentation
 
 | Topic | Link |
 | --- | --- |
+| v4.2 release notes: ANR kernel/runtime speedups and FSR 4.1.2 PRE/POST optimizations | [docs/releases/v4.2.md](docs/releases/v4.2.md) |
 | v4.1 release notes: ANR FG-V.B20, 3x frame generation, M5 MPP optimizations | [docs/releases/v4.1.md](docs/releases/v4.1.md) |
 | Performance and validation | [docs/FSR411_PERFORMANCE.md](docs/FSR411_PERFORMANCE.md) |
 | Lite image quality update | [docs/FSR411_QUALITY_UPDATE.md](docs/FSR411_QUALITY_UPDATE.md) |

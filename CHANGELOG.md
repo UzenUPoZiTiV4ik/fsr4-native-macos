@@ -1,5 +1,38 @@
 # Releases
 
+## v4.2 (2026-11-25)
+
+Deep GPU kernel and Metal runtime optimizations across **ANR FG-V.B20** and
+**FSR 4.1.2** (Lite & Lite Lossy). No upscaler model or weight changes; FSR 4.1.2
+cache keys bump to `v4` / `lossy5` and existing local ANR V.B20 runtimes should
+be re-prepared via `tools/anr/prepare.py --addon` to pick up the new kernels.
+[Release notes](docs/releases/v4.2.md).
+
+- **ANR FG-V.B20 hot kernels**: 18x6 threadgroup motion/trust staging +
+  `simd_ballot` hole masks in `final_trust_image_fill_*` (-13.8% on PQ10),
+  single-atomic linked-list cell binning in `phase_gather_sil_pd` (-17.3%) and
+  `reverse_gather` (-10.9%), native SIMD 4x2 `trust_phase_neither` (-4.2%),
+  SIMD32 reductions in `trust_half_image_pick_*` (14.3 KB -> 1.1 KB TG, -6.4%)
+  and `pair_inputs_*` (22.8 KB -> 4.3 KB TG), plus static `const device`
+  qualification across all 33 kernels (325 -> 129 writable / 205 read-only).
+- **ANR runtime & live bridge**: fuses the full live frame (`import + pair +
+  phase + export + retire`) into **1 compute encoder** (down from 5/7 on Metal 4
+  and 4/6 on Metal 3; `FSR4_ANR_FUSE_GROUPS=0` opt-out), packs scratch buffers
+  from **94 -> 49** saving **19.6 / 34.8 / 77.9 MB** at 1080p / 1440p / 4K
+  (`FSR4_ANR_SCRATCH_ALIAS=0` opt-out), sets exact PSO threadgroup limits, and
+  caches static argument buffers. Measured on M5 (`lowpowermode 0`, continuous
+  GPU `p10`): **3.42 -> 3.18 ms (-7.1%)** in 2x and **5.07 -> 4.69 ms (-7.5%)**
+  in 3x while passing `verify.py` at 73.10 / 72.30 dB.
+- **FSR 4.1.2 PRE/POST & Metal 4 host**: compacts `post_reuse_tile` threadgroup
+  memory from **25,888 -> 9,408 B (-63.7%)** and `post_tile`/`post_full_tile`
+  from **12,544 -> 9,408 B (-25.0%)** while staying byte-exact across Lite,
+  Lossy, and new-look; adds guarded 16x16 `pre_tile`/`pre_reuse_tile` staging
+  (`FSR4_LITE_PRE_TILE=0/1`), reuses dilated depth winner in register, skips
+  unchanged MuLaw exposure round-trips in Lossy, and caches Metal 4
+  `MTLResidencySet` bindings (0 redundant commits per steady frame). Measured on
+  M5 (`lowpowermode 0`, 720p -> 1080p): Lite Lossy reused frames **1.136 ->
+  1.080 ms (`p10`, -4.9%)** / **1.193 -> 1.158 ms (`p50`, -3.0%)**.
+
 ## v4.1 (2026-11-25)
 
 Upgrade experimental ANR frame generation to **FG-V.B20** (dynamic resolution
