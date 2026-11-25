@@ -96,6 +96,43 @@ void encode(fsr412::Runtime &runtime,id<MTLDevice> dev,id<MTLCommandQueue> queue
         [cb commit];[cb waitUntilCompleted];require(cb.status==MTLCommandBufferStatusCompleted,fsr412::metal_error(cb.error));
     }
 }
+
+void check_post_tiles(fsr412::Runtime &runtime, id<MTLDevice> device, id<MTLCommandQueue> queue,
+                      fsr412::Backend backend, bool metal4) {
+    const char *value = std::getenv("FSR4_LITE_POST_TILE");
+    const std::string original = value ? value : "";
+    const bool hadOverride = value != nullptr;
+    for (unsigned mode = 0; mode < 3; ++mode) {
+        fsr412::View plain, tiled;
+        fsr412::Options options;
+        options.backend = backend;
+        options.profile = mode ? fsr412::Profile::Int8LiteLossy : fsr412::Profile::Int8Lite;
+        options.newLook = mode == 2;
+        auto a = frame(device,0,false), b = a;
+        b.output = texture(device,MTLPixelFormatRGBA16Float,a.output.width,a.output.height);
+        std::vector<_Float16> sentinel(a.output.width*a.output.height*4,(_Float16)-9);
+        for (auto t : {a.output,b.output})
+            [t replaceRegion:MTLRegionMake2D(0,0,t.width,t.height) mipmapLevel:0 withBytes:sentinel.data() bytesPerRow:t.width*8];
+        for (unsigned index = 0; index < 3; ++index) {
+            a.input.reset = b.input.reset = index == 0;
+            a.input.jitterX = b.input.jitterX = index == 1 ? -.25f : .25f;
+            a.input.jitterY = b.input.jitterY = 0.f;
+            options.rcas = index == 1;
+            options.sharpness = .498f;
+            setenv("FSR4_LITE_POST_TILE","0",1);
+            encode(runtime,device,queue,plain,a,options,metal4);
+            setenv("FSR4_LITE_POST_TILE","1",1);
+            encode(runtime,device,queue,tiled,b,options,metal4);
+            if (mode && index == 1) require(tiled.skippedInference,"reuse POST was not exercised");
+            std::printf("checking tiled POST mode=%u frame=%u\n",mode,index);
+            compare(a.output,b.output,8,"tiled POST output",true);
+            compare(plain.history,tiled.history,8,"tiled POST history",true);
+            compare(plain.recurrent,tiled.recurrent,4,"tiled POST recurrent",true);
+        }
+    }
+    if (hadOverride) setenv("FSR4_LITE_POST_TILE",original.c_str(),1);
+    else unsetenv("FSR4_LITE_POST_TILE");
+}
 }
 int main(int argc,char **argv) {
     @autoreleasepool {try {
@@ -146,6 +183,8 @@ int main(int argc,char **argv) {
             }
             std::printf("FSR 4.1.2 %s: mode %u, 6 frames match DLL shaders and the color cache\n",metal4?"Metal 4":"classic",mode);
         }
+        check_post_tiles(runtime,dev,queue,backend,metal4);
+        std::printf("FSR 4.1.2 %s: tiled POST matches untiled Lite, Lossy and new-look byte for byte\n",metal4?"Metal 4":"classic");
         return 0;
     } catch(const std::exception &e) {std::fprintf(stderr,"FSR 4.1.2 optimization: %s\n",e.what());return 1;}}
 }

@@ -252,11 +252,15 @@ class ImportedSourceTests(unittest.TestCase):
                     self.assertNotIn("Fsr412LossyCurrent",reuse_main)
                     self.assertEqual(reuse_main.count("Fsr412LossyPrevious["),1)
                     self.assertIn("threadgroup short2 fsr412MotTile[32 * 32];",reuse_main)
-                    self.assertIn("threadgroup half3 fsr412RepTile[34 * 34];",reuse_main)
+                    self.assertIn("threadgroup float fsr412RepLumaTile[34 * 34];",reuse_main)
                     if "r_prepared_color" in src:
                         for variant in (result,full,reuse):
                             tiled=optimization.post_color_tile(variant)
-                            self.assertEqual(tiled.count("fsr412PostTile[fsr412_tile_index("),9)
+                            self.assertEqual(tiled.count(", fsr412TapBase + "),9)
+                            if variant == reuse:
+                                self.assertIn("threadgroup union", tiled)
+                                self.assertEqual(tiled.count("threadgroup_barrier("), 3)
+                                self.assertLess(tiled.rindex("threadgroup_barrier("), tiled.index("        if (any("))
             count+=1
         self.assertEqual(count,47)
 
