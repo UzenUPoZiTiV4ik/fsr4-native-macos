@@ -30,6 +30,9 @@ SPEC.loader.exec_module(nrx)
 FINAL_TRUST_SPEC = importlib.util.spec_from_file_location("opt_final_trust", Path(__file__).with_name("opt_final_trust.py"))
 opt_final_trust = importlib.util.module_from_spec(FINAL_TRUST_SPEC)
 FINAL_TRUST_SPEC.loader.exec_module(opt_final_trust)
+GATHER_SPEC = importlib.util.spec_from_file_location("opt_gather", Path(__file__).with_name("opt_gather.py"))
+opt_gather = importlib.util.module_from_spec(GATHER_SPEC)
+GATHER_SPEC.loader.exec_module(opt_gather)
 
 # Legacy FG-V.B14 macOS kit pins (schema v1).
 CHECKPOINT = "e09deb7012c96c172e49e72eb0b747b4611a8b6e3f14e5f5563189c580772ac1"
@@ -461,7 +464,7 @@ inline float tg_atomic_add_f32(threadgroup float *ptr, float delta) {
     return head + helper + body
 
 
-def translate_spv_kernel(spv_bytes, slang_reflection, entry_name, work_dir, entry_key):
+def translate_spv_kernel(spv_bytes, slang_reflection, entry_name, work_dir, kernel_key=None):
     spv_path = work_dir / (entry_name + ".spv")
     msl_path = work_dir / (entry_name + ".metal")
     air_path = work_dir / (entry_name + ".air")
@@ -503,7 +506,8 @@ def translate_spv_kernel(spv_bytes, slang_reflection, entry_name, work_dir, entr
         msl_code = rewrite_pushpull_tail_msl(msl_code)
     if "(threadgroup atomic_float*)" in msl_code:
         msl_code = rewrite_tg_float_atomics_msl(msl_code)
-    msl_code = opt_final_trust.optimize_final_trust_msl(entry_key, msl_code)
+    msl_code = opt_final_trust.optimize_final_trust_msl(kernel_key, msl_code)
+    msl_code = opt_gather.optimize_gather_msl(kernel_key, msl_code)
     msl_path.write_text(msl_code)
 
     subprocess.run(
