@@ -28,6 +28,10 @@ SPEC = importlib.util.spec_from_file_location("anr_nrx_prepare", Path(__file__).
 nrx = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(nrx)
 
+OPT_SPEC = importlib.util.spec_from_file_location("anr_opt_msl", Path(__file__).with_name("opt_msl.py"))
+opt_msl = importlib.util.module_from_spec(OPT_SPEC)
+OPT_SPEC.loader.exec_module(opt_msl)
+
 # Legacy FG-V.B14 macOS kit pins (schema v1).
 CHECKPOINT = "e09deb7012c96c172e49e72eb0b747b4611a8b6e3f14e5f5563189c580772ac1"
 KERNEL_PACK = "aeb6f568a241a63daf804a213de9c17dad2bdd7f7e79779f3002a9a3e1493767"
@@ -500,10 +504,11 @@ def translate_spv_kernel(spv_bytes, slang_reflection, entry_name, work_dir):
         msl_code = rewrite_pushpull_tail_msl(msl_code)
     if "(threadgroup atomic_float*)" in msl_code:
         msl_code = rewrite_tg_float_atomics_msl(msl_code)
+    msl_code = opt_msl.optimize(msl_code, slang_reflection)
     msl_path.write_text(msl_code)
 
     subprocess.run(
-        ["xcrun", "metal", "-std=metal3.1", "-O2", "-Wno-sometimes-uninitialized",
+        ["xcrun", "metal", "-std=metal3.1", "-O3", "-Wno-sometimes-uninitialized",
          "-c", str(msl_path), "-o", str(air_path)],
         check=True,
         timeout=60,
