@@ -27,6 +27,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("anr_nrx_prepare", Path(__file__).resolve().with_name("anr_nrx.py"))
 nrx = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(nrx)
+FINAL_TRUST_SPEC = importlib.util.spec_from_file_location("opt_final_trust", Path(__file__).with_name("opt_final_trust.py"))
+opt_final_trust = importlib.util.module_from_spec(FINAL_TRUST_SPEC)
+FINAL_TRUST_SPEC.loader.exec_module(opt_final_trust)
 
 # Legacy FG-V.B14 macOS kit pins (schema v1).
 CHECKPOINT = "e09deb7012c96c172e49e72eb0b747b4611a8b6e3f14e5f5563189c580772ac1"
@@ -458,7 +461,7 @@ inline float tg_atomic_add_f32(threadgroup float *ptr, float delta) {
     return head + helper + body
 
 
-def translate_spv_kernel(spv_bytes, slang_reflection, entry_name, work_dir):
+def translate_spv_kernel(spv_bytes, slang_reflection, entry_name, work_dir, entry_key):
     spv_path = work_dir / (entry_name + ".spv")
     msl_path = work_dir / (entry_name + ".metal")
     air_path = work_dir / (entry_name + ".air")
@@ -500,6 +503,7 @@ def translate_spv_kernel(spv_bytes, slang_reflection, entry_name, work_dir):
         msl_code = rewrite_pushpull_tail_msl(msl_code)
     if "(threadgroup atomic_float*)" in msl_code:
         msl_code = rewrite_tg_float_atomics_msl(msl_code)
+    msl_code = opt_final_trust.optimize_final_trust_msl(entry_key, msl_code)
     msl_path.write_text(msl_code)
 
     subprocess.run(
@@ -701,7 +705,7 @@ def prepare_v20(addon, output, backend="packed"):
             prefix = module.removesuffix(".slang") + "/" + module + "." + entry
             slang_refl = json.loads(kernels_main[prefix + ".json"])
             spv_bytes = kernels_main[prefix + ".spv"]
-            air_path, meta, ufields = translate_spv_kernel(spv_bytes, slang_refl, "k" + str(index), compile_dir)
+            air_path, meta, ufields = translate_spv_kernel(spv_bytes, slang_refl, "k" + str(index), compile_dir, kernel_key)
             return kernel_key, str(air_path), meta, ufields
 
         with ThreadPoolExecutor(max_workers=8) as pool:
