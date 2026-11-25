@@ -51,7 +51,7 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
         +"_lm"+std::to_string(p.lowResMV)+"_jm"+std::to_string(p.jitteredMV)+"_cs"+std::to_string(o.colorspace)
         +"_ae"+std::to_string(p.autoExposure)+"_o"+std::to_string(o.optimize)
         +"_up"+std::to_string(o.ultraPerformance)+"_pc"+std::to_string(portable)
-        +(lossy?"_lossy3":"")+(o.newLook?"_nl"+std::to_string(kLiteNewLookRevision):"")+(o.neuralTileSize?"_nt"+std::to_string(o.neuralTileSize):"")
+        +(lossy?"_lossy4":"")+(o.newLook?"_nl"+std::to_string(kLiteNewLookRevision):"")+(o.neuralTileSize?"_nt"+std::to_string(o.neuralTileSize):"")
         +(o.optimize && portable && o.colorspace==0?"_v3":"")+(o.pixelFix?"_px2":"");
     const std::string cacheKey=key+"_"+kernels_label(kind);
     auto existing=sessions_.find(cacheKey);if(existing!=sessions_.end())return existing->second.get();
@@ -88,11 +88,13 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
     s->retrainedWeights=[manifest[@"trained"] boolValue];
     s->neuralTileSize=o.neuralTileSize;
     s->liteCacheBytesPerPixel=[manifest[@"lossy_cache_bytes_per_pixel"] unsignedIntValue];
-    if((lossy && tier<=2160 && s->liteCacheBytesPerPixel!=32u) ||
+    if((lossy && tier<=2160 && s->liteCacheBytesPerPixel!=16u) ||
        ((!lossy || tier>2160) && s->liteCacheBytesPerPixel)) {
         error="Lite Lossy raw parameter cache ABI mismatch";return nullptr;
     }
-    if(lossy && tier<=2160 && !manifest[@"kernels"][@"pre_reuse"]) {error="missing Lite Lossy reused-frame PRE";return nullptr;}
+    if(lossy && tier<=2160 && (!manifest[@"kernels"][@"pre_reuse"] || !manifest[@"kernels"][@"post_full"] || !manifest[@"kernels"][@"post_reuse"])) {
+        error="missing Lite Lossy specialized pre_reuse/post_full/post_reuse stages";return nullptr;
+    }
     s->splitAutoExposure=true;s->order=order;
     s->preparedColor=[manifest[@"prepared_color"] boolValue];
     if(s->preparedColor!=(o.optimize && portable && o.colorspace==0)) {error="FSR 4.1.2 input color cache ABI mismatch";return nullptr;}
@@ -144,12 +146,10 @@ Session *ensure_lite_session(int tier,const Fsr4InputPrepared &p,const Options &
         s->kernels.emplace(stage,std::move(k));
     }
     for(const auto &name:order)if(!s->kernels.count(name)) {error="incomplete FSR 4.1.2 graph: "+name;return nullptr;}
-    if(NSDictionary *tile=entries[@"post_tile"]) {
+    if(NSDictionary *tile=entries[@"post_tile"] ?: entries[@"post_full_tile"] ?: entries[@"post_reuse_tile"]) {
         // The tiled POST reads every colour tap through one threadgroup tile.
-        // Lite Lossy POST carries the trained CT/conditional biases, so its
-        // shared-cache build stays untiled and the tile is not used there.
         const unsigned side=[tile[@"tile_side"] unsignedIntValue];
-        if(!s->preparedColor || lossy || side<8 || side>40) {error="invalid FSR 4.1.2 tiled POST";return nullptr;}
+        if(!s->preparedColor || side<8 || side>40) {error="invalid FSR 4.1.2 tiled POST";return nullptr;}
         s->postTileSide=side;
     }
     for(const char *name:{"ae","ae_finalize","rcas"})if(!s->kernels.count(name)) {error="missing FSR 4.1.2 exposure/sharpening stage";return nullptr;}

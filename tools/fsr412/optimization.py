@@ -59,7 +59,7 @@ _TAP_READ = re.compile(
     r"r_prepared_color\.read\(uint2\(uint2\(clamp\(int2\(uint2\((_\d+), (_\d+)\)\), int2\(0\), (_\d+)\)\)\), 0u\)\.xyz")
 _CELL = re.compile(r"^( +)uint2 (_\d+) = uint2\(\(\(_\d+ % 8u\) << 1u\) \| \(gl_LocalInvocationID\.x & 1u\), "
                    r"\(\(_\d+ / 8u\) << 1u\) \| \(\(gl_LocalInvocationID\.x & 3u\) >> 1u\)\) \+ "
-                   r"\(gl_WorkGroupID\.xy \* uint2\(16u\)\);\n\1if \(any\(\2 >= _\d+\)\)\n", re.M)
+                   r"\(gl_WorkGroupID\.xy \* uint2\(16u\)\);\n", re.M)
 
 
 def post_color_tile(text: str) -> str:
@@ -88,8 +88,12 @@ def post_color_tile(text: str) -> str:
     if len(reads) != 9 or len({match[3] for match in reads}) != 1:
         raise ValueError("Lite POST colour taps changed")
     cell = _CELL.search(text)
-    entry = "uint3 gl_LocalInvocationID [[thread_position_in_threadgroup]])\n{\n"
-    if not cell or text.count(entry) != 1 or "fsr412PostTile" in text:
+    header = re.search(
+        r"kernel\s+void\s+\w+\([^\n]*uint3\s+gl_LocalInvocationID\s*\[\[thread_position_in_threadgroup\]\][^\n]*\)\n\{\n",
+        text,
+    )
+    if (not cell or not header or "fsr412PostTile" in text or
+            not re.search(rf"^{re.escape(cell[1])}if \(any\({re.escape(cell[2])} >= _\d+\)\)\n", text[cell.end():], re.M)):
         raise ValueError("Lite POST group mapping changed")
     indent = cell[1]
     side = POST_TILE_SIDE
@@ -107,8 +111,12 @@ def post_color_tile(text: str) -> str:
             f"int2(0), fsr412TileMax)), 0u).xyz;\n"
             f"{indent}}}\n"
             f"{indent}threadgroup_barrier(mem_flags::mem_threadgroup);\n")
-    text = text[:cell.start()] + cell[0][:cell[0].index("\n") + 1] + fill + cell[0][cell[0].index("\n") + 1:] + text[cell.end():]
-    text = text.replace(entry, entry + f"    threadgroup float3 fsr412PostTile[{side * side}];\n", 1)
+    text = text[:cell.end()] + fill + text[cell.end():]
+    header = re.search(
+        r"kernel\s+void\s+\w+\([^\n]*uint3\s+gl_LocalInvocationID\s*\[\[thread_position_in_threadgroup\]\][^\n]*\)\n\{\n",
+        text,
+    )
+    text = text[:header.end()] + f"    threadgroup float3 fsr412PostTile[{side * side}];\n" + text[header.end():]
     helper = ("static inline uint fsr412_tile_index(int2 origin, uint x, uint y)\n{\n"
               f"    const int2 cell = clamp(int2(uint2(x, y)) - origin, int2(0), int2({side - 1}));\n"
               f"    return uint(cell.y) * {side}u + uint(cell.x);\n}}\n")
@@ -197,3 +205,147 @@ def pixelization_fix(text: str) -> str:
             f"{indent}float {sx[2]} = (2.0 / (1.0 + exp(-{params}.y))) * fsr412Widen;\n"
             f"{indent}float {sy[1]} = (2.0 / (1.0 + exp(-{params}.z))) * fsr412Widen;\n")
     return text[:sx.start()] + code + text[sy.end():]
+
+
+_PRE_QUAD_TAIL = re.compile(
+    r"^( +)uint2 (_\d+) = (_\d+) % uint2\(2u\);\n"
+    r"\1uint (_\d+) = \(16u \* \2\.x\) \+ \(512u \* \2\.y\);\n"
+    r"(.*?)"
+    r"\1if \(all\(\2 == uint2\(0u\)\)\)\n"
+    r"\1\{\n"
+    r"(.*?)"
+    r"\1    int2 (_\d+) = \(int2\(gl_WorkGroupID\.xy\) \* int2\(8\)\) \+ int2\(\3 / uint2\(2u\)\);\n"
+    r"\1    uint4 (_\d+) = uint4\(uint\(\7\.x\), uint\(\7\.y\), 0u, 0u\) \+ uint4\(1u, 1u, 0u, 0u\);\n"
+    r"\1    uint (_\d+) = \(\(\(\(16u \* \8\.x\) \+ \((\d+)u \* \8\.y\)\) \+ \8\.z\) \+ \(\d+u \* \8\.w\)\) >> 2u;\n"
+    r"\1    ScratchBuffer\._m0\[\9\] = [^\n]+;\n"
+    r"\1    ScratchBuffer\._m0\[\9 \+ 1u\] = [^\n]+;\n"
+    r"\1    ScratchBuffer\._m0\[\9 \+ 2u\] = [^\n]+;\n"
+    r"\1    ScratchBuffer\._m0\[\9 \+ 3u\] = [^\n]+;\n"
+    r"\1\}",
+    re.M | re.S,
+)
+
+
+_PRE_QUAD_HELPER = """static inline float fsr412_tap_dot(device const uint *init, uint wordOffset, uint4 inPacked)
+{
+    const uint4 w = *(device const uint4 *)(init + wordOffset);
+    const float2 p0 = float2(as_type<half2>(w.x) * as_type<half2>(inPacked.x));
+    const float2 p1 = float2(as_type<half2>(w.y) * as_type<half2>(inPacked.y));
+    const float2 p2 = float2(as_type<half2>(w.z) * as_type<half2>(inPacked.z));
+    const float2 p3 = float2(as_type<half2>(w.w) * as_type<half2>(inPacked.w));
+    // Match LLVM's flattened fast-math chain inside each tap so AGX emits the
+    // exact same FMA sequence as the imported SPIR-V shader.
+    return ((((((p0.x + p0.y) + p1.y) + p1.x) + p2.y) + p2.x) + p3.y) + p3.x;
+}
+
+static inline float fsr412_quad_reduce(float t0, float t1, float t2, float t3)
+{
+    #pragma clang fp reassociate(off)
+    const float s01 = t0 + t1;
+    const float s23 = t2 + t3;
+    return s01 + s23;
+}
+
+static inline uint fsr412_quad_group(device const uint *init, uint group, uint4 in0, uint4 in1, uint4 in2, uint4 in3)
+{
+    const uint c0 = group * 4u;
+    const float s0 = fsr412_quad_reduce(
+        fsr412_tap_dot(init, c0 * 8u, in0),
+        fsr412_tap_dot(init, c0 * 8u + 4u, in1),
+        fsr412_tap_dot(init, c0 * 8u + 128u, in2),
+        fsr412_tap_dot(init, c0 * 8u + 132u, in3));
+    const float s1 = fsr412_quad_reduce(
+        fsr412_tap_dot(init, (c0 + 1u) * 8u, in0),
+        fsr412_tap_dot(init, (c0 + 1u) * 8u + 4u, in1),
+        fsr412_tap_dot(init, (c0 + 1u) * 8u + 128u, in2),
+        fsr412_tap_dot(init, (c0 + 1u) * 8u + 132u, in3));
+    const float s2 = fsr412_quad_reduce(
+        fsr412_tap_dot(init, (c0 + 2u) * 8u, in0),
+        fsr412_tap_dot(init, (c0 + 2u) * 8u + 4u, in1),
+        fsr412_tap_dot(init, (c0 + 2u) * 8u + 128u, in2),
+        fsr412_tap_dot(init, (c0 + 2u) * 8u + 132u, in3));
+    const float s3 = fsr412_quad_reduce(
+        fsr412_tap_dot(init, (c0 + 3u) * 8u, in0),
+        fsr412_tap_dot(init, (c0 + 3u) * 8u + 4u, in1),
+        fsr412_tap_dot(init, (c0 + 3u) * 8u + 128u, in2),
+        fsr412_tap_dot(init, (c0 + 3u) * 8u + 132u, in3));
+    const float4 bias = as_type<float4>(*(device const uint4 *)(init + 256u + group * 4u));
+    const int4 quantized = int4(rint((float4(s0, s1, s2, s3) + bias) * 64.0));
+    return as_type<uint>(char4(clamp(quantized, int4(-128), int4(127))));
+}
+"""
+
+
+def pre_quad_routing(text: str) -> str:
+    """Route the 2x2 quad's half inputs, then compute 4 output channels per lane.
+
+    The imported SPIR-V PRE tail has every lane in a 2x2 quad evaluate all 16
+    downscale channels (64 scalar initializer reads and 32 quad swaps per lane),
+    then discards three lanes' work. Exchanging the 8 packed half inputs once
+    via three uint4 quad shuffles lets each lane compute 4 channels with four
+    aligned uint4 weight loads and one coalesced ScratchBuffer store.
+
+    Keeping the four routed inputs in registers (no private array) and
+    preserving the (t0+t1)+(t2+t3) reduction order yields bit-exact ScratchBuffer
+    output on both even and odd resolutions.
+    """
+    if "fsr412_quad_group" in text:
+        raise ValueError("Lite PRE quad routing already applied")
+    matches = list(_PRE_QUAD_TAIL.finditer(text))
+    if len(matches) != 1:
+        raise ValueError(f"Lite PRE neural tail match count changed: {len(matches)}")
+    match = matches[0]
+    indent = match[1]
+    local_coord = match[3]
+    offset_var = match[4]
+    conv_body = match[5]
+    store_body = match[6]
+    row_stride = int(match[10])
+
+    if conv_body.count("spvQuadSwap(") != 32:
+        raise ValueError("Lite PRE quad swap count changed")
+    in_xy = re.search(r"half2 _\d+ = (_\d+)\.xy;", conv_body)
+    in_zw = in_xy and re.search(r"half2 _\d+ = %s\.zw;" % re.escape(in_xy[1]), conv_body)
+    in2_xy = in_xy and re.search(r"half2 _\d+ = (?!%s\b)(_\d+)\.xy;" % re.escape(in_xy[1]), conv_body)
+    in2_zw = in2_xy and re.search(r"half2 _\d+ = %s\.zw;" % re.escape(in2_xy[1]), conv_body)
+    if not (in_xy and in_zw and in2_xy and in2_zw):
+        raise ValueError("Lite PRE quad input vectors changed")
+    in0, in1 = in_xy[1], in2_xy[1]
+    for ch in range(1, 16):
+        if f"({offset_var} + {ch * 32}u) >> 2u;" not in conv_body:
+            raise ValueError(f"Lite PRE channel {ch} weight offset changed")
+    for bias_word in range(256, 272):
+        if f"InitializerBuffer._m0[{bias_word}u]" not in store_body:
+            raise ValueError(f"Lite PRE bias word {bias_word} changed")
+
+    code = f"""{indent}const uint fsr412Lane = gl_LocalInvocationID.x & 3u;
+{indent}const uint4 fsr412Local = uint4(as_type<uint>({in0}.xy), as_type<uint>({in0}.zw), as_type<uint>({in1}.xy), as_type<uint>({in1}.zw));
+{indent}const uint4 fsr412AcrossX = quad_shuffle_xor(fsr412Local, 1u);
+{indent}const uint4 fsr412AcrossY = quad_shuffle_xor(fsr412Local, 2u);
+{indent}const uint4 fsr412AcrossD = quad_shuffle_xor(fsr412Local, 3u);
+{indent}const uint4 fsr412In0 = fsr412Lane == 0u ? fsr412Local : fsr412Lane == 1u ? fsr412AcrossX : fsr412Lane == 2u ? fsr412AcrossY : fsr412AcrossD;
+{indent}const uint4 fsr412In1 = fsr412Lane == 1u ? fsr412Local : fsr412Lane == 0u ? fsr412AcrossX : fsr412Lane == 3u ? fsr412AcrossY : fsr412AcrossD;
+{indent}const uint4 fsr412In2 = fsr412Lane == 2u ? fsr412Local : fsr412Lane == 3u ? fsr412AcrossX : fsr412Lane == 0u ? fsr412AcrossY : fsr412AcrossD;
+{indent}const uint4 fsr412In3 = fsr412Lane == 3u ? fsr412Local : fsr412Lane == 2u ? fsr412AcrossX : fsr412Lane == 1u ? fsr412AcrossY : fsr412AcrossD;
+{indent}const uint2 fsr412QuadBase = (gl_WorkGroupID.xy * uint2(16u)) + ({local_coord} & ~uint2(1u));
+{indent}const bool fsr412QuadRight = fsr412QuadBase.x + 1u < MLSR_Optimized_Constants.width;
+{indent}const bool fsr412QuadBottom = fsr412QuadBase.y + 1u < MLSR_Optimized_Constants.height;
+{indent}const uint2 fsr412Cell = (gl_WorkGroupID.xy * uint2(8u)) + ({local_coord} >> 1u) + uint2(1u);
+{indent}const uint fsr412WordBase = ((16u * fsr412Cell.x) + ({row_stride}u * fsr412Cell.y)) >> 2u;
+{indent}if (fsr412QuadRight && fsr412QuadBottom)
+{indent}{{
+{indent}    ScratchBuffer._m0[fsr412WordBase + fsr412Lane] = fsr412_quad_group(
+{indent}        InitializerBuffer._m0, fsr412Lane, fsr412In0, fsr412In1, fsr412In2, fsr412In3);
+{indent}}}
+{indent}else if (fsr412Lane == 0u)
+{indent}{{
+{indent}    const uint4 fsr412Edge1 = fsr412QuadRight ? fsr412AcrossX : uint4(0u);
+{indent}    const uint4 fsr412Edge2 = fsr412QuadBottom ? fsr412AcrossY : uint4(0u);
+{indent}    ScratchBuffer._m0[fsr412WordBase] = fsr412_quad_group(InitializerBuffer._m0, 0u, fsr412Local, fsr412Edge1, fsr412Edge2, uint4(0u));
+{indent}    ScratchBuffer._m0[fsr412WordBase + 1u] = fsr412_quad_group(InitializerBuffer._m0, 1u, fsr412Local, fsr412Edge1, fsr412Edge2, uint4(0u));
+{indent}    ScratchBuffer._m0[fsr412WordBase + 2u] = fsr412_quad_group(InitializerBuffer._m0, 2u, fsr412Local, fsr412Edge1, fsr412Edge2, uint4(0u));
+{indent}    ScratchBuffer._m0[fsr412WordBase + 3u] = fsr412_quad_group(InitializerBuffer._m0, 3u, fsr412Local, fsr412Edge1, fsr412Edge2, uint4(0u));
+{indent}}}"""
+    text = text[:match.start()] + code + text[match.end():]
+    kernel = text.index("kernel void ")
+    return text[:kernel] + _PRE_QUAD_HELPER + "\n" + text[kernel:]

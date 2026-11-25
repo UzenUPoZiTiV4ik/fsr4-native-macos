@@ -52,11 +52,11 @@ def motion_record_bytes(width,height):
 
 
 class HostAndCPUTests(unittest.TestCase):
-    def test_cache_cost_is_explicit_int32_not_silent_short_truncation(self):
-        self.assertEqual(lossy.CACHE_BYTES_PER_PIXEL,32)
+    def test_cache_cost_is_explicit_half4_not_silent_short_truncation(self):
+        self.assertEqual(lossy.CACHE_BYTES_PER_PIXEL,16)
         self.assertEqual(lossy.CONSTANT_BYTES,16)
-        self.assertEqual(lossy.cache_buffer_bytes(1920,1080),66355200)
-        self.assertEqual(lossy.cache_buffer_bytes(3840,2160),265420800)
+        self.assertEqual(lossy.cache_buffer_bytes(1920,1080),33177600)
+        self.assertEqual(lossy.cache_buffer_bytes(3840,2160),132710400)
         self.assertEqual(motion_record_bytes(1920,1080),8294400)
         for dims in ((0,2),(1,2),(3,2),(2,3),(7682,4320),(2.0,2),(True,2)):
             with self.assertRaises(ValueError): lossy.cache_buffer_bytes(*dims)
@@ -168,13 +168,14 @@ class ImportedSourceTests(unittest.TestCase):
                     main=source[source.index("kernel void"):]
                     record=main.index("Fsr412LossyRecord(")
                     reprojection=main.index("rw_reprojected_color.write(")
-                    tensor=main.index("ScratchBuffer._m0[")
-                    self.assertLess(reprojection,record); self.assertLess(record,tensor)
+                    self.assertLess(reprojection,record)
                     self.assertEqual(main.count("Fsr412LossyRecord("),1)
                     if reuse:
-                        self.assertLess(main.index("== 1u) return;"),tensor)
+                        self.assertNotIn("ScratchBuffer._m0[",main)
+                        self.assertNotIn("r_recurrent_0.sample(",main)
                     else:
-                        self.assertNotIn("== 1u) return;",main)
+                        tensor=main.index("ScratchBuffer._m0[")
+                        self.assertLess(record,tensor)
                     self.assertIn("as_type<uint2>(displacement)",source)
                     self.assertNotIn("Fsr412LossyPrevious [[",source)
                     indices=list(map(int,re.findall(r"\[\[buffer\((\d+)\)\]\]",main.split("\n")[0])))
@@ -188,7 +189,7 @@ class ImportedSourceTests(unittest.TestCase):
         for row in ROWS:
             if row["stage"]!="post":continue
             src=original(row); layout=lossy.cache_layout(src)
-            self.assertEqual(layout["cache_bytes_per_pixel"],32)
+            self.assertEqual(layout["cache_bytes_per_pixel"],16)
             self.assertFalse(layout["int16_supported"])
             self.assertLess(layout["max_accumulator_bound"],2**24)
             maxima[row["preset"]].add(layout["max_accumulator_bound"])
@@ -220,33 +221,42 @@ class ImportedSourceTests(unittest.TestCase):
                 prepared,_=optimization.input_color_cache(raw,9)
                 sources.append(prepared)
             for src in sources:
-                with self.subTest(tier=row["tier"],cs=row["colorspace"],preset=row["preset"],tiling="fsr412PostTile" in src):
-                    tail=lossy._tail(src)
+                with self.subTest(tier=row["tier"],cs=row["colorspace"],preset=row["preset"],prepared="r_prepared_color" in src):
                     result=lossy.apply_lossy_post(src,row["tier"])
                     self.assertEqual(lossy.apply_lossy_post(result,row["tier"]),result)
                     main=result[result.index("kernel void"):]
-                    # Filter expressions between raw scale and history array write
-                    # remain intact, including Gaussian order and tiled read calls.
-                    before=tail["body"][tail["filt"].end():]
-                    prefix=before[:before.index("r_reprojected_color.read(")]
-                    self.assertIn(prefix,result)
-                    self.assertEqual(main.count("Fsr412LossyCurrent["),1)
+                    self.assertIn("struct Fsr412LossyRaw { half4 recurrent; half4 params; };",result)
+                    self.assertEqual(main.count("Fsr412LossyCurrent["),4)
                     self.assertEqual(main.count("Fsr412LossyPrevious["),1)
                     self.assertIn("if (Fsr412LossyMode(Fsr412LossyConstants, MLSR_Optimized_Constants) != 1u)",main)
-                    self.assertIn("if (!fsr412PixelReuse)",main)
-                    self.assertIn("if (fsr412PixelReuse)",main)
+                    self.assertIn("if (!fsr412CellReuse)",main)
+                    self.assertIn("if (fsr412CellReuse)",main)
                     self.assertEqual(main.count("ScratchBuffer._m0["),4)
                     self.assertEqual(len(re.findall(r"^        uint _\d+ = 0u;$",main,re.M)),4)
-                    guarded=block(main,"if (Fsr412LossyFresh(")
+                    guarded=block(main,"if (!fsr412CellReuse)")
                     self.assertEqual(guarded.count("ScratchBuffer._m0["),4)
-                    self.assertNotIn("ScratchBuffer",block(main,"else\n            {\n                uint4 fsr412Own"))
                     self.assertEqual(main.count("rw_history_color.write("),4)
                     self.assertEqual(main.count("rw_mlsr_output_color.write("),4)
                     self.assertEqual(main.count("rw_recurrent_0.write("),4)
-                    self.assertNotIn("short",result)
-                    if "fsr412PostTile" in src:
-                        self.assertEqual(main.count("threadgroup_barrier"),1)
-                        self.assertLess(main.index("threadgroup_barrier"),main.index("fsr412PixelReuse"))
+                    # Specialized full and reuse modes must also succeed and stay idempotent.
+                    full=lossy.apply_lossy_post(src,row["tier"],mode="full")
+                    self.assertEqual(lossy.apply_lossy_post(full,row["tier"],mode="full"),full)
+                    full_main=full[full.index("kernel void"):]
+                    self.assertEqual(full_main.count("Fsr412LossyCurrent["),4)
+                    self.assertNotIn("Fsr412LossyPrevious",full_main)
+                    self.assertNotIn("Fsr412LossyResolve",full_main)
+                    reuse=lossy.apply_lossy_post(src,row["tier"],mode="reuse")
+                    self.assertEqual(lossy.apply_lossy_post(reuse,row["tier"],mode="reuse"),reuse)
+                    reuse_main=reuse[reuse.index("kernel void"):]
+                    self.assertNotIn("ScratchBuffer._m0[",reuse_main)
+                    self.assertNotIn("Fsr412LossyCurrent",reuse_main)
+                    self.assertEqual(reuse_main.count("Fsr412LossyPrevious["),1)
+                    self.assertIn("threadgroup short2 fsr412MotTile[32 * 32];",reuse_main)
+                    self.assertIn("threadgroup half3 fsr412RepTile[34 * 34];",reuse_main)
+                    if "r_prepared_color" in src:
+                        for variant in (result,full,reuse):
+                            tiled=optimization.post_color_tile(variant)
+                            self.assertEqual(tiled.count("fsr412PostTile[fsr412_tile_index("),9)
             count+=1
         self.assertEqual(count,47)
 
@@ -281,7 +291,9 @@ class ImportedSourceTests(unittest.TestCase):
         pre=lossy.apply_lossy_pre(pre,2160,True,True,True)
         prepared,_=optimization.input_color_cache(external(post),9)
         sources=[("pre_reuse",pre),("post",lossy.apply_lossy_post(external(post),2160)),
-                 ("post_prepared",lossy.apply_lossy_post(prepared,2160))]
+                 ("post_prepared",lossy.apply_lossy_post(prepared,2160)),
+                 ("post_full_tile",optimization.post_color_tile(lossy.apply_lossy_post(prepared,2160,mode="full"))),
+                 ("post_reuse_tile",optimization.post_color_tile(lossy.apply_lossy_post(prepared,2160,mode="reuse")))]
         for colorspace in (1,2,3):
             flagged=next(r for r in ROWS if r["stage"]=="post" and r["tier"]==2160 and
                          r["colorspace"]==colorspace and r["preset"]==("ultraperformance" if colorspace==2 else "normal"))

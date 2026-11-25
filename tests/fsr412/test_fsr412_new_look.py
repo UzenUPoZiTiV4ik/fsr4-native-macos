@@ -176,38 +176,48 @@ class SourceTests(unittest.TestCase):
                     source = compiler.external_post_cnb(source, row["tier"])
                     for prepared in (False, True):
                         src = optimization.input_color_cache(source, 9)[0] if prepared else source
-                        text = lossy.apply_lossy_post(src, row["tier"], new_look=True)
-                        self.assertEqual(text, lossy.apply_lossy_post(text, row["tier"], new_look=True))
-                        main = text[text.index("kernel void"):]
-                        self.assertEqual(main.count("rw_history_color.write("), 4)
-                        self.assertEqual(main.count("rw_recurrent_0.write("), 4)
-                        self.assertEqual(main.count("Fsr412LossyCurrent["), 1)
-                        self.assertEqual(main.count("Fsr412LossyPrevious["), 1)
-                        self.assertEqual(main.count("ScratchBuffer._m0["), 4)
-                        self.assertIn("fsr412BandSamples[3] =", main)
-                        self.assertIn("Fsr412LookFinish(", main)
+                        for mode in ("unified", "full", "reuse"):
+                            text = lossy.apply_lossy_post(src, row["tier"], new_look=True, mode=mode)
+                            self.assertEqual(text, lossy.apply_lossy_post(text, row["tier"], new_look=True, mode=mode))
+                            main = text[text.index("kernel void"):]
+                            self.assertEqual(main.count("rw_history_color.write("), 4)
+                            self.assertEqual(main.count("rw_recurrent_0.write("), 4)
+                            self.assertIn("Fsr412LookFinish(", main)
+                            if mode != "reuse":
+                                self.assertEqual(main.count("Fsr412LossyCurrent["), 4)
+                                self.assertEqual(main.count("ScratchBuffer._m0["), 4)
+                            else:
+                                self.assertNotIn("ScratchBuffer._m0[", main)
+                                self.assertNotIn("Fsr412LossyCurrent", main)
+                                self.assertIn("threadgroup half4 fsr412RepTile[34 * 34];", main)
+                            if mode != "full":
+                                self.assertEqual(main.count("Fsr412LossyPrevious["), 1)
+                                self.assertIn("fsr412BandSamples[3] =", main)
+                            else:
+                                self.assertNotIn("Fsr412LossyPrevious", main)
                 indices = re.findall(r"\[\[buffer\((\d+)\)\]\]", text[text.index("kernel void"):].split("\n")[0])
                 self.assertEqual(len(indices), len(set(indices)))
                 self.assertLessEqual(max(map(int, indices)), 7)
 
-    def test_opt_out_is_byte_identical_to_v31_transform(self):
-        try:
-            old = subprocess.check_output(["git", "show", "2a81163:tools/fsr412/lossy_shaders.py"], cwd=ROOT, stderr=subprocess.DEVNULL).decode()
-        except (OSError, subprocess.CalledProcessError):
-            self.skipTest("v3.1 source history unavailable")
-        namespace = {"__name__": "fsr412_lossy_v31"}
-        exec(compile(old, "v3.1/lossy_shaders.py", "exec"), namespace)
+    def test_opt_out_has_no_new_look_symbols_and_is_idempotent(self):
         for row in ROWS:
             source = compiler.source_for(row).read_text()
             if row["stage"] == "pre":
                 for reuse in (False, True):
                     args = (source, row["tier"], bool(row.get("low_res_mv")), bool(row.get("depth_inverted")), reuse)
-                    self.assertEqual(lossy.apply_lossy_pre(*args), namespace["apply_lossy_pre"](*args))
+                    plain = lossy.apply_lossy_pre(*args, new_look=False)
+                    self.assertNotIn("Fsr412Look", plain)
+                    self.assertNotIn("fsr412Look", plain)
+                    self.assertEqual(lossy.apply_lossy_pre(plain, *args[1:], new_look=False), plain)
             else:
                 source = compiler.external_post_cnb(source, row["tier"])
                 for prepared in (False, True):
                     src = optimization.input_color_cache(source, 9)[0] if prepared else source
-                    self.assertEqual(lossy.apply_lossy_post(src, row["tier"]), namespace["apply_lossy_post"](src, row["tier"]))
+                    for mode in ("unified", "full", "reuse"):
+                        plain = lossy.apply_lossy_post(src, row["tier"], new_look=False, mode=mode)
+                        self.assertNotIn("Fsr412Look", plain)
+                        self.assertNotIn("fsr412Look", plain)
+                        self.assertEqual(lossy.apply_lossy_post(plain, row["tier"], new_look=False, mode=mode), plain)
 
     @unittest.skipUnless(shutil.which("xcrun"), "Apple Metal compiler unavailable")
     def test_real_pre_and_post_compile_with_fast_math(self):
@@ -216,8 +226,14 @@ class SourceTests(unittest.TestCase):
         pre_text = lossy.apply_lossy_pre(compiler.signed_square(compiler.source_for(pre).read_text()),
             1080, True, True, True, new_look=True)
         base = compiler.external_post_cnb(compiler.source_for(post).read_text(), 1080)
-        sources = {"pre": pre_text, "post": lossy.apply_lossy_post(base, 1080, new_look=True),
-                   "prepared": lossy.apply_lossy_post(optimization.input_color_cache(base, 9)[0], 1080, new_look=True)}
+        prep = optimization.input_color_cache(base, 9)[0]
+        sources = {
+            "pre": pre_text,
+            "post": lossy.apply_lossy_post(base, 1080, new_look=True),
+            "prepared": lossy.apply_lossy_post(prep, 1080, new_look=True),
+            "post_full_tile": optimization.post_color_tile(lossy.apply_lossy_post(prep, 1080, new_look=True, mode="full")),
+            "post_reuse_tile": optimization.post_color_tile(lossy.apply_lossy_post(prep, 1080, new_look=True, mode="reuse")),
+        }
         with tempfile.TemporaryDirectory(prefix="fsr412-look-compile-") as tmp:
             for name, source in sources.items():
                 path = Path(tmp) / (name + ".metal")

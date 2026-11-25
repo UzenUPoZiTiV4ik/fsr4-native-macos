@@ -478,7 +478,7 @@ public:
         @try {
             if (m4) queue_before(enc);
             if (view.zeroScratch) clear_buffer(enc, m4, *slot, "clearScratch", view.scratch, 8192);
-            if (skip) clear_buffer(enc,m4,*slot,"clearLossyPlane",view.lossyPlane,10240);
+            if (skip && !liteLossy) clear_buffer(enc,m4,*slot,"clearLossyPlane",view.lossyPlane,10240);
             if (view.zeroTargets || p.reset) {
                 // Reset PRE reads current inputs only and fully overwrites
                 // reprojected; POST initializes history and recurrent before
@@ -558,11 +558,25 @@ public:
                         groups=MTLSizeMake(ceil_div(sizes.v[k.tensorSlot][0],k.tileX),ceil_div(sizes.v[k.tensorSlot][1],k.tileY),1);
                     }
                     else { const int shift = pass_shift(pass); groups = MTLSizeMake(ceil_div(p.alignedUW >> shift,64),p.alignedUH >> shift,1); }
-                    // Older precompiled bundles use the shared PRE. New
-                    // bundles specialize only the already-authorized reuse
-                    // path, with its own bindings on both Metal APIs.
-                    const std::string stage = skip && name=="pre" && session->kernels.count("pre_reuse")
-                        ? "pre_reuse" : name=="post" && lite_post_tile_fits(*session,p) ? "post_tile" : name;
+                    // Older precompiled bundles use the shared PRE/POST. New
+                    // Lite Lossy bundles specialize whole-frame full and reuse
+                    // kernels (with optional tiled colour taps) while partial
+                    // tiled mode stays on the unified POST.
+                    std::string stage = name;
+                    if (skip && name == "pre" && session->kernels.count("pre_reuse")) {
+                        stage = "pre_reuse";
+                    } else if (name == "post") {
+                        const bool tileFits = lite_post_tile_fits(*session, p);
+                        if (liteLossy && !partial) {
+                            const std::string specialized = skip ? "post_reuse" : "post_full";
+                            const std::string specializedTile = specialized + "_tile";
+                            if (tileFits && session->kernels.count(specializedTile)) stage = specializedTile;
+                            else if (session->kernels.count(specialized)) stage = specialized;
+                            else if (tileFits && session->kernels.count("post_tile")) stage = "post_tile";
+                        } else if (tileFits && session->kernels.count("post_tile")) {
+                            stage = "post_tile";
+                        }
+                    }
                     dispatch(enc, m4, *slot, *session, stage, groups, b);
                 }
                 capture_scratch(enc,m4,*slot,view,name);
@@ -1005,9 +1019,8 @@ private:
         if (!lib) { error=metal_error(e); return false; }
         if (useSimd && !verify_simd(lib,error)) return false;
         s.mppFeatures=useMpp?verify_mpp(lib,s.tier):0;
-        // Exact F(2x2,3x3) only for CNB16 and FNB32 (faster on forced-SIMD M5;
-        // check M1-M4 with `make bench-fsr-pre-m5`). CT32 keeps direct 3x3
-        // (2-4% slower with Winograd on M5), NF64/DS are ineligible.
+        // Exact F(2x2,3x3) for all 3x3 blocks (CNB16, FNB32, CT32, FNB64, CT64)
+        // that pass the per-pass lossless bound gate. DS blocks stay direct.
         const bool winogradDevice=useSimd && verify_winograd(lib);
         std::vector<_Float16> transformed;
         std::map<std::string,id<MTLComputePipelineState>> states;
@@ -1043,13 +1056,19 @@ private:
             np.offset=[entry[@"parameter_offset"] unsignedIntValue];
             if (np.offset+sizeof(PassParams)>params.length || kNative+np.offset+sizeof(PassParams)>8192) { error="native parameter region overflow"; return false; }
             memcpy(&np.parameters,(const uint8_t *)params.bytes+np.offset,sizeof(PassParams));
-            if (winogradDevice && ([entry[@"kind"] isEqual:@"cnb"] || [entry[@"kind"] isEqual:@"fnb"])
-                && (name=="fsr411_simd_cnb" || name=="fsr411_simd_fnb32")
+            const bool winogradWide = (name=="fsr411_simd_cnb" || name=="fsr411_simd_fnb32" || name=="fsr411_simd_ct32")
                 && [dispatch[@"tile"][0] unsignedIntValue]==32 && [dispatch[@"tile"][1] unsignedIntValue]==4
-                && [dispatch[@"threads"] unsignedIntValue]==128) {
+                && [dispatch[@"threads"] unsignedIntValue]==128;
+            const bool winogradNf64 = (name=="fsr411_simd_fnb64" || name=="fsr411_simd_ct64")
+                && [dispatch[@"tile"][0] unsignedIntValue]==16 && [dispatch[@"tile"][1] unsignedIntValue]==4
+                && [dispatch[@"threads"] unsignedIntValue]==128;
+            if (winogradDevice && ([entry[@"kind"] isEqual:@"cnb"] || [entry[@"kind"] isEqual:@"fnb"] || [entry[@"kind"] isEqual:@"ct"])
+                && (winogradWide || winogradNf64)) {
                 uint32_t bound=0;
                 if (prepare_simd_winograd_weights((const uint8_t *)weights.bytes,weights.length,np.parameters,transformed,&bound)) {
-                    name+="_winograd"; np.winograd=true;
+                    name+="_winograd";
+                    np.winograd=true;
+                    if (winogradNf64) np.threads=64u;
                 } else fsr4_logf("FSR 4.1 simd: pass %s keeps direct 3x3 (Winograd bound %u >= 2^24 or invalid)",utf8(key).c_str(),bound);
             }
             if([key intValue]==13 && !s.modelLite && !post_cnb_tensors_match_layout(np.parameters,s.scratchLayout)) {
@@ -1391,7 +1410,14 @@ private:
         if(name=="Fsr412LossyPrevious") return {b.view->litePrevious,0};
         if(name=="Fsr412LossyCurrent") return {b.view->liteCurrent,0};
         if(name=="InitializerBuffer" || name=="t18_initializer") return {s.initializer,0};
-        if(name=="MLSR_Optimized_Constants") return {slot.constants,(stage=="pre" || stage=="pre_reuse" || stage=="post" || stage=="post_tile" || stage=="prepare_color")?0:kTensor};
+        if(name=="MLSR_Optimized_Constants") {
+            const bool frameStage =
+                stage=="pre" || stage=="pre_reuse" || stage=="prepare_color" ||
+                stage=="post" || stage=="post_tile" ||
+                stage=="post_full" || stage=="post_full_tile" ||
+                stage=="post_reuse" || stage=="post_reuse_tile";
+            return {slot.constants, frameStage ? 0 : kTensor};
+        }
         if(name=="CsTensorSizes") return {slot.constants,kTensor};
         if(name=="AutoExposureSPDConstants") return {slot.constants,kSpd};
         if(name=="cbRCAS") return {slot.constants,kRcas};
@@ -1414,7 +1440,13 @@ private:
         return true;
     }
     void dispatch(id __strong &enc,bool m4,FrameSlot &slot,const Session &s,const std::string &name,MTLSize groups,const Bindings &b) {
-        if(slot.stageProfiler) slot.stageProfiler->begin_stage(enc,name=="pre_reuse"?"pre":name=="post_tile"?"post":name);
+        if(slot.stageProfiler) {
+            const std::string profiled =
+                name=="pre_reuse" ? "pre" :
+                (name=="post_tile" || name=="post_full" || name=="post_full_tile" ||
+                 name=="post_reuse" || name=="post_reuse_tile") ? "post" : name;
+            slot.stageProfiler->begin_stage(enc, profiled);
+        }
         const auto &k=s.kernels.at(name);
         if(m4) {
             id<MTL4ArgumentTable> t=slot.tables[ns(name)];

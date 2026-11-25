@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from fsr412.optimization import ct2d_float_dot, post_color_tile, POST_TILE_SIDE  # noqa: E402
+from fsr412.optimization import ct2d_float_dot, post_color_tile, pre_quad_routing, POST_TILE_SIDE  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -90,6 +90,30 @@ class PostColorTile(unittest.TestCase):
                         centre = round((pixel + 0.5) * inv + jitter - 0.5)
                         for tap in (centre - 1, centre, centre + 1):
                             self.assertTrue(0 <= tap - origin < extent, (inv, jitter, pixel))
+
+
+class PreQuadRouting(unittest.TestCase):
+    def pres(self):
+        found = sorted(path for path in (ROOT / "build").glob("fsr412_*/pre.metal")
+                       if "fsr412_quad_group" not in path.read_text() and "fsr412QuadInputs" not in path.read_text())
+        if not found:
+            self.skipTest("no unrouted FSR 4.1.2 PRE in build/")
+        return found
+
+    def test_rewrites_every_imported_pre_variant(self):
+        for path in self.pres():
+            with self.subTest(path=path.parent.name):
+                result = pre_quad_routing(path.read_text())
+                self.assertIn("fsr412_quad_group(", result)
+                kernel_body = result[result.index("kernel void "):]
+                self.assertNotIn("spvQuadSwap(", kernel_body)
+                self.assertEqual(kernel_body.count("quad_shuffle_xor("), 3)
+                with self.assertRaises(ValueError):
+                    pre_quad_routing(result)
+
+    def test_unknown_shape_fails(self):
+        with self.assertRaises(ValueError):
+            pre_quad_routing("kernel void pre() {}")
 
 
 if __name__ == "__main__":

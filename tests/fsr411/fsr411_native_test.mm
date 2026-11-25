@@ -252,7 +252,10 @@ int main(int argc, char **argv) {
                 const auto tuned=fsr411::mpp_fast_dispatch(functionName.UTF8String,tw,th,threads,mppFeatures);
                 if(tuned.feature) {functionName=@(tuned.function);tw=tuned.tileX;th=tuned.tileY;threads=tuned.threads;registerOnly=true;}
             }
-            if (useWinograd) functionName = [functionName stringByAppendingString:@"_winograd"];
+            if (useWinograd) {
+                functionName = [functionName stringByAppendingString:@"_winograd"];
+                if (original.input.channels == 64u) threads = 64u;
+            }
             if (compactDs && [entry[@"kind"] isEqual:@"ds"]) functionName = [functionName stringByAppendingString:@"_compact"];
             id<MTLFunction> function = nil, rawFunction = nil;
             if (specialized) {

@@ -89,7 +89,7 @@ class ResetClearTests(unittest.TestCase):
         self.assertNotIn("initExposure",conditional)
         self.assertEqual(outer.count('"initExposure"'),1)
         self.assertIn('if (view.zeroScratch) clear_buffer(enc, m4, *slot, "clearScratch", view.scratch, 8192);',runtime)
-        self.assertIn('if (skip) clear_buffer(enc,m4,*slot,"clearLossyPlane",view.lossyPlane,10240);',runtime)
+        self.assertIn('if (skip && !liteLossy) clear_buffer(enc,m4,*slot,"clearLossyPlane",view.lossyPlane,10240);',runtime)
 
 
 if __name__=="__main__":unittest.main()

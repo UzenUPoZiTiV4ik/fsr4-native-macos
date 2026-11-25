@@ -30,16 +30,16 @@ static id<MTLLibrary> library(id<MTLDevice> dev, NSString *root, unsigned mb16, 
     return lib;
 }
 static id<MTLComputePipelineState> pipeline(id<MTLDevice> dev, id<MTLLibrary> lib,
-                                          NSString *name, MTLFunctionConstantValues *values, bool legacy) {
+                                          NSString *name, MTLFunctionConstantValues *values, bool legacy, unsigned threads = 128) {
     NSError *error = nil;
     auto fn = [lib newFunctionWithName:name constantValues:values error:&error];
     if (!fn) throw std::runtime_error(error.description.UTF8String);
     auto desc = [MTLComputePipelineDescriptor new]; desc.computeFunction = fn;
-    desc.maxTotalThreadsPerThreadgroup = 128; desc.threadGroupSizeIsMultipleOfThreadExecutionWidth = YES;
+    desc.maxTotalThreadsPerThreadgroup = threads; desc.threadGroupSizeIsMultipleOfThreadExecutionWidth = YES;
     auto pso = legacy ? [dev newComputePipelineStateWithFunction:fn error:&error]
         : [dev newComputePipelineStateWithDescriptor:desc options:MTLPipelineOptionNone reflection:nil error:&error];
     if (!pso) throw std::runtime_error(error.description.UTF8String);
-    require(pso.maxTotalThreadsPerThreadgroup >= 128 && pso.threadExecutionWidth == 32, "incompatible SIMD32 pipeline");
+    require(pso.maxTotalThreadsPerThreadgroup >= threads && pso.threadExecutionWidth == 32, "incompatible SIMD32 pipeline");
     require(pso.staticThreadgroupMemoryLength <= dev.maxThreadgroupMemoryLength, "threadgroup memory overflow");
     return pso;
 }
@@ -115,10 +115,11 @@ int main(int argc, char **argv) {
             NSString *name = entry[@"simd"][@"function"];
             if (useWinograd) name = [name stringByAppendingString:@"_winograd"];
             if (ds && compactDs) name = [name stringByAppendingString:@"_compact"];
-            auto current = pipeline(dev,lib,name,values,legacy);
-            auto before = beforeLib ? pipeline(dev,beforeLib,entry[@"simd"][@"function"],values,legacy) : nil;
-            if (post) p.output.offset += postOffset;
             const unsigned nf = p.input.channels;
+            const unsigned currentThreads = (useWinograd && nf == 64) ? 64 : 128;
+            auto current = pipeline(dev,lib,name,values,legacy,currentThreads);
+            auto before = beforeLib ? pipeline(dev,beforeLib,entry[@"simd"][@"function"],values,legacy,128) : nil;
+            if (post) p.output.offset += postOffset;
             const unsigned mb = ds ? (nf == 16 ? mb32 : mb64) : nf == 16 ? mb16 : nf == 32 ? mb32 : mb64;
             const unsigned w = ct ? p.input.width : p.output.width, h = ct ? p.input.height : p.output.height;
             const unsigned beforeX = [entry[@"simd"][@"tile"][0] unsignedIntValue];
@@ -134,8 +135,9 @@ int main(int argc, char **argv) {
                     [enc setBuffer:wh offset:0 atIndex:3]; [enc setBytes:&p length:sizeof(p) atIndex:2];
                     if (!v && useWinograd) [enc setBuffer:wg offset:0 atIndex:4];
                     const unsigned tx = v ? beforeX : 8*mb, ty = v ? beforeY : 4;
+                    const unsigned threads = v ? 128 : currentThreads;
                     for (unsigned k = 0; k < batch; ++k)
-                        [enc dispatchThreadgroups:MTLSizeMake((w+tx-1)/tx,(h+ty-1)/ty,1) threadsPerThreadgroup:MTLSizeMake(128,1,1)];
+                        [enc dispatchThreadgroups:MTLSizeMake((w+tx-1)/tx,(h+ty-1)/ty,1) threadsPerThreadgroup:MTLSizeMake(threads,1,1)];
                     [enc endEncoding]; [cb commit]; [cb waitUntilCompleted];
                     if (cb.status != MTLCommandBufferStatusCompleted) throw std::runtime_error(cb.error.description.UTF8String);
                     if (r >= warmups) times[v].push_back((cb.GPUEndTime-cb.GPUStartTime)*1000./batch);

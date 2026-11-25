@@ -28,7 +28,9 @@ enum : u32 {
     kMppChainFnb64 = 1u << 3,
     kMppChainCt64 = 1u << 4,
     kMppChainDs32 = 1u << 5,
-    kMppChainKnownMask = (1u << 6) - 1u,
+    kMppChainCnb32x2 = 1u << 6,
+    kMppChainFnb32Wide = 1u << 7,
+    kMppChainKnownMask = (1u << 8) - 1u,
     kMppProbeDummyBytes = 16384u,
 };
 

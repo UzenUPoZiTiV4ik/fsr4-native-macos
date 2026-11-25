@@ -14,7 +14,7 @@ import argparse, fcntl, hashlib, json, os, re, shutil, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fsr412.optimization import (REVISION, POST_TILE_SIDE, input_color_cache, color_cache_source, pixelization_fix,
-                                 ct2d_float_dot, post_color_tile)
+                                 ct2d_float_dot, post_color_tile, pre_quad_routing)
 from fsr412.model_data import initializer_for, patch_post_tail, load_lossy_initializer, patch_post_biases_by_tap
 from fsr412.new_look import REVISION as NEW_LOOK_REVISION
 from common.hlsl_parse import balanced_end, argument_list
@@ -147,30 +147,34 @@ def signed_square(text: str) -> str:
 def compile_metal(src: Path, out: Path, entry: str, external: bool = False, tier: int = 1080, prepared=False, stage="", pixel_fix=False,
                   lossy=False, low_res_mv=True, depth_inverted=False, initializer=None, base_initializer=None, receipt=None, new_look=False):
     text = src.read_text()
+    is_post = stage in ("post", "post_full", "post_reuse")
     if external:
-        text=external_post_cnb(text,tier)
-    if lossy and stage=="post" and initializer is not None:
-        text=patch_post_tail(text,base_initializer,initializer)
+        text = external_post_cnb(text, tier)
+    if lossy and stage in ("post", "post_full") and initializer is not None:
+        text = patch_post_tail(text, base_initializer, initializer)
     text = re.sub(r"kernel\s+void\s+(\w+)(\s*\()", r"kernel void fsr412_\1\2", text, count=1)
     text = text.replace(".xyzz, uint2", ".xyzx, uint2")
     text = signed_square(text)
     if "powr(" in text:
         raise RuntimeError(f"unhandled SPIR-V pow in {src.name}")
-    if prepared and stage in ("pre", "pre_reuse", "post"):
-        text, formula = input_color_cache(text, 9 if stage == "post" else 4)
+    if prepared and stage in ("pre", "pre_reuse", "post", "post_full", "post_reuse"):
+        text, formula = input_color_cache(text, 9 if is_post else 4)
         if stage == "pre":
             (out.parent / "prepare_color.metal").write_text(color_cache_source(text, formula))
     if lossy:
         from fsr412.lossy_shaders import apply_lossy_pre, apply_lossy_post
-        if stage in ("pre","pre_reuse"):
-            text=apply_lossy_pre(text,tier,low_res_mv=bool(low_res_mv),depth_inverted=bool(depth_inverted),reuse_only=stage=="pre_reuse",new_look=new_look)
-        elif stage=="post":
-            text=apply_lossy_post(text,tier,new_look=new_look)
-            if initializer is not None and receipt is not None:
-                text=patch_post_biases_by_tap(text,initializer,receipt)
+        if stage in ("pre", "pre_reuse"):
+            text = apply_lossy_pre(text, tier, low_res_mv=bool(low_res_mv), depth_inverted=bool(depth_inverted), reuse_only=stage == "pre_reuse", new_look=new_look)
+        elif is_post:
+            post_mode = "unified" if stage == "post" else ("full" if stage == "post_full" else "reuse")
+            text = apply_lossy_post(text, tier, new_look=new_look, mode=post_mode)
+            if stage in ("post", "post_full") and initializer is not None and receipt is not None:
+                text = patch_post_biases_by_tap(text, initializer, receipt)
     if pixel_fix and stage == "post" and not lossy:
         text = pixelization_fix(text)
-    if prepared and stage == "post":
+    if prepared and stage == "pre":
+        text = pre_quad_routing(text)
+    if prepared and stage in ("post", "post_full"):
         text = ct2d_float_dot(text)
     generated = out.with_suffix(".metal")
     generated.write_text(text)
@@ -224,7 +228,8 @@ def main():
     lossy_active=bool(a.lossy and a.res<=2160)
     prepared=bool(a.optimize and a.external_post_cnb and a.colorspace==0)
     key=f"fsr412_{a.res}_di{a.depth_inverted}_lm{a.low_res_mv}_jm{a.jittered_mv}_cs{a.colorspace}_ae{a.auto_exposure}_o{a.optimize}_up{a.ultra_performance}_pc{a.external_post_cnb}"
-    if a.lossy:key+="_lossy3"
+    if a.lossy:
+        key += "_lossy4"
     if a.new_look:key+=f"_nl{NEW_LOOK_REVISION}"
     if a.neural_tile_size:key+=f"_nt{a.neural_tile_size}"
     if prepared: key+=f"_v{REVISION}"
@@ -272,23 +277,63 @@ def main():
         elif stage=="pre":info["tile"]=[16,16]
         elif stage=="post":info["tile"]=[16,16]; info["post_pixels_per_group"]=32
         kernels[stage]=info
-        if stage=="post" and prepared and not lossy_active:
+        if stage == "post" and prepared:
             # Same POST with its colour taps read from a threadgroup tile;
             # the host selects it when the tile covers every tap.
-            tile=out/"post_tile"
+            tile = out / "post_tile"
             tile.with_suffix(".metal").write_text(post_color_tile(generated.read_text()))
-            run(["xcrun","metal","-std=macos-metal2.3","-O3","-c",tile.with_suffix(".metal"),"-o",tile.with_suffix(".air")])
-            run(["xcrun","metallib",tile.with_suffix(".air"),"-o",tile.with_suffix(".metallib")])
-            kernels["post_tile"]=dict(info,stage="post_tile",library="post_tile.metallib",
-                                      tile_side=POST_TILE_SIDE)
+            run(["xcrun", "metal", "-std=macos-metal2.3", "-O3", "-c", tile.with_suffix(".metal"), "-o", tile.with_suffix(".air")])
+            run(["xcrun", "metallib", tile.with_suffix(".air"), "-o", tile.with_suffix(".metallib")])
+            kernels["post_tile"] = dict(info, stage="post_tile", library="post_tile.metallib", tile_side=POST_TILE_SIDE)
     if lossy_active:
-        row=selected["pre"];base=out/"pre_reuse"
-        generated,lib=compile_metal(source_for(row),base,row["entry"],False,a.res,prepared,"pre_reuse",False,
-            lossy=True,low_res_mv=a.low_res_mv,depth_inverted=a.depth_inverted,new_look=bool(a.new_look))
-        entry="fsr412_"+row["entry"]
-        buffers,textures,samplers=reflect_bindings(generated.read_text(),entry)
-        kernels["pre_reuse"]={"stage":"pre_reuse","entry":entry,"library":lib.name,"wgsize":row.get("wgsize",[256,1,1]),
-            "buffers":buffers,"textures":textures,"samplers":samplers,"source_sha256":row["sha256"]}
+        row = selected["pre"]
+        base = out / "pre_reuse"
+        generated, lib = compile_metal(
+            source_for(row), base, row["entry"], False, a.res, prepared, "pre_reuse", False,
+            lossy=True, low_res_mv=a.low_res_mv, depth_inverted=a.depth_inverted, new_look=bool(a.new_look),
+        )
+        entry = "fsr412_" + row["entry"]
+        buffers, textures, samplers = reflect_bindings(generated.read_text(), entry)
+        kernels["pre_reuse"] = {
+            "stage": "pre_reuse",
+            "entry": entry,
+            "library": lib.name,
+            "wgsize": row.get("wgsize", [256, 1, 1]),
+            "buffers": buffers,
+            "textures": textures,
+            "samplers": samplers,
+            "source_sha256": row["sha256"],
+        }
+        post_row = selected["post"]
+        for spec_stage in ("post_full", "post_reuse"):
+            spec_base = out / spec_stage
+            spec_gen, spec_lib = compile_metal(
+                source_for(post_row), spec_base, post_row["entry"], bool(a.external_post_cnb), a.res, prepared, spec_stage, False,
+                lossy=True, low_res_mv=a.low_res_mv, depth_inverted=a.depth_inverted,
+                initializer=initializer if trained else None, base_initializer=base_initializer, receipt=receipt, new_look=bool(a.new_look),
+            )
+            spec_entry = "fsr412_" + post_row["entry"]
+            sb, st, ss = reflect_bindings(spec_gen.read_text(), spec_entry)
+            spec_info = {
+                "stage": spec_stage,
+                "entry": spec_entry,
+                "library": spec_lib.name,
+                "wgsize": post_row.get("wgsize", [256, 1, 1]),
+                "buffers": sb,
+                "textures": st,
+                "samplers": ss,
+                "source_sha256": post_row["sha256"],
+                "tile": [16, 16],
+                "post_pixels_per_group": 32,
+            }
+            kernels[spec_stage] = spec_info
+            if prepared:
+                tiled_stage = spec_stage + "_tile"
+                tiled_base = out / tiled_stage
+                tiled_base.with_suffix(".metal").write_text(post_color_tile(spec_gen.read_text()))
+                run(["xcrun", "metal", "-std=macos-metal2.3", "-O3", "-c", tiled_base.with_suffix(".metal"), "-o", tiled_base.with_suffix(".air")])
+                run(["xcrun", "metallib", tiled_base.with_suffix(".air"), "-o", tiled_base.with_suffix(".metallib")])
+                kernels[tiled_stage] = dict(spec_info, stage=tiled_stage, library=tiled_stage + ".metallib", tile_side=POST_TILE_SIDE)
     if prepared:
         base=out/"prepare_color"
         run(["xcrun","metal","-std=macos-metal2.3","-O3","-c",base.with_suffix(".metal"),"-o",base.with_suffix(".air")])

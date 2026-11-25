@@ -17,7 +17,11 @@ inline MppDispatch mpp_fast_dispatch(const char *function, u32 x, u32 y, u32 thr
     struct Variant { const char *original; u32 x,y,threads; MppDispatch fast; };
     constexpr Variant variants[] = {
         {"fsr411_cnb_coop_chain_32x1",32,1,32,
+            {"fsr411_cnb_coop_fast_32x2",32,2,32,kMppChainCnb32x2}},
+        {"fsr411_cnb_coop_chain_32x1",32,1,32,
             {"fsr411_cnb_coop_fast_32x1",32,1,32,kMppChainCnb}},
+        {"fsr411_fnb32_coop_chain_16x1",16,1,32,
+            {"fsr411_fnb32_coop_fast_32x1",32,1,32,kMppChainFnb32Wide}},
         {"fsr411_fnb32_coop_chain_16x1",16,1,32,
             {"fsr411_fnb32_coop_fast_16x1",16,1,32,kMppChainFnb32}},
         {"fsr411_ct32_coop_chain_16x1",16,1,32,

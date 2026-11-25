@@ -393,6 +393,39 @@ void convolution_properties() {
     for (auto &value : image) value = random_bits() % 2 ? -128 : 127;
     compare_image(raw, pass(0, 32), image, 5, 5);
 }
+
+void nf64_two_banks() {
+    constexpr size_t offset = 64;
+    std::vector<uint8_t> raw(offset + 2 * RAW + 32, 0);
+    for (size_t i = 0; i < 2 * RAW; ++i)
+        raw[offset + i] = static_cast<uint8_t>(int((i * 13 + 7) % 9) - 4);
+    std::vector<_Float16> packed;
+    uint32_t bound = 0;
+    require(!fsr411::prepare_simd_winograd_weights(raw.data(), offset + 2 * RAW - 1, pass(offset, 64), packed, &bound),
+            "NF64 requires two full 3x3 banks");
+    require(packed.empty() && bound == 0, "short NF64 buffer allocates nothing");
+    for (size_t slot = 0; slot < 3; ++slot) {
+        auto p = pass(offset, 64);
+        p.weights[slot] = fsr411::kNoOffset;
+        require(!fsr411::prepare_simd_winograd_weights(raw.data(), raw.size(), p, packed, &bound),
+                "NF64 requires pointwise weight offsets");
+    }
+    require(fsr411::prepare_simd_winograd_weights(raw.data(), raw.size(), pass(offset, 64), packed, &bound),
+            "safe two-bank NF64 accepted");
+    const T4 bank0 = reference_t4(raw, offset);
+    const T4 bank1 = reference_t4(raw, offset + RAW);
+    equal(bound, std::max(reference_bound(bank0), reference_bound(bank1)), "NF64 bound is maximum across both banks");
+    check_pack(packed, offset, bank0);
+    for (size_t i = 0; i < TRANSFORMED; ++i)
+        equal(double(packed[offset * 2 + TRANSFORMED + i]), bank1[i], "NF64 bank 1 stored right after bank 0");
+
+    // Unsafe bank 1 must reject the whole pass without modifying packed.
+    const auto snapshot = packed;
+    std::fill(raw.begin() + offset + RAW, raw.begin() + offset + 2 * RAW, uint8_t(128));
+    require(!fsr411::prepare_simd_winograd_weights(raw.data(), raw.size(), pass(offset, 64), packed, &bound),
+            "unsafe NF64 bank 1 rejects whole pass");
+    require(packed == snapshot && bound >= LIMIT, "rejected NF64 leaves packed untouched");
+}
 } // namespace
 
 int main() {
@@ -401,5 +434,6 @@ int main() {
     shared_regions();
     exact_gate();
     convolution_properties();
+    nf64_two_banks();
     std::printf("fsr411_winograd_weights_test: %lu exact checks passed (CPU only)\n", checks);
 }
